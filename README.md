@@ -12,7 +12,8 @@ The system consists of three main layers:
 
 ## Key Files
 
--   `trader.py`: `TraderBot` class. Wraps `ib_insync` for async trading operations.
+-   `ib_trader.py`: `IBTrader` class. Wraps `ib_insync` for async stock trading.
+-   `gemini_trader.py`: `GeminiTrader` class. Wraps `ccxt` for crypto trading.
 -   `risk_manager.py`: `RiskManager` class. Checks `MAX_DAILY_LOSS` and `MAX_ORDER_VALUE`.
 -   `strategy_runner.py`: Main entry point for the autonomous loop.
 -   `server.py`: FastMCP server implementation.
@@ -49,6 +50,20 @@ MAX_POSITIONS=3
 
 # Gemini API Key (Required for Strategy Runner)
 GEMINI_API_KEY=your_gemini_api_key_here
+
+# Crypto Support (Gemini Exchange)
+# Get keys from: https://exchange.gemini.com/settings/api
+GEMINI_EXCHANGE_API_KEY=your_key
+GEMINI_EXCHANGE_SECRET=your_secret
+
+# Sandbox Support (Paper Trading)
+# Get keys from: https://exchange.sandbox.gemini.com/settings/api
+GEMINI_SANDBOX_API_KEY=your_sandbox_key
+GEMINI_SANDBOX_SECRET=your_sandbox_secret
+
+# Exchange Selection
+# Options: 'IB', 'GEMINI', 'ALL'
+ACTIVE_EXCHANGE=ALL
 ```
 
 ### 4. Running the Bot
@@ -77,6 +92,21 @@ python server.py
 streamlit run dashboard.py
 ```
 
-**Verification:**
--   Run `python test_connect.py` to test IB connection.
 -   Run `python test_server.py` to test MCP server tools.
+
+## Crypto Support & Sandbox
+
+The bot supports trading on the **Gemini Exchange** via the `ccxt` library.
+
+### Paper Trading (Sandbox)
+To test crypto strategies without real funds:
+1.  Set `TRADING_MODE=PAPER` in your `.env`.
+2.  Generate Sandbox API keys at [exchange.sandbox.gemini.com](https://exchange.sandbox.gemini.com/).
+3.  Add them to `.env` as `GEMINI_SANDBOX_API_KEY` and `GEMINI_SANDBOX_SECRET`.
+4.  The bot will automatically connect to the Sandbox environment.
+
+### Single Exchange Mode
+You can restrict the bot to a specific exchange using `ACTIVE_EXCHANGE` in `.env`:
+-   `ACTIVE_EXCHANGE=IB`: Only trade stocks (requires IB Gateway).
+-   `ACTIVE_EXCHANGE=GEMINI`: Only trade crypto (no IB Gateway needed).
+-   `ACTIVE_EXCHANGE=ALL`: Trade both simultaneously.

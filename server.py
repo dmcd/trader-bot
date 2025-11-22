@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from mcp.server.fastmcp import FastMCP
-from trader import TraderBot
+from ib_trader import IBTrader as TraderBot
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

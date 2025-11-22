@@ -4,10 +4,10 @@ from config import MAX_DAILY_LOSS, MAX_ORDER_VALUE, MAX_POSITIONS
 logger = logging.getLogger(__name__)
 
 class RiskManager:
-    def __init__(self, trader_bot):
-        self.bot = trader_bot
+    def __init__(self, bot=None):
+        self.bot = bot # Optional, mostly for position checks if needed
         self.daily_loss = 0.0
-        self.start_of_day_equity = None
+        self.positions = {} # Symbol -> Quantity
 
     def update_pnl(self, current_equity):
         """Updates the daily PnL based on equity change."""

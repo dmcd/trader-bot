@@ -17,4 +17,12 @@ MAX_ORDER_VALUE = float(os.getenv('MAX_ORDER_VALUE', '100.0')) # AUD
 MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '3'))
 
 # API Keys
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '') # LLM Key
+GEMINI_EXCHANGE_API_KEY = os.getenv('GEMINI_EXCHANGE_API_KEY', '') # Trading Key
+GEMINI_EXCHANGE_SECRET = os.getenv('GEMINI_EXCHANGE_SECRET', '') # Trading Secret
+GEMINI_SANDBOX_API_KEY = os.getenv('GEMINI_SANDBOX_API_KEY', '') # Sandbox Key
+GEMINI_SANDBOX_SECRET = os.getenv('GEMINI_SANDBOX_SECRET', '') # Sandbox Secret
+
+# Exchange Selection
+# Options: 'IB', 'GEMINI', 'ALL'
+ACTIVE_EXCHANGE = os.getenv('ACTIVE_EXCHANGE', 'IB').upper()

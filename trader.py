@@ -3,6 +3,7 @@ from ib_insync import *
 import logging
 
 from config import IB_HOST, IB_PORT, IB_CLIENT_ID
+import random
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -12,7 +13,11 @@ class TraderBot:
     def __init__(self, host=IB_HOST, port=IB_PORT, client_id=IB_CLIENT_ID):
         self.host = host
         self.port = port
-        self.client_id = client_id
+        # If client_id is the default 1, randomize it to avoid conflicts during testing
+        if client_id == 1:
+            self.client_id = random.randint(1000, 9999)
+        else:
+            self.client_id = client_id
         self.ib = IB()
         self.connected = False
 

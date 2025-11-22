@@ -9,8 +9,10 @@ try:
     # Port 4002 is the default for IB Gateway Paper Trading.
     # If you are using TWS, change this to 7497.
     print("Attempting to connect...")
-    ib.connect('127.0.0.1', 4002, clientId=1)
-    print("Connected successfully!")
+    import random
+    client_id = random.randint(1000, 9999)
+    ib.connect('127.0.0.1', 4002, clientId=client_id)
+    print(f"Connected successfully with clientId={client_id}!")
 
     # 2. Get Account Summary
     # This fetches your 'TotalCashValue' in AUD

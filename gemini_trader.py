@@ -40,8 +40,15 @@ class GeminiTrader(BaseTrader):
             if self.sandbox:
                 logger.info("Using Gemini Sandbox Environment")
                 self.exchange.set_sandbox_mode(True)
+                # Force correct Sandbox URL (must be a dict for ccxt)
+                self.exchange.urls['api'] = {
+                    'public': 'https://api.sandbox.gemini.com',
+                    'private': 'https://api.sandbox.gemini.com',
+                }
+                logger.info(f"Gemini URLs: {self.exchange.urls}")
             
             # Test connection by loading markets
+            logger.info("Loading markets...")
             await self.exchange.load_markets()
             self.connected = True
             logger.info("Connected to Gemini Exchange successfully!")

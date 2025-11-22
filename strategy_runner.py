@@ -10,15 +10,10 @@ from config import GEMINI_API_KEY, TRADING_MODE, ACTIVE_EXCHANGE
 import json
 import datetime
 
+from logger_config import setup_logging
+
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("bot.log"),
-        logging.StreamHandler()
-    ]
-)
+setup_logging()
 logger = logging.getLogger(__name__)
 
 # Configure Gemini

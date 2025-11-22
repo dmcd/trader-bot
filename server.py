@@ -3,8 +3,10 @@ import logging
 from mcp.server.fastmcp import FastMCP
 from ib_trader import IBTrader as TraderBot
 
+from logger_config import setup_logging
+
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+setup_logging()
 logger = logging.getLogger(__name__)
 
 # Initialize TraderBot

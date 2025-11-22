@@ -7,7 +7,7 @@ from config import IB_HOST, IB_PORT, IB_CLIENT_ID
 import random
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 logger = logging.getLogger(__name__)
 
 class BaseTrader(ABC):

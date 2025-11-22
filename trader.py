@@ -2,12 +2,14 @@ import asyncio
 from ib_insync import *
 import logging
 
+from config import IB_HOST, IB_PORT, IB_CLIENT_ID
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class TraderBot:
-    def __init__(self, host='127.0.0.1', port=4002, client_id=1):
+    def __init__(self, host=IB_HOST, port=IB_PORT, client_id=IB_CLIENT_ID):
         self.host = host
         self.port = port
         self.client_id = client_id
@@ -121,13 +123,25 @@ class TraderBot:
         # Wait for order status to update
         await asyncio.sleep(1)
         
-        return {
-            'order_id': trade.order.orderId,
-            'status': trade.orderStatus.status,
-            'filled': trade.orderStatus.filled,
-            'remaining': trade.orderStatus.remaining,
-            'avg_fill_price': trade.orderStatus.avgFillPrice
-        }
+    async def get_pnl_async(self):
+        """Calculates the current PnL (Net Liquidation Value)."""
+        if not self.connected:
+            return 0.0
+            
+        # We need to ensure we have the latest account values
+        # We are already subscribed in get_account_summary_async, but let's be safe
+        # self.ib.reqAccountUpdates(True) # Single arg fix
+        
+        # Actually, let's just read the value
+        # NetLiquidation is the key one
+        summary = self.ib.accountValues()
+        for item in summary:
+            if item.tag == 'NetLiquidation' and item.currency == 'AUD':
+                try:
+                    return float(item.value)
+                except ValueError:
+                    return 0.0
+        return 0.0
 
     def run(self):
         """Keeps the script running to maintain connection (for standalone testing)."""

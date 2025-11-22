@@ -1,2 +1,6 @@
 ib_insync
 mcp
+streamlit
+pandas
+google-generativeai
+python-dotenv

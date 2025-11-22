@@ -6,8 +6,18 @@ from trader import TraderBot
 from risk_manager import RiskManager
 from config import GEMINI_API_KEY, TRADING_MODE
 
+import json
+import datetime
+
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("bot.log"),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # Configure Gemini
@@ -22,6 +32,20 @@ class StrategyRunner:
         self.risk_manager = RiskManager(self.bot)
         self.model = genai.GenerativeModel('gemini-pro')
         self.running = False
+        self.history_file = "trade_history.jsonl"
+
+    def log_decision(self, pnl, market_data, decision_json, action, reason):
+        """Logs the decision to a JSONL file."""
+        entry = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "pnl": pnl,
+            "market_data": market_data,
+            "decision_raw": decision_json,
+            "action": action,
+            "reason": reason
+        }
+        with open(self.history_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
 
     async def initialize(self):
         """Connects and initializes the bot."""
@@ -125,6 +149,17 @@ class StrategyRunner:
                 
                 # 4. Execute
                 if decision_json:
+                    # Parse for logging
+                    import json as json_lib # Avoid conflict with local var if any
+                    try:
+                        d = json_lib.loads(decision_json)
+                        action = d.get('action')
+                        reason = d.get('reason')
+                    except:
+                        action = "ERROR"
+                        reason = "Failed to parse"
+
+                    self.log_decision(pnl, market_data, decision_json, action, reason)
                     await self.execute_decision(decision_json, price)
                 
                 # 5. Sleep

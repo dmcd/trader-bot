@@ -53,6 +53,15 @@ GEMINI_API_KEY=your_gemini_api_key_here
 
 ### 4. Running the Bot
 
+**The Easy Way (Single Command):**
+```bash
+chmod +x run.sh
+./run.sh
+```
+This will start the autonomous bot in the background and launch the dashboard in your browser.
+
+**Manual Mode:**
+
 **Autonomous Mode (Strategy Loop):**
 ```bash
 python strategy_runner.py
@@ -61,6 +70,11 @@ python strategy_runner.py
 **MCP Server Mode (Tool Exposure):**
 ```bash
 python server.py
+```
+
+**Dashboard:**
+```bash
+streamlit run dashboard.py
 ```
 
 **Verification:**

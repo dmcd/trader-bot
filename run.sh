@@ -22,7 +22,7 @@ sleep 3
 
 # Start the Dashboard
 echo "Starting Dashboard..."
-streamlit run dashboard.py
+python -m streamlit run dashboard.py
 
 # Wait for the bot process
 wait $BOT_PID

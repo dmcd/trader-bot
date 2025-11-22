@@ -7,6 +7,7 @@ class RiskManager:
     def __init__(self, bot=None):
         self.bot = bot # Optional, mostly for position checks if needed
         self.daily_loss = 0.0
+        self.start_of_day_equity = None
         self.positions = {} # Symbol -> Quantity
 
     def update_pnl(self, current_equity):

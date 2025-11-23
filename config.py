@@ -11,10 +11,10 @@ IB_HOST = os.getenv('IB_HOST', '127.0.0.1')
 IB_PORT = int(os.getenv('IB_PORT', '4002')) # 4002 for Paper, 7497 for TWS Live
 IB_CLIENT_ID = int(os.getenv('IB_CLIENT_ID', '1'))
 
-# Risk Management Limits
-MAX_DAILY_LOSS = float(os.getenv('MAX_DAILY_LOSS', '1000.0')) # AUD (absolute)
-MAX_DAILY_LOSS_PERCENT = float(os.getenv('MAX_DAILY_LOSS_PERCENT', '0.5')) # Percentage (0.1 = 0.1%)
-MAX_ORDER_VALUE = float(os.getenv('MAX_ORDER_VALUE', '500.0')) # AUD/USD depending on venue
+# Risk Management Limits (defaults: moderate tier)
+MAX_DAILY_LOSS = float(os.getenv('MAX_DAILY_LOSS', '500.0')) # absolute currency stop
+MAX_DAILY_LOSS_PERCENT = float(os.getenv('MAX_DAILY_LOSS_PERCENT', '3.0')) # percent of equity stop
+MAX_ORDER_VALUE = float(os.getenv('MAX_ORDER_VALUE', '500.0')) # currency depends on venue
 MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '3'))
 MAX_TOTAL_EXPOSURE = float(os.getenv('MAX_TOTAL_EXPOSURE', '1000.0')) # Total portfolio exposure limit
 

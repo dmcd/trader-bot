@@ -47,6 +47,8 @@ class RiskManager:
 
     def check_trade_allowed(self, symbol, action, quantity, price) -> RiskCheckResult:
         """Checks if a trade is allowed based on risk limits."""
+        if price <= 0 or quantity <= 0:
+            return RiskCheckResult(False, "Invalid price or quantity")
         
         # 1. Check Max Order Value
         order_value = quantity * price

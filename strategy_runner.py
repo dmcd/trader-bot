@@ -53,6 +53,7 @@ class StrategyRunner:
         self.session = None
         self.last_rejection_reason = None
         self.last_trade_ts = None
+        self.sandbox_seed_symbols = {'USD', 'BTC/USD', 'BTC', 'ETH/USD', 'LTC/USD', 'ZEC/USD', 'BCH/USD'}
 
     async def initialize(self):
         """Connects and initializes the bot."""
@@ -98,6 +99,7 @@ class StrategyRunner:
         except Exception as e:
             logger.error(f"Reconciliation failed: unable to fetch exchange state: {e}")
             return
+        exchange_positions = self._sanitize_positions(exchange_positions)
 
         stored_positions = self.db.get_positions(self.session_id)
         stored_orders = self.db.get_open_orders(self.session_id)
@@ -147,6 +149,24 @@ class StrategyRunner:
             logger.info(f"Open orders on exchange: {len(exchange_orders)}")
         else:
             logger.info("No open orders on exchange.")
+
+    def _sanitize_positions(self, positions):
+        """Remove sandbox seed balances so exposure/risk isn't polluted."""
+        if not positions or TRADING_MODE != 'PAPER':
+            return positions
+
+        cleaned = []
+        for pos in positions:
+            sym = pos.get('symbol')
+            qty = pos.get('quantity', 0) or 0
+            avg_price = pos.get('avg_price')
+
+            # Heuristic: ignore known sandbox seeds that come with null avg_price
+            if sym in self.sandbox_seed_symbols and avg_price in (None, 0) and qty >= 100:
+                logger.debug(f"Dropping sandbox seed position {sym} qty {qty}")
+                continue
+            cleaned.append(pos)
+        return cleaned
 
     async def get_llm_decision(self, market_data, current_pnl):
         """Asks Gemini for a trading decision."""
@@ -270,7 +290,11 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
             self.last_rejection_reason = None
             
         try:
-            response = self.model.generate_content(prompt)
+            # Run blocking LLM call off the event loop with timeout
+            response = await asyncio.wait_for(
+                asyncio.to_thread(self.model.generate_content, prompt),
+                timeout=30
+            )
             
             # Track token usage and cost
             if hasattr(response, 'usage_metadata') and self.session_id:
@@ -469,6 +493,11 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             logger.error(f"Max daily loss exceeded: {loss_percent:.2f}% > {MAX_DAILY_LOSS_PERCENT}%. Stopping loop.")
                             bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded ({loss_percent:.2f}%)")
                             break
+                    # Check absolute daily loss
+                    if self.risk_manager.daily_loss > MAX_DAILY_LOSS:
+                        logger.error(f"Max daily loss exceeded: ${self.risk_manager.daily_loss:.2f} > ${MAX_DAILY_LOSS:.2f}. Stopping loop.")
+                        bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded (${self.risk_manager.daily_loss:.2f})")
+                        break
 
                     # 2. Fetch Market Data
                     market_data = {}
@@ -481,6 +510,14 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                     
                     data = await self.bot.get_market_data_async(symbol)
                     market_data[symbol] = data
+
+                    # Refresh live positions each loop for accurate exposure (sanitized for sandbox seeds)
+                    try:
+                        live_positions = await self.bot.get_positions_async()
+                        live_positions = self._sanitize_positions(live_positions)
+                        self.db.replace_positions(self.session_id, live_positions)
+                    except Exception as e:
+                        logger.warning(f"Could not refresh positions: {e}")
                     
                     # Log market data to database
                     if data and self.session_id:
@@ -536,9 +573,18 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                 logger.info(msg)
                                 continue
 
+                            # If price missing, skip for safety
+                            if not price:
+                                msg = "Skipped trade: missing price data"
+                                logger.warning(msg)
+                                bot_actions_logger.info(f"⏸ {msg}")
+                                continue
+
                             # Get price for risk check
-                            price = data['price'] if data else 0
-                            
+                            # Prefer the symbol's own market data if available
+                            md = market_data.get(symbol)
+                            price = md.get('price') if md else (data['price'] if data else 0)
+
                             # Update RiskManager with current positions for exposure calculation
                             positions_data = self.db.get_positions(self.session_id)
                             positions_dict = {}
@@ -559,7 +605,7 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             self.risk_manager.update_positions(positions_dict)
                             
                             risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
-                            
+
                             # Auto-reduce if order value is too high
                             if not risk_result.allowed and "Order value" in risk_result.reason and "exceeds limit" in risk_result.reason:
                                 old_qty = quantity

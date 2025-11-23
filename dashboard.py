@@ -39,13 +39,13 @@ def load_history():
         today = date.today().isoformat()
         cursor = db.conn.cursor()
         cursor.execute(
-            "SELECT timestamp, action, price, quantity, fee, reason FROM trades WHERE session_id = (SELECT id FROM sessions WHERE date = ?)",
+            "SELECT timestamp, symbol, action, price, quantity, fee, reason FROM trades WHERE session_id = (SELECT id FROM sessions WHERE date = ?)",
             (today,)
         )
         rows = cursor.fetchall()
         db.close()
         if rows:
-            df = pd.DataFrame(rows, columns=["timestamp", "action", "price", "quantity", "fee", "reason"])
+            df = pd.DataFrame(rows, columns=["timestamp", "symbol", "action", "price", "quantity", "fee", "reason"])
             # Compute trade_value as price * quantity
             df["trade_value"] = df["price"] * df["quantity"]
 
@@ -57,6 +57,107 @@ def load_history():
     except Exception as e:
         st.error(f"Error loading trade history from DB: {e}")
         return pd.DataFrame()
+
+def get_latest_prices(session_id, symbols):
+    """Fetch the latest market price for each symbol in the session."""
+    prices = {}
+    try:
+        db = TradingDatabase()
+        cursor = db.conn.cursor()
+        for symbol in symbols:
+            cursor.execute(
+                "SELECT price FROM market_data WHERE session_id = ? AND symbol = ? ORDER BY timestamp DESC LIMIT 1",
+                (session_id, symbol)
+            )
+            row = cursor.fetchone()
+            if row:
+                prices[symbol] = row['price']
+        db.close()
+    except Exception as e:
+        st.error(f"Error fetching prices: {e}")
+    return prices
+
+def calculate_pnl(df, current_prices):
+    """
+    Calculate Realized and Unrealized PnL based on FIFO/AvgCost logic.
+    Returns:
+        realized_pnl (float)
+        unrealized_pnl (float)
+        positions (list of dicts)
+        df (DataFrame with 'pnl' column added)
+    """
+    realized_pnl = 0.0
+    holdings = {} # {symbol: {'qty': 0.0, 'avg_cost': 0.0}}
+    
+    # Add pnl column to df
+    df['pnl'] = 0.0
+    
+    # Sort by timestamp to process chronologically
+    df = df.sort_values('timestamp', ascending=True)
+    
+    for index, row in df.iterrows():
+        symbol = row['symbol']
+        action = row['action']
+        quantity = row['quantity']
+        price = row['price']
+        
+        if symbol not in holdings:
+            holdings[symbol] = {'qty': 0.0, 'avg_cost': 0.0}
+            
+        if action == 'BUY':
+            # Update weighted average cost
+            current_qty = holdings[symbol]['qty']
+            current_cost = holdings[symbol]['avg_cost']
+            
+            new_qty = current_qty + quantity
+            if new_qty > 0:
+                new_cost = ((current_qty * current_cost) + (quantity * price)) / new_qty
+                holdings[symbol]['qty'] = new_qty
+                holdings[symbol]['avg_cost'] = new_cost
+            else:
+                # Should not happen in long-only, but handle gracefully
+                holdings[symbol]['qty'] = 0.0
+                holdings[symbol]['avg_cost'] = 0.0
+                
+        elif action == 'SELL':
+            # Calculate realized PnL
+            avg_cost = holdings[symbol]['avg_cost']
+            trade_pnl = (price - avg_cost) * quantity
+            realized_pnl += trade_pnl
+            
+            # Record PnL for this specific trade
+            df.at[index, 'pnl'] = trade_pnl
+            
+            # Update holding quantity
+            holdings[symbol]['qty'] = max(0.0, holdings[symbol]['qty'] - quantity)
+            # Avg cost doesn't change on sell
+            
+    # Calculate Unrealized PnL
+    unrealized_pnl = 0.0
+    active_positions = []
+    
+    for symbol, data in holdings.items():
+        qty = data['qty']
+        avg_cost = data['avg_cost']
+        
+        if qty > 1e-8: # Only count active positions (ignore tiny dust)
+            current_price = current_prices.get(symbol, avg_cost) # Fallback to cost if no price
+            position_value = qty * current_price
+            cost_basis = qty * avg_cost
+            pos_unrealized = position_value - cost_basis
+            
+            unrealized_pnl += pos_unrealized
+            
+            active_positions.append({
+                'Symbol': symbol,
+                'Quantity': qty,
+                'Avg Price': avg_cost,
+                'Current Price': current_price,
+                'Unrealized PnL': pos_unrealized,
+                'Value': position_value
+            })
+            
+    return realized_pnl, unrealized_pnl, active_positions, df
 
 def load_logs():
     if os.path.exists("bot.log"):
@@ -78,12 +179,12 @@ def load_session_stats():
             session_id = row['id']
             stats = db.get_session_stats(session_id)
             db.close()
-            return stats
+            return stats, session_id
         db.close()
-        return None
+        return None, None
     except Exception as e:
         st.error(f"Error loading session stats: {e}")
-        return None
+        return None, None
 
 # --- Main Layout ---
 col1, col2 = st.columns([2, 1])
@@ -92,18 +193,29 @@ with col1:
     st.subheader("📊 Session Performance")
     df = load_history()
     
-    # Load session stats for accurate PnL
-    session_stats = load_session_stats()
+    # Load session stats
+    session_stats, session_id = load_session_stats()
     
-    if session_stats:
-        gross_pnl_usd = session_stats.get('gross_pnl', 0)
+    if session_stats and not df.empty:
+        # Get latest prices for PnL calculation
+        symbols = df['symbol'].unique()
+        current_prices = get_latest_prices(session_id, symbols)
+        
+        # Calculate PnL
+        realized_pnl, unrealized_pnl, active_positions, df = calculate_pnl(df, current_prices)
+        
+        gross_pnl_usd = realized_pnl + unrealized_pnl
         
         # Convert to selected currency
         if currency == 'AUD':
             gross_pnl = gross_pnl_usd * usd_to_aud
+            realized_disp = realized_pnl * usd_to_aud
+            unrealized_disp = unrealized_pnl * usd_to_aud
             currency_symbol = 'AUD'
         else:
             gross_pnl = gross_pnl_usd
+            realized_disp = realized_pnl
+            unrealized_disp = unrealized_pnl
             currency_symbol = 'USD'
 
         # Calculate net PnL after fees and LLM costs
@@ -119,8 +231,8 @@ with col1:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric(f"Net PnL ({currency_symbol})", f"${net_pnl:,.2f}")
         m2.metric(f"Gross PnL ({currency_symbol})", f"${gross_pnl:,.2f}")
-        m3.metric("Total Trades", session_stats.get('total_trades', 0))
-        m4.metric("Status", status)
+        m3.metric(f"Realized PnL", f"${realized_disp:,.2f}")
+        m4.metric(f"Unrealized PnL", f"${unrealized_disp:,.2f}")
 
         # Cost summary - Row 2
         st.markdown("---")
@@ -128,30 +240,53 @@ with col1:
         c1.metric("Total Fees", f"${session_stats.get('total_fees', 0):.2f}")
         c2.metric("LLM Costs", f"${session_stats.get('total_llm_cost', 0):.4f}")
         c3.metric("Total Costs", f"${total_costs:.2f}")
-        c4.metric("Cost Ratio", f"{cost_ratio:.2f}%")
+        c4.metric("Total Trades", session_stats.get('total_trades', 0))
         
         st.markdown("---")
+        
+        # Active Positions Table
+        if active_positions:
+            st.subheader("📈 Active Positions")
+            pos_df = pd.DataFrame(active_positions)
+            st.dataframe(
+                pos_df,
+                column_config={
+                    "Symbol": "Symbol",
+                    "Quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
+                    "Avg Price": st.column_config.NumberColumn("Avg Price", format="$%.2f"),
+                    "Current Price": st.column_config.NumberColumn("Current Price", format="$%.2f"),
+                    "Unrealized PnL": st.column_config.NumberColumn("Unrealized PnL", format="$%.2f"),
+                    "Value": st.column_config.NumberColumn("Value", format="$%.2f"),
+                },
+                hide_index=True,
+                use_container_width=True
+            )
 
+    elif session_stats:
+        # Fallback if no trades yet
+        st.info("Session started, waiting for trades...")
+        st.metric("Starting Balance", f"${session_stats.get('starting_balance', 0):,.2f}")
     else:
-        # Fallback if no stats
         st.warning("No session stats available.")
     
     st.subheader("🧠 Strategy Decisions")
     if not df.empty:
         # Convert timestamp
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        # df['timestamp'] = pd.to_datetime(df['timestamp']) # Already done in load_history
         df = df.sort_values('timestamp', ascending=False)
         
-        # Dataframe - Rename 'pnl' to 'Trade Value' for clarity
-        df = df.rename(columns={'pnl': 'trade_value'})
+        # Dataframe - Rename 'pnl' to 'Trade PnL' for clarity
         st.dataframe(
-            df[['timestamp', 'action', 'trade_value', 'reason']],
+            df[['timestamp', 'symbol', 'action', 'price', 'quantity', 'pnl', 'reason']],
             width=None, # Use full width
             hide_index=True,
             column_config={
-                "timestamp": st.column_config.DatetimeColumn("Time", format="D MMM HH:mm:ss"),
-                "action": st.column_config.TextColumn("Action"),
-                "trade_value": st.column_config.NumberColumn("Value", format="$%.2f"),
+                "timestamp": st.column_config.DatetimeColumn("Time", format="HH:mm:ss"),
+                "symbol": "Symbol",
+                "action": "Action",
+                "price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
+                "pnl": st.column_config.NumberColumn("Realized PnL", format="$%.2f"),
                 "reason": st.column_config.TextColumn("Reason", width="large"),
             },
             use_container_width=True

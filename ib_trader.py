@@ -42,6 +42,10 @@ class IBTrader(BaseTrader):
             self.connected = False
             logger.info("Disconnected.")
 
+    async def close(self):
+        """Async-friendly close used by strategy_runner cleanup."""
+        self.disconnect()
+
     async def get_account_summary_async(self):
         """Fetches the account summary asynchronously."""
         if not self.connected:

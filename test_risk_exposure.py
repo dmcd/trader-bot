@@ -1,38 +1,79 @@
 import unittest
+
+import risk_manager as rm_module
 from risk_manager import RiskManager
-from config import MAX_TOTAL_EXPOSURE
+
 
 class TestRiskManager(unittest.TestCase):
     def setUp(self):
-        self.rm = RiskManager()
-        # Mock config values if needed, but we rely on default config for now
-        # Assuming MAX_TOTAL_EXPOSURE is 1000.0 from our previous edit
+        # Normalize config-sensitive constants for deterministic tests
+        self.orig_max_order = rm_module.MAX_ORDER_VALUE
+        self.orig_max_total_exposure = rm_module.MAX_TOTAL_EXPOSURE
+        self.orig_daily_loss_pct = rm_module.MAX_DAILY_LOSS_PERCENT
+        self.orig_daily_loss_abs = rm_module.MAX_DAILY_LOSS
 
-    def test_exposure_limit(self):
-        # 1. Setup existing positions (e.g., $850 worth)
+        rm_module.MAX_ORDER_VALUE = 500.0
+        rm_module.MAX_TOTAL_EXPOSURE = 1000.0
+        rm_module.MAX_DAILY_LOSS_PERCENT = 5.0
+        rm_module.MAX_DAILY_LOSS = 50.0
+
+        self.rm = RiskManager()
+        # Seed start of day equity so percent checks work
+        self.rm.seed_start_of_day(1000.0)
+
+    def tearDown(self):
+        rm_module.MAX_ORDER_VALUE = self.orig_max_order
+        rm_module.MAX_TOTAL_EXPOSURE = self.orig_max_total_exposure
+        rm_module.MAX_DAILY_LOSS_PERCENT = self.orig_daily_loss_pct
+        rm_module.MAX_DAILY_LOSS = self.orig_daily_loss_abs
+
+    def test_invalid_price_or_quantity_rejected(self):
+        result = self.rm.check_trade_allowed("BHP", "BUY", 0, 100.0)
+        self.assertFalse(result.allowed)
+        result = self.rm.check_trade_allowed("BHP", "BUY", 1, 0.0)
+        self.assertFalse(result.allowed)
+
+    def test_order_value_cap(self):
+        over_size_qty = (rm_module.MAX_ORDER_VALUE / 10.0) + 1
+        result = self.rm.check_trade_allowed("BHP", "BUY", over_size_qty, price=10.0)
+        self.assertFalse(result.allowed)
+        self.assertIn("Order value", result.reason)
+
+    def test_daily_loss_percent_and_absolute(self):
+        # Simulate loss beyond percent
+        self.rm.daily_loss = (rm_module.MAX_DAILY_LOSS_PERCENT / 100.0 * self.rm.start_of_day_equity) + 1
+        result = self.rm.check_trade_allowed("BHP", "BUY", 1, 10.0)
+        self.assertFalse(result.allowed)
+
+        # Simulate absolute loss breach
+        self.rm.daily_loss = rm_module.MAX_DAILY_LOSS + 1
+        result = self.rm.check_trade_allowed("BHP", "BUY", 1, 10.0)
+        self.assertFalse(result.allowed)
+
+    def test_exposure_limit_and_sandbox_adjustment(self):
+        # Existing BTC sandbox seed should be ignored in PAPER mode when avg_price missing
+        self.rm.is_sandbox = True
         self.rm.update_positions({
-            'BTC': {'quantity': 0.01, 'current_price': 85000.0} # $850 value
+            "BTC/USD": {"quantity": 1000.0, "current_price": 30000.0},  # discounted to 0 exposure
+            "ETH/USD": {"quantity": 90.0, "current_price": 90.0},  # $900 exposure using trade price override
         })
-        
-        # 2. Try to buy $100 more (Total $950) -> Should be ALLOWED
-        result = self.rm.check_trade_allowed('ETH', 'BUY', 1.0, 100.0)
-        self.assertTrue(result.allowed, f"Trade should be allowed: {result.reason}")
-        
-        # 3. Try to buy $180 more (Total $1030) -> Should be REJECTED by exposure limit
-        # Note: Order value $180 is under MAX_ORDER_VALUE ($200) so it passes that check
-        result = self.rm.check_trade_allowed('ETH', 'BUY', 1.8, 100.0)
-        self.assertFalse(result.allowed, "Trade should be rejected due to exposure limit")
-        self.assertIn("Total exposure", result.reason)
-        
-    def test_safe_buffer_warning(self):
-        # 1. Setup existing positions ($850)
-        self.rm.update_positions({
-            'BTC': {'quantity': 0.01, 'current_price': 85000.0}
-        })
-        
-        # 2. Buy $60 (Total $910, > 90% of 1000) -> Allowed but logs warning (we can't easily check logs here but we check allowed)
-        result = self.rm.check_trade_allowed('ETH', 'BUY', 0.6, 100.0)
+
+        # Small order under exposure cap passes
+        result = self.rm.check_trade_allowed("ETH/USD", "BUY", 1, price=10.0)  # +$10 => $910
         self.assertTrue(result.allowed)
 
-if __name__ == '__main__':
+        # Order that pushes exposure above cap while still under order cap
+        qty_to_exceed = 15  # 15 * $10 = $150; exposure becomes 900 + 150 = 1050 > cap
+        result = self.rm.check_trade_allowed("ETH/USD", "BUY", qty_to_exceed, price=10.0)
+        self.assertFalse(result.allowed)
+        self.assertIn("Total exposure", result.reason)
+
+    def test_safe_buffer_allows_near_cap(self):
+        near_cap_price = rm_module.MAX_TOTAL_EXPOSURE / 9.5  # ~10.5% below cap
+        self.rm.update_positions({"ABC": {"quantity": 9.0, "current_price": near_cap_price}})
+        result = self.rm.check_trade_allowed("XYZ", "BUY", 1, price=1.0)
+        self.assertTrue(result.allowed)
+
+
+if __name__ == "__main__":
     unittest.main()

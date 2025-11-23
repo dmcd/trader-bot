@@ -1,90 +1,54 @@
-import subprocess
-import json
-import sys
-import time
+import asyncio
+import unittest
 
-def test_mcp_server():
-    # Start the server process
-    process = subprocess.Popen(
-        [sys.executable, 'server.py'],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=sys.stderr,
-        text=True,
-        bufsize=1
-    )
+import server
 
-    print("Server started. Sending initialize request...")
 
-    # 1. Initialize
-    init_request = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "test-client", "version": "1.0"}
-        }
-    }
-    
-    process.stdin.write(json.dumps(init_request) + "\n")
-    process.stdin.flush()
+class StubBot:
+    def __init__(self):
+        self.connected = False
 
-    # Read response (might get some logs first, so we need to be careful)
-    # In a real scenario we'd use a proper JSON-RPC client, but this is a quick check
-    
-    # We'll just read a line and hope it's the response
-    response_line = process.stdout.readline()
-    print(f"Response: {response_line}")
-    
-    # 2. List Tools
-    list_tools_request = {
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/list",
-        "params": {}
-    }
-    process.stdin.write(json.dumps(list_tools_request) + "\n")
-    process.stdin.flush()
-    
-    response_line = process.stdout.readline()
-    print(f"Tools List Response: {response_line}")
+    async def connect_async(self):
+        self.connected = True
 
-    # 3. Call get_account_info
-    call_tool_request = {
-        "jsonrpc": "2.0",
-        "id": 3,
-        "method": "tools/call",
-        "params": {
-            "name": "get_account_info",
-            "arguments": {}
-        }
-    }
-    process.stdin.write(json.dumps(call_tool_request) + "\n")
-    process.stdin.flush()
-    
-    # This might take a moment if it needs to connect
-    response_line = process.stdout.readline()
-    print(f"Call Tool Response (Account): {response_line}")
+    async def close(self):
+        self.connected = False
 
-    # 4. Call get_stock_price
-    call_tool_request_2 = {
-        "jsonrpc": "2.0",
-        "id": 4,
-        "method": "tools/call",
-        "params": {
-            "name": "get_stock_price",
-            "arguments": {"symbol": "BHP"}
-        }
-    }
-    process.stdin.write(json.dumps(call_tool_request_2) + "\n")
-    process.stdin.flush()
-    
-    response_line = process.stdout.readline()
-    print(f"Call Tool Response (Stock): {response_line}")
+    async def get_account_summary_async(self):
+        return [{"account": "TEST", "tag": "Cash", "value": "1000", "currency": "USD"}]
 
-    process.terminate()
+    async def get_market_data_async(self, symbol):
+        return {"symbol": symbol, "price": 123.45, "bid": 123.0, "ask": 124.0, "close": 122.0}
+
+    async def place_order_async(self, symbol, action, quantity):
+        return {"order_id": "abc123", "status": "Submitted", "filled": 0, "remaining": quantity, "avg_fill_price": None}
+
+
+class TestServerTools(unittest.TestCase):
+    def setUp(self):
+        # Swap the real bot for a stub so tests do not hit IB
+        self.original_bot = server.bot
+        server.bot = StubBot()
+
+    def tearDown(self):
+        server.bot = self.original_bot
+
+    def test_get_account_info(self):
+        result = asyncio.run(server.get_account_info())
+        self.assertTrue(server.bot.connected)
+        self.assertEqual(result[0]["account"], "TEST")
+
+    def test_get_stock_price(self):
+        data = asyncio.run(server.get_stock_price("BHP"))
+        self.assertEqual(data["symbol"], "BHP")
+        self.assertEqual(data["price"], 123.45)
+
+    def test_buy_and_sell_stock(self):
+        buy = asyncio.run(server.buy_stock("BHP", 10))
+        sell = asyncio.run(server.sell_stock("BHP", 5))
+        self.assertEqual(buy["order_id"], "abc123")
+        self.assertEqual(sell["remaining"], 5)
+
 
 if __name__ == "__main__":
-    test_mcp_server()
+    unittest.main()

@@ -64,6 +64,11 @@ See `config.py` for every configurable option (fee overrides, tier caps, etc.).
 
 The loop stores state in `trading.db`, writes human-readable events to `bot.log`, and detailed diagnostics to `console.log`.
 
+## Testing
+- Install deps (includes pytest): `pip install -r requirements.txt`
+- Run all tests: `python -m pytest`
+- Run a specific file while iterating: `python -m pytest test_technical_analysis_unit.py`
+
 ## Notes & limitations
 - One active venue at a time (`ACTIVE_EXCHANGE`), and the loop currently fetches/trades a single symbol per venue (`BHP` for IB, `BTC/USD` for Gemini).
 - Paper mode on Gemini uses sandbox URLs and backfills missing precision metadata so orders format correctly.

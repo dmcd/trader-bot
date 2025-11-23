@@ -821,6 +821,10 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol} - {reason}")
                         
                         if action in ['BUY', 'SELL'] and quantity > 0:
+                            # Get price for risk checks and execution; prefer the symbol's own market data
+                            md = market_data.get(symbol)
+                            price = md.get('price') if md else (data['price'] if data else 0)
+
                             # Enforce minimum spacing between trades to cut churn/fees
                             now_ts = asyncio.get_event_loop().time()
                             if self.last_trade_ts and (now_ts - self.last_trade_ts) < MIN_TRADE_INTERVAL_SECONDS:
@@ -840,11 +844,6 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                 logger.warning(msg)
                                 bot_actions_logger.info(f"⏸ {msg}")
                                 continue
-
-                            # Get price for risk check
-                            # Prefer the symbol's own market data if available
-                            md = market_data.get(symbol)
-                            price = md.get('price') if md else (data['price'] if data else 0)
 
                             # Update RiskManager with current positions for exposure calculation
                             positions_data = self.db.get_positions(self.session_id)

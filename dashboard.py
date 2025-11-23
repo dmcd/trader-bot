@@ -5,17 +5,28 @@ import os
 import subprocess
 from database import TradingDatabase
 
-# Simple helper to map percentage-of-gross values to a color-coded label
 def format_ratio_badge(ratio):
-    color = "#2ecc71"  # green
-    label = "Good"
     if ratio is None:
         return None
+    color = "#2ecc71"  # green
+    label = "Good"
+    bg = "rgba(46, 204, 113, 0.15)"
     if ratio > 25:
-        color, label = "#e74c3c", "High"  # red
+        color, label, bg = "#e74c3c", "High", "rgba(231, 76, 60, 0.15)"  # red
+        arrow = "&uarr;"
     elif ratio > 10:
-        color, label = "#f39c12", "Moderate"  # orange
-    return f"<span style='color:{color}; font-weight:600'>{label} ({ratio:.1f}% of Gross)</span>"
+        color, label, bg = "#f39c12", "Moderate", "rgba(243, 156, 18, 0.15)"  # orange
+        arrow = "&nearr;"
+    else:
+        arrow = "&nearr;"
+    return (
+        "<span style=\"display:inline-flex;align-items:center;gap:4px;"
+        f"padding:2px 8px;border-radius:999px;font-weight:600;"
+        f"font-size:0.9rem;line-height:1;background:{bg};color:{color};\">"
+        f"<span style='font-size:0.8rem;font-weight:500;'>{arrow}</span>"
+        f"<span>{label} ({ratio:.1f}% of Gross)</span>"
+        "</span>"
+    )
 
 # Bot status detection
 def is_bot_running():
@@ -342,14 +353,14 @@ with col1:
         # Cost summary - Row 2
         st.markdown("---")
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total Fees", f"${fees:.2f}", f"{fee_ratio:.1f}% of Gross" if gross_pnl else None)
+        c1.metric("Total Fees", f"${fees:.2f}")
         c2.metric("LLM Costs", f"${llm_cost:.4f}")
-        c3.metric("Total Costs", f"${total_costs:.2f}", f"{cost_ratio:.1f}% of Gross" if gross_pnl else None)
+        c3.metric("Total Costs", f"${total_costs:.2f}")
         c4.metric("Total Trades", session_stats.get('total_trades', 0))
         if fee_badge:
-            c1.markdown(fee_badge, unsafe_allow_html=True)
+            c1.markdown(f"<div style='margin-top:-8px;'>{fee_badge}</div>", unsafe_allow_html=True)
         if cost_badge:
-            c3.markdown(cost_badge, unsafe_allow_html=True)
+            c3.markdown(f"<div style='margin-top:-8px;'>{cost_badge}</div>", unsafe_allow_html=True)
         
         st.markdown("---")
         

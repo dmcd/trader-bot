@@ -11,7 +11,7 @@ from database import TradingDatabase
 from cost_tracker import CostTracker
 from trading_context import TradingContext
 from technical_analysis import TechnicalAnalysis
-from config import GEMINI_API_KEY, TRADING_MODE, ACTIVE_EXCHANGE, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_DAILY_LOSS
+from config import GEMINI_API_KEY, TRADING_MODE, ACTIVE_EXCHANGE, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_DAILY_LOSS, LOOP_INTERVAL_SECONDS, MIN_TRADE_INTERVAL_SECONDS
 
 
 
@@ -52,6 +52,7 @@ class StrategyRunner:
         self.context = None
         self.session = None
         self.last_rejection_reason = None
+        self.last_trade_ts = None
 
     async def initialize(self):
         """Connects and initializes the bot."""
@@ -526,6 +527,15 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol} - {reason}")
                         
                         if action in ['BUY', 'SELL'] and quantity > 0:
+                            # Enforce minimum spacing between trades to cut churn/fees
+                            now_ts = asyncio.get_event_loop().time()
+                            if self.last_trade_ts and (now_ts - self.last_trade_ts) < MIN_TRADE_INTERVAL_SECONDS:
+                                wait_remaining = MIN_TRADE_INTERVAL_SECONDS - (now_ts - self.last_trade_ts)
+                                msg = f"Skipped trade: spacing guard ({wait_remaining:.0f}s remaining)"
+                                bot_actions_logger.info(f"⏸ {msg}")
+                                logger.info(msg)
+                                continue
+
                             # Get price for risk check
                             price = data['price'] if data else 0
                             
@@ -576,7 +586,8 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                 bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (fee: ${fee:.4f})")
                                 
                                 # Execute trade
-                                order_result = await self.bot.place_order_async(symbol, action, quantity)
+                                order_result = await self.bot.place_order_async(symbol, action, quantity, prefer_maker=True)
+                                self.last_trade_ts = asyncio.get_event_loop().time()
                                 
                                 # Log trade to database
                                 if self.session_id and order_result:
@@ -597,8 +608,8 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                 self.last_rejection_reason = risk_result.reason
                     
                     # 5. Sleep
-                    logger.info("Sleeping for 10 seconds...")
-                    await asyncio.sleep(10)
+                            logger.info(f"Sleeping for {LOOP_INTERVAL_SECONDS} seconds...")
+                            await asyncio.sleep(LOOP_INTERVAL_SECONDS)
 
                 except KeyboardInterrupt:
                     logger.info("Stopping loop...")

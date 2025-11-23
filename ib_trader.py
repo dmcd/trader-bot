@@ -95,7 +95,7 @@ class IBTrader(BaseTrader):
             'close': ticker.close
         }
 
-    async def place_order_async(self, symbol, action, quantity, order_type='MKT', exchange='SMART', currency='AUD'):
+    async def place_order_async(self, symbol, action, quantity, order_type='MKT', exchange='SMART', currency='AUD', **kwargs):
         """Places an order asynchronously."""
         if not self.connected:
             logger.warning("Not connected. Cannot place order.")

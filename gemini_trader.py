@@ -157,8 +157,8 @@ class GeminiTrader(BaseTrader):
             logger.error(f"Error fetching Gemini ticker for {symbol}: {e}")
             return None
 
-    async def place_order_async(self, symbol, action, quantity):
-        """Places a limit order (Gemini requires limit orders)."""
+    async def place_order_async(self, symbol, action, quantity, prefer_maker=True):
+        """Places a limit order. Gemini requires limit orders; prefer maker when requested."""
         if not self.connected:
             return None
 
@@ -177,13 +177,20 @@ class GeminiTrader(BaseTrader):
             if market_precision.get('amount') is None:
                 market_precision['amount'] = 1e-8
 
-            # For immediate execution (like market order):
-            # - BUY: use ask price (willing to pay the current ask)
-            # - SELL: use bid price (willing to accept the current bid)
-            if side == 'buy':
-                limit_price = ticker.get('ask') or ticker.get('last')
+            bid = ticker.get('bid') or ticker.get('last')
+            ask = ticker.get('ask') or ticker.get('last')
+
+            if prefer_maker:
+                # Nudge price inside the spread to stay maker; small tick buffer to avoid taker
+                if side == 'buy':
+                    base_price = bid or ticker.get('last')
+                    limit_price = base_price * 0.9995 if base_price else ticker.get('last')
+                else:
+                    base_price = ask or ticker.get('last')
+                    limit_price = base_price * 1.0005 if base_price else ticker.get('last')
             else:
-                limit_price = ticker.get('bid') or ticker.get('last')
+                # Taker-style limit-at-touch
+                limit_price = ask if side == 'buy' else bid
 
             if limit_price is None:
                 raise ValueError(f"Ticker for {symbol} missing price data: {ticker}")
@@ -196,7 +203,11 @@ class GeminiTrader(BaseTrader):
             logger.info(f"Placing limit order: {quantity} at ${limit_price}")
 
             # Create limit order
-            order = await self.exchange.create_limit_order(symbol, side, quantity, limit_price)
+            params = {}
+            if prefer_maker:
+                params['postOnly'] = True
+
+            order = await self.exchange.create_limit_order(symbol, side, quantity, limit_price, params)
 
             return {
                 'order_id': order['id'],

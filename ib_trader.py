@@ -130,13 +130,20 @@ class IBTrader(BaseTrader):
             return 0.0
             
         summary = self.ib.accountValues()
+        net_liq = None
+        cash = None
         for item in summary:
             if item.tag == 'NetLiquidation':
                 try:
-                    return float(item.value)
+                    net_liq = float(item.value)
                 except ValueError:
-                    return 0.0
-        return 0.0
+                    net_liq = None
+            if item.tag == 'TotalCashValue':
+                try:
+                    cash = float(item.value)
+                except ValueError:
+                    cash = None
+        return net_liq if net_liq is not None else (cash or 0.0)
 
     def run(self):
         """Keeps the script running to maintain connection (for standalone testing)."""

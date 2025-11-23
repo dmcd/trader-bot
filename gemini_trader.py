@@ -255,10 +255,7 @@ class GeminiTrader(BaseTrader):
             balance = await self.exchange.fetch_balance()
             total_usd = 0.0
 
-            # Simple estimation: sum of (balance * current_price)
-            # Note: This is expensive if we have many coins.
-            # For now, let's just check USD and BTC
-
+            # Sum USD and major holdings
             if 'USD' in balance['total']:
                 total_usd += balance['total']['USD']
 

@@ -248,6 +248,41 @@ class StrategyRunner:
                 t['price']
             )
 
+    async def _close_all_positions_safely(self):
+        """Attempt to flatten all positions using market-ish orders."""
+        try:
+            positions = self.db.get_positions(self.session_id)
+            if not positions:
+                return
+            for pos in positions:
+                symbol = pos['symbol']
+                quantity = pos['quantity']
+                if quantity <= 0:
+                    continue
+                try:
+                    data = await self.bot.get_market_data_async(symbol)
+                    price = data.get('price', 0) if data else 0
+                    result = await self.bot.place_order_async(symbol, 'SELL', quantity, prefer_maker=False)
+                    if result:
+                        fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, 'SELL')
+                        realized_pnl = self._update_holdings_and_realized(symbol, 'SELL', quantity, price, fee)
+                        self.db.log_trade(
+                            self.session_id,
+                            symbol,
+                            'SELL',
+                            quantity,
+                            price,
+                            fee,
+                            "Auto-flatten on stop",
+                            liquidity=result.get('liquidity', 'taker'),
+                            realized_pnl=realized_pnl
+                        )
+                        bot_actions_logger.info(f"✅ Flattened {quantity} {symbol} @ ${price:,.2f}")
+                except Exception as e:
+                    logger.error(f"Error flattening {symbol}: {e}")
+        except Exception as e:
+            logger.error(f"Flatten-all failed: {e}")
+
     def _is_choppy(self, symbol: str, market_data_point, recent_data):
         """
         Simple regime filter: skip when Bollinger width is tight and RSI is neutral.
@@ -611,11 +646,14 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                         if loss_percent > limit_pct:
                             logger.error(f"Max daily loss exceeded: {loss_percent:.2f}% > {limit_pct}%. Stopping loop.")
                             bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded ({loss_percent:.2f}%)")
+                            # Attempt to flatten positions before stopping
+                            await self._close_all_positions_safely()
                             break
                     # Check absolute daily loss
                     if self.risk_manager.daily_loss > MAX_DAILY_LOSS:
                         logger.error(f"Max daily loss exceeded: ${self.risk_manager.daily_loss:.2f} > ${MAX_DAILY_LOSS:.2f}. Stopping loop.")
                         bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded (${self.risk_manager.daily_loss:.2f})")
+                        await self._close_all_positions_safely()
                         break
 
                     # 2. Fetch Market Data

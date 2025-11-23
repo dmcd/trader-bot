@@ -10,6 +10,11 @@ class RiskManager:
         self.start_of_day_equity = None
         self.positions = {} # Symbol -> Quantity
 
+    def seed_start_of_day(self, start_equity: float):
+        """Persist start-of-day equity so restarts keep loss limits consistent."""
+        if start_equity is not None:
+            self.start_of_day_equity = start_equity
+
     def update_pnl(self, current_equity):
         """Updates the daily PnL based on equity change."""
         if self.start_of_day_equity is None:

@@ -142,6 +142,52 @@ class IBTrader(BaseTrader):
         """Keeps the script running to maintain connection (for standalone testing)."""
         self.ib.run()
 
+    async def get_positions_async(self):
+        """Fetch current IB positions."""
+        if not self.connected:
+            return []
+
+        try:
+            await self.ib.reqPositionsAsync()
+            positions = []
+            for pos in self.ib.positions():
+                symbol = pos.contract.symbol
+                positions.append({
+                    'symbol': symbol,
+                    'quantity': pos.position,
+                    'avg_price': pos.avgCost,
+                    'timestamp': None
+                })
+            return positions
+        except Exception as e:
+            logger.error(f"Error fetching IB positions: {e}")
+            return []
+
+    async def get_open_orders_async(self):
+        """Fetch open orders."""
+        if not self.connected:
+            return []
+
+        try:
+            await self.ib.reqOpenOrdersAsync()
+            snapshot = []
+            for order in self.ib.openOrders():
+                contract = order.contract
+                snapshot.append({
+                    'order_id': order.order.orderId,
+                    'symbol': contract.symbol,
+                    'side': order.order.action,
+                    'price': order.order.lmtPrice,
+                    'amount': order.order.totalQuantity,
+                    'remaining': None,
+                    'status': order.orderState.status,
+                    'timestamp': None
+                })
+            return snapshot
+        except Exception as e:
+            logger.error(f"Error fetching IB open orders: {e}")
+            return []
+
 if __name__ == "__main__":
     # Simple test
     bot = IBTrader()

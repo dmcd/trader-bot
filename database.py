@@ -96,6 +96,38 @@ class TradingDatabase:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
+
+        # Positions snapshot table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS positions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                avg_price REAL,
+                exchange_timestamp TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        """)
+
+        # Open orders snapshot table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS open_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                order_id TEXT,
+                symbol TEXT NOT NULL,
+                side TEXT,
+                price REAL,
+                amount REAL,
+                remaining REAL,
+                status TEXT,
+                exchange_timestamp TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        """)
         
         self.conn.commit()
         logger.info(f"Database initialized at {self.db_path}")
@@ -124,6 +156,13 @@ class TradingDatabase:
         session_id = cursor.lastrowid
         logger.info(f"Created new session {session_id} for {today}")
         return session_id
+
+    def get_session(self, session_id: int) -> Optional[Dict[str, Any]]:
+        """Fetch a session row by id."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
     
     def log_trade(self, session_id: int, symbol: str, action: str, 
                   quantity: float, price: float, fee: float, reason: str = ""):
@@ -199,7 +238,7 @@ class TradingDatabase:
         """, (session_id, symbol, limit))
         
         return [dict(row) for row in cursor.fetchall()]
-    
+
     def get_session_stats(self, session_id: int) -> Dict[str, Any]:
         """Get session statistics."""
         cursor = self.conn.cursor()
@@ -230,6 +269,75 @@ class TradingDatabase:
             WHERE id = ?
         """, (ending_balance, net_pnl, session_id))
         self.conn.commit()
+
+    def replace_positions(self, session_id: int, positions: List[Dict[str, Any]]):
+        """Replace stored positions snapshot for the session."""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM positions WHERE session_id = ?", (session_id,))
+        for pos in positions:
+            cursor.execute("""
+                INSERT INTO positions (session_id, symbol, quantity, avg_price, exchange_timestamp)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                session_id,
+                pos.get('symbol'),
+                pos.get('quantity', 0),
+                pos.get('avg_price'),
+                pos.get('timestamp')
+            ))
+        self.conn.commit()
+
+    def get_positions(self, session_id: int) -> List[Dict[str, Any]]:
+        """Return last stored positions for the session."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM positions 
+            WHERE session_id = ?
+        """, (session_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def replace_open_orders(self, session_id: int, orders: List[Dict[str, Any]]):
+        """Replace stored open orders snapshot for the session."""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM open_orders WHERE session_id = ?", (session_id,))
+        for order in orders:
+            cursor.execute("""
+                INSERT INTO open_orders (session_id, order_id, symbol, side, price, amount, remaining, status, exchange_timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                session_id,
+                order.get('order_id'),
+                order.get('symbol'),
+                order.get('side'),
+                order.get('price'),
+                order.get('amount'),
+                order.get('remaining'),
+                order.get('status'),
+                order.get('timestamp')
+            ))
+        self.conn.commit()
+
+    def get_open_orders(self, session_id: int) -> List[Dict[str, Any]]:
+        """Return last stored open orders for the session."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM open_orders 
+            WHERE session_id = ?
+        """, (session_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_net_positions_from_trades(self, session_id: int) -> Dict[str, float]:
+        """Compute net position per symbol from recorded trades."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT symbol,
+                   SUM(CASE WHEN action = 'BUY' THEN quantity ELSE -quantity END) as net_qty
+            FROM trades
+            WHERE session_id = ?
+            GROUP BY symbol
+        """, (session_id,))
+        rows = cursor.fetchall()
+        return {row['symbol']: row['net_qty'] for row in rows}
     
     def close(self):
         """Close database connection."""

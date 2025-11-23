@@ -31,4 +31,30 @@ class BaseTrader(ABC):
     async def get_pnl_async(self):
         pass
 
+    @abstractmethod
+    async def get_positions_async(self):
+        pass
 
+    @abstractmethod
+    async def get_open_orders_async(self):
+        pass
+
+    @abstractmethod
+    async def get_positions_async(self):
+        """Return current open positions."""
+        pass
+
+    @abstractmethod
+    async def get_open_orders_async(self):
+        """Return current open orders."""
+        pass
+
+    @abstractmethod
+    async def get_positions_async(self):
+        """Return current positions/open balances."""
+        pass
+
+    @abstractmethod
+    async def get_open_orders_async(self):
+        """Return current open orders."""
+        pass

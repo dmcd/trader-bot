@@ -50,6 +50,7 @@ class StrategyRunner:
         self.technical_analysis = TechnicalAnalysis()
         self.session_id = None
         self.context = None
+        self.session = None
 
     async def initialize(self):
         """Connects and initializes the bot."""
@@ -65,12 +66,82 @@ class StrategyRunner:
         
         # Create or load today's trading session
         self.session_id = self.db.get_or_create_session(starting_balance=initial_pnl)
+        self.session = self.db.get_session(self.session_id)
         
         # Initialize trading context
         self.context = TradingContext(self.db, self.session_id)
         
+        # Seed risk manager with persisted start-of-day equity to survive restarts
+        start_equity = None
+        if self.session and self.session.get('starting_balance') is not None:
+            start_equity = self.session.get('starting_balance')
+        else:
+            start_equity = initial_pnl
+        self.risk_manager.seed_start_of_day(start_equity)
+        
+        # Reconcile with exchange state
+        await self.reconcile_exchange_state()
+
         self.risk_manager.update_pnl(initial_pnl)
         bot_actions_logger.info(f"💰 Starting Portfolio Value: ${initial_pnl:,.2f}")
+
+    async def reconcile_exchange_state(self):
+        """Pull positions/open orders from exchange and compare to local session."""
+        try:
+            exchange_positions = await self.bot.get_positions_async()
+            exchange_orders = await self.bot.get_open_orders_async()
+        except Exception as e:
+            logger.error(f"Reconciliation failed: unable to fetch exchange state: {e}")
+            return
+
+        stored_positions = self.db.get_positions(self.session_id)
+        stored_orders = self.db.get_open_orders(self.session_id)
+
+        # If no stored positions yet, treat exchange as source of truth and seed DB without warnings.
+        if not stored_positions:
+            logger.info("No stored position snapshot for today; seeding from exchange.")
+            self.db.replace_positions(self.session_id, exchange_positions)
+            self.db.replace_open_orders(self.session_id, exchange_orders)
+            if exchange_positions:
+                logger.info(f"Seeded positions: {len(exchange_positions)} symbols")
+            if exchange_orders:
+                logger.info(f"Seeded open orders: {len(exchange_orders)}")
+            return
+
+        # Compare positions by symbol and quantity
+        def to_map(items):
+            return {i['symbol']: i for i in items if i.get('symbol')}
+
+        exchange_pos_map = to_map(exchange_positions)
+        stored_pos_map = to_map(stored_positions)
+
+        mismatches = []
+        if stored_positions:
+            for sym, pos in exchange_pos_map.items():
+                qty = pos.get('quantity', 0)
+                stored_qty = stored_pos_map.get(sym, {}).get('quantity', 0)
+                if abs(qty - stored_qty) > 1e-8:
+                    mismatches.append((sym, stored_qty, qty))
+            for sym, pos in stored_pos_map.items():
+                if sym not in exchange_pos_map:
+                    mismatches.append((sym, pos.get('quantity', 0), 0))
+
+        if mismatches:
+            for sym, local_qty, exch_qty in mismatches:
+                logger.warning(f"Position mismatch for {sym}: DB={local_qty} Exchange={exch_qty}")
+        elif stored_positions:
+            logger.info("Positions match exchange snapshot.")
+        else:
+            logger.info("No prior position snapshot; seeding from exchange.")
+
+        # Persist latest snapshots
+        self.db.replace_positions(self.session_id, exchange_positions)
+        self.db.replace_open_orders(self.session_id, exchange_orders)
+
+        if exchange_orders:
+            logger.info(f"Open orders on exchange: {len(exchange_orders)}")
+        else:
+            logger.info("No open orders on exchange.")
 
     async def get_llm_decision(self, market_data, current_pnl):
         """Asks Gemini for a trading decision."""

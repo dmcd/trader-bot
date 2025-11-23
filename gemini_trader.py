@@ -242,3 +242,50 @@ class GeminiTrader(BaseTrader):
         except Exception as e:
             logger.error(f"Error calculating Gemini PnL: {e}")
             return 0.0
+
+    async def get_positions_async(self):
+        """Return spot balances as positions."""
+        if not self.connected:
+            return []
+
+        try:
+            balance = await self.exchange.fetch_balance()
+            positions = []
+            for currency, total in balance.get('total', {}).items():
+                if total and total != 0:
+                    # Represent USD as USD/USD for consistency
+                    symbol = f"{currency}/USD" if currency != 'USD' else 'USD'
+                    positions.append({
+                        'symbol': symbol,
+                        'quantity': total,
+                        'avg_price': None,
+                        'timestamp': balance.get('timestamp')
+                    })
+            return positions
+        except Exception as e:
+            logger.error(f"Error fetching Gemini positions: {e}")
+            return []
+
+    async def get_open_orders_async(self):
+        """Return open orders snapshot."""
+        if not self.connected:
+            return []
+
+        try:
+            orders = await self.exchange.fetch_open_orders()
+            snapshot = []
+            for o in orders:
+                snapshot.append({
+                    'order_id': o.get('id'),
+                    'symbol': o.get('symbol'),
+                    'side': o.get('side'),
+                    'price': o.get('price'),
+                    'amount': o.get('amount'),
+                    'remaining': o.get('remaining'),
+                    'status': o.get('status'),
+                    'timestamp': o.get('timestamp')
+                })
+            return snapshot
+        except Exception as e:
+            logger.error(f"Error fetching Gemini open orders: {e}")
+            return []

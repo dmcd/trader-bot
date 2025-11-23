@@ -344,7 +344,12 @@ with col1:
         s1.metric("Trade Spacing", spacing_text, spacing_delta)
         s2.metric("Exposure", f"${exposure:,.2f}")
         s3.metric("Positions", len(active_positions))
-        s4.metric("Loop Interval", f"{st.session_state.refresh_rate}s refresh")
+        try:
+            from config import LOOP_INTERVAL_SECONDS
+            loop_interval_display = f"{LOOP_INTERVAL_SECONDS}s loop"
+        except Exception:
+            loop_interval_display = f"{st.session_state.refresh_rate}s refresh"
+        s4.metric("Loop Interval", loop_interval_display)
         
         # Active Positions Table - Always show heading and table
         st.subheader("📈 Active Positions")

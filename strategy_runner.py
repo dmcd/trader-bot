@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import os
+import signal
+import sys
 import google.generativeai as genai
 from ib_trader import IBTrader
 from gemini_trader import GeminiTrader
@@ -333,7 +335,30 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
 
 async def main():
     runner = StrategyRunner()
-    await runner.run_loop()
+    
+    # Setup signal handlers for graceful shutdown
+    loop = asyncio.get_event_loop()
+    
+    def signal_handler(sig, frame):
+        """Handle Ctrl+C gracefully"""
+        logger.info("Received shutdown signal, stopping bot...")
+        bot_actions_logger.info("🛑 Bot shutting down...")
+        runner.running = False
+    
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    try:
+        await runner.run_loop()
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received")
+    finally:
+        logger.info("Bot stopped")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nBot stopped by user")
+        sys.exit(0)

@@ -22,6 +22,10 @@ MAX_TOTAL_EXPOSURE = float(os.getenv('MAX_TOTAL_EXPOSURE', '1000.0')) # Total po
 LOOP_INTERVAL_SECONDS = int(os.getenv('LOOP_INTERVAL_SECONDS', '300'))  # main loop sleep (default 5 min)
 MIN_TRADE_INTERVAL_SECONDS = int(os.getenv('MIN_TRADE_INTERVAL_SECONDS', '300'))  # min spacing between trades
 FEE_RATIO_COOLDOWN = float(os.getenv('FEE_RATIO_COOLDOWN', '50.0'))  # if fees > X% of gross PnL, pause trading
+PRIORITY_MOVE_PCT = float(os.getenv('PRIORITY_MOVE_PCT', '1.5'))  # % move over short window to break cooldown
+PRIORITY_LOOKBACK_MIN = int(os.getenv('PRIORITY_LOOKBACK_MIN', '5'))  # minutes to measure move
+BREAK_GLASS_COOLDOWN_MIN = int(os.getenv('BREAK_GLASS_COOLDOWN_MIN', '60'))  # min between break-glass uses
+BREAK_GLASS_SIZE_FACTOR = float(os.getenv('BREAK_GLASS_SIZE_FACTOR', '0.6'))  # reduce size on break-glass trades
 
 # Sizing tiers (override via env if needed)
 SIZE_TIER = os.getenv('SIZE_TIER', 'MODERATE').upper()  # CONSERVATIVE, MODERATE, AGGRESSIVE

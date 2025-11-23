@@ -24,6 +24,10 @@ from config import (
     SIZE_TIER,
     ORDER_SIZE_BY_TIER,
     DAILY_LOSS_PCT_BY_TIER,
+    PRIORITY_MOVE_PCT,
+    PRIORITY_LOOKBACK_MIN,
+    BREAK_GLASS_COOLDOWN_MIN,
+    BREAK_GLASS_SIZE_FACTOR,
 )
 
 
@@ -71,6 +75,7 @@ class StrategyRunner:
         self.size_tier = SIZE_TIER if SIZE_TIER in ORDER_SIZE_BY_TIER else 'MODERATE'
         self._last_reconnect = 0.0
         self._kill_switch = False
+        self._last_break_glass = 0.0
         self.size_tier = SIZE_TIER if SIZE_TIER in ORDER_SIZE_BY_TIER else 'MODERATE'
 
     async def initialize(self):
@@ -317,6 +322,24 @@ class StrategyRunner:
                 return True
         except Exception as e:
             logger.warning(f"Chop filter error: {e}")
+        return False
+    def _priority_signal(self, symbol: str) -> bool:
+        """
+        Detect breakout move to allow a break-glass trade inside cooldown.
+        """
+        try:
+            lookback_points = PRIORITY_LOOKBACK_MIN * 60 // LOOP_INTERVAL_SECONDS + 2
+            recent = self.db.get_recent_market_data(self.session_id, symbol, limit=max(lookback_points, 10))
+            if not recent or len(recent) < 2:
+                return False
+            latest = recent[0]['price']
+            past = recent[min(len(recent)-1, lookback_points-1)]['price']
+            if past and latest:
+                move_pct = abs((latest - past) / past) * 100
+                if move_pct >= PRIORITY_MOVE_PCT:
+                    return True
+        except Exception as e:
+            logger.warning(f"Priority signal error: {e}")
         return False
 
     def _fees_too_high(self):
@@ -735,9 +758,19 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
 
-                    # 4. Get Decision
+                    # 4. Decide whether to call LLM (respect spacing unless priority signal)
+                    now_ts = asyncio.get_event_loop().time()
+                    can_trade = not self.last_trade_ts or (now_ts - self.last_trade_ts) >= MIN_TRADE_INTERVAL_SECONDS
+                    priority = self._priority_signal(symbol)
+                    allow_break_glass = priority and (now_ts - self._last_break_glass) >= (BREAK_GLASS_COOLDOWN_MIN * 60)
+
+                    if not can_trade and not allow_break_glass:
+                        bot_actions_logger.info("⏸ Skipping LLM: trade spacing active and no priority signal")
+                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        continue
+
                     decision_json = await self.get_llm_decision(market_data, current_pnl)
-                    
+
                     # 5. Execute
                     if decision_json:
                         # Parse for logging
@@ -769,11 +802,15 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             # Enforce minimum spacing between trades to cut churn/fees
                             now_ts = asyncio.get_event_loop().time()
                             if self.last_trade_ts and (now_ts - self.last_trade_ts) < MIN_TRADE_INTERVAL_SECONDS:
-                                wait_remaining = MIN_TRADE_INTERVAL_SECONDS - (now_ts - self.last_trade_ts)
-                                msg = f"Skipped trade: spacing guard ({wait_remaining:.0f}s remaining)"
-                                bot_actions_logger.info(f"⏸ {msg}")
-                                logger.info(msg)
-                                continue
+                                # Allow break-glass if priority was set and cooldown allows
+                                if priority and allow_break_glass:
+                                    logger.info("Break-glass trade allowed despite spacing guard")
+                                else:
+                                    wait_remaining = MIN_TRADE_INTERVAL_SECONDS - (now_ts - self.last_trade_ts)
+                                    msg = f"Skipped trade: spacing guard ({wait_remaining:.0f}s remaining)"
+                                    bot_actions_logger.info(f"⏸ {msg}")
+                                    logger.info(msg)
+                                    continue
 
                             # If price missing, skip for safety
                             if not price:
@@ -808,9 +845,11 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             
                             risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
 
-                            # Auto-reduce if order value is too high or exceed tier cap
+                            # Auto-reduce if order value is too high or exceed tier cap (reduce further on break-glass)
                             tier_cap = ORDER_SIZE_BY_TIER.get(self.size_tier, MAX_ORDER_VALUE)
                             max_value = min(MAX_ORDER_VALUE, tier_cap)
+                            if not can_trade and allow_break_glass:
+                                max_value *= BREAK_GLASS_SIZE_FACTOR
                             if (quantity * price) > max_value:
                                 old_qty = quantity
                                 target_value = max_value * 0.99

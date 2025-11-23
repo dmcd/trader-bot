@@ -11,6 +11,10 @@ from config import (
 logger = logging.getLogger(__name__)
 
 class GeminiTrader(BaseTrader):
+    # Sandbox starting balances
+    SANDBOX_STARTING_USD = 100000.0
+    SANDBOX_STARTING_BTC = 1000.0
+    
     def __init__(self):
         if TRADING_MODE == 'PAPER':
             self.api_key = GEMINI_SANDBOX_API_KEY
@@ -229,12 +233,10 @@ class GeminiTrader(BaseTrader):
                 total_usd += balance['total']['BTC'] * btc_price
 
             # In PAPER mode (sandbox), subtract starting balances to show only trading PnL
-            # Sandbox starts with: $100,000 USD + 1000 BTC
             # In LIVE mode, show actual total value
             if self.sandbox and btc_price > 0:
-                starting_usd = 100000.0
-                starting_btc_value = 1000 * btc_price
-                starting_total = starting_usd + starting_btc_value
+                starting_btc_value = self.SANDBOX_STARTING_BTC * btc_price
+                starting_total = self.SANDBOX_STARTING_USD + starting_btc_value
                 trading_pnl = total_usd - starting_total
                 return trading_pnl
             else:
@@ -242,6 +244,18 @@ class GeminiTrader(BaseTrader):
         except Exception as e:
             logger.error(f"Error calculating Gemini PnL: {e}")
             return 0.0
+
+    async def get_adjusted_btc_balance(self, btc_balance: float) -> float:
+        """
+        Returns the BTC balance adjusted for sandbox starting balance.
+        In sandbox mode, subtracts the initial 1000 BTC to show only trading BTC.
+        In live mode, returns the actual balance.
+        """
+        if self.sandbox:
+            # Return max(0, balance - starting) to handle edge case where balance < starting
+            return max(0.0, btc_balance - self.SANDBOX_STARTING_BTC)
+        else:
+            return btc_balance
 
     async def get_positions_async(self):
         """Return spot balances as positions."""

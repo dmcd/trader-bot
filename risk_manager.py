@@ -1,5 +1,5 @@
 import logging
-from config import MAX_DAILY_LOSS, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_POSITIONS, MAX_TOTAL_EXPOSURE
+from config import MAX_DAILY_LOSS, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_POSITIONS, MAX_TOTAL_EXPOSURE, TRADING_MODE
 
 logger = logging.getLogger(__name__)
 
@@ -11,11 +11,15 @@ class RiskCheckResult:
     reason: str = ""
 
 class RiskManager:
+    # Sandbox starting balances (must match GeminiTrader constants)
+    SANDBOX_STARTING_BTC = 1000.0
+    
     def __init__(self, bot=None):
         self.bot = bot # Optional, mostly for position checks if needed
         self.daily_loss = 0.0
         self.start_of_day_equity = None
         self.positions = {} # Symbol -> Quantity
+        self.is_sandbox = (TRADING_MODE == 'PAPER')
 
     def seed_start_of_day(self, start_equity: float):
         """Persist start-of-day equity so restarts keep loss limits consistent."""
@@ -73,6 +77,11 @@ class RiskManager:
             for sym, data in self.positions.items():
                 qty = data.get('quantity', 0)
                 curr_price = data.get('current_price', 0)
+                
+                # Adjust BTC quantity to exclude sandbox starting balance
+                if self.is_sandbox and sym in ['BTC/USD', 'BTC']:
+                    qty = max(0.0, qty - self.SANDBOX_STARTING_BTC)
+                
                 # If we don't have current price, use the trade price if it's the same symbol, else skip (risky but practical)
                 if sym == symbol:
                     curr_price = price

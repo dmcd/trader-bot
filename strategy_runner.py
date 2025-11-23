@@ -26,6 +26,7 @@ from config import (
     ORDER_SIZE_BY_TIER,
     DAILY_LOSS_PCT_BY_TIER,
     MAX_TOTAL_EXPOSURE,
+    ORDER_VALUE_BUFFER,
     PRIORITY_MOVE_PCT,
     PRIORITY_LOOKBACK_MIN,
     BREAK_GLASS_COOLDOWN_MIN,
@@ -82,6 +83,18 @@ class StrategyRunner:
         # Trade syncing state
         self.order_reasons = {}  # order_id -> reason
         self.processed_trade_ids = set()
+
+    def _apply_order_value_buffer(self, quantity: float, price: float):
+        """Trim quantity so the notional sits under the order cap minus buffer."""
+        adjusted_qty, overage = self.risk_manager.apply_order_value_buffer(quantity, price)
+        if adjusted_qty < quantity:
+            original_value = quantity * price
+            adjusted_value = adjusted_qty * price
+            bot_actions_logger.info(
+                f"✂️ Trimmed order from ${original_value:.2f} to ${adjusted_value:.2f} "
+                f"to stay under ${MAX_ORDER_VALUE - ORDER_VALUE_BUFFER:.2f} cap"
+            )
+        return adjusted_qty
 
     async def initialize(self):
         """Connects and initializes the bot."""
@@ -592,6 +605,13 @@ class StrategyRunner:
                             
                             if not price:
                                 logger.warning("Skipped trade: missing price data")
+                                continue
+
+                            # Guardrails: clip size to sit under the max order cap minus buffer
+                            quantity = self._apply_order_value_buffer(quantity, price)
+
+                            if quantity <= 0:
+                                logger.warning("Skipped trade: buffered quantity became non-positive")
                                 continue
 
                             risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)

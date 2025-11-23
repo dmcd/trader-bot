@@ -45,6 +45,7 @@ GEMINI_SANDBOX_SECRET=your_sandbox_secret
 MAX_DAILY_LOSS=500.0
 MAX_DAILY_LOSS_PERCENT=3.0
 MAX_ORDER_VALUE=500.0
+ORDER_VALUE_BUFFER=1.0        # trim sizes to stay just under the cap (helps avoid rejections)
 MAX_TOTAL_EXPOSURE=1000.0
 SIZE_TIER=MODERATE            # CONSERVATIVE | MODERATE | AGGRESSIVE
 

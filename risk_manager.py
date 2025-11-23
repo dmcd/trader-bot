@@ -1,5 +1,14 @@
 import logging
-from config import MAX_DAILY_LOSS, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_POSITIONS, MAX_TOTAL_EXPOSURE, TRADING_MODE, MIN_TRADE_SIZE
+from config import (
+    MAX_DAILY_LOSS,
+    MAX_DAILY_LOSS_PERCENT,
+    MAX_ORDER_VALUE,
+    MAX_POSITIONS,
+    MAX_TOTAL_EXPOSURE,
+    ORDER_VALUE_BUFFER,
+    TRADING_MODE,
+    MIN_TRADE_SIZE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +51,21 @@ class RiskManager:
         positions: dict of {symbol: {'quantity': float, 'current_price': float}}
         """
         self.positions = positions
+
+    def apply_order_value_buffer(self, quantity: float, price: float):
+        """Trim quantity so notional stays under the order cap minus buffer."""
+        if price <= 0 or quantity <= 0:
+            return quantity, 0.0
+
+        order_value = quantity * price
+        if order_value <= MAX_ORDER_VALUE:
+            return quantity, 0.0
+
+        capped_value = max(0.0, MAX_ORDER_VALUE - ORDER_VALUE_BUFFER)
+        capped_qty = capped_value / price if price else 0.0
+        capped_qty = max(0.0, capped_qty)
+        overage = order_value - MAX_ORDER_VALUE
+        return capped_qty, overage
 
     def check_trade_allowed(self, symbol, action, quantity, price) -> RiskCheckResult:
         """Checks if a trade is allowed based on risk limits."""

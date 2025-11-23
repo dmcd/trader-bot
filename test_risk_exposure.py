@@ -12,12 +12,14 @@ class TestRiskManager(unittest.TestCase):
         self.orig_daily_loss_pct = rm_module.MAX_DAILY_LOSS_PERCENT
         self.orig_daily_loss_abs = rm_module.MAX_DAILY_LOSS
         self.orig_min_trade_size = rm_module.MIN_TRADE_SIZE
+        self.orig_order_value_buffer = rm_module.ORDER_VALUE_BUFFER
 
         rm_module.MAX_ORDER_VALUE = 500.0
         rm_module.MAX_TOTAL_EXPOSURE = 1000.0
         rm_module.MAX_DAILY_LOSS_PERCENT = 5.0
         rm_module.MAX_DAILY_LOSS = 50.0
         rm_module.MIN_TRADE_SIZE = 1.0
+        rm_module.ORDER_VALUE_BUFFER = 1.0
 
         self.rm = RiskManager()
         # Seed start of day equity so percent checks work
@@ -29,6 +31,7 @@ class TestRiskManager(unittest.TestCase):
         rm_module.MAX_DAILY_LOSS_PERCENT = self.orig_daily_loss_pct
         rm_module.MAX_DAILY_LOSS = self.orig_daily_loss_abs
         rm_module.MIN_TRADE_SIZE = self.orig_min_trade_size
+        rm_module.ORDER_VALUE_BUFFER = self.orig_order_value_buffer
 
     def test_invalid_price_or_quantity_rejected(self):
         result = self.rm.check_trade_allowed("BHP", "BUY", 0, 100.0)
@@ -76,6 +79,25 @@ class TestRiskManager(unittest.TestCase):
         self.rm.update_positions({"ABC": {"quantity": 9.0, "current_price": near_cap_price}})
         result = self.rm.check_trade_allowed("XYZ", "BUY", 1, price=1.0)
         self.assertTrue(result.allowed)
+
+    def test_apply_order_value_buffer_trims_small_overage(self):
+        # Order slightly above cap should be trimmed under the cap minus buffer
+        price = 100.0
+        qty = (rm_module.MAX_ORDER_VALUE / price) + 0.02  # ~$2 over cap
+
+        adjusted_qty, overage = self.rm.apply_order_value_buffer(qty, price)
+
+        self.assertGreater(overage, 0)
+        self.assertLess(adjusted_qty, qty)
+
+        adjusted_value = adjusted_qty * price
+        expected_cap = rm_module.MAX_ORDER_VALUE - rm_module.ORDER_VALUE_BUFFER
+        self.assertLessEqual(adjusted_value, expected_cap)
+
+        # Orders already under the cap are unchanged
+        kept_qty, kept_overage = self.rm.apply_order_value_buffer(1.0, 10.0)
+        self.assertEqual(kept_qty, 1.0)
+        self.assertEqual(kept_overage, 0.0)
 
     def test_get_total_exposure_respects_overrides_and_sandbox(self):
         self.rm.is_sandbox = True

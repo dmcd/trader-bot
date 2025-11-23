@@ -121,7 +121,14 @@ class GeminiTrader(BaseTrader):
             else:
                 limit_price = ticker['bid']
             
-            logger.info(f"Placing limit order at ${limit_price}")
+            # Round to appropriate precision to avoid ccxt errors
+            # Gemini typically requires:
+            # - Price: 2 decimal places for USD pairs
+            # - Quantity: 8 decimal places for BTC
+            limit_price = round(limit_price, 2)
+            quantity = round(quantity, 8)
+            
+            logger.info(f"Placing limit order: {quantity} at ${limit_price}")
             
             # Create limit order
             order = await self.exchange.create_limit_order(symbol, side, quantity, limit_price)
@@ -160,11 +167,14 @@ class GeminiTrader(BaseTrader):
                 btc_price = ticker['last']
                 total_usd += balance['total']['BTC'] * btc_price
             
-            # In PAPER mode (sandbox), subtract starting balance (1000 BTC) to show only trading PnL
+            # In PAPER mode (sandbox), subtract starting balances to show only trading PnL
+            # Sandbox starts with: $100,000 USD + 1000 BTC
             # In LIVE mode, show actual total value
             if self.sandbox and btc_price > 0:
+                starting_usd = 100000.0
                 starting_btc_value = 1000 * btc_price
-                trading_pnl = total_usd - starting_btc_value
+                starting_total = starting_usd + starting_btc_value
+                trading_pnl = total_usd - starting_total
                 return trading_pnl
             else:
                 return total_usd

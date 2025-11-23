@@ -17,8 +17,18 @@ st.title("🤖 AI Trader Bot Dashboard")
 if 'refresh_rate' not in st.session_state:
     st.session_state.refresh_rate = 5
 
+if 'currency' not in st.session_state:
+    st.session_state.currency = 'USD'
+
 refresh_rate = st.sidebar.slider("Refresh Rate (seconds)", 1, 60, st.session_state.refresh_rate)
 st.session_state.refresh_rate = refresh_rate
+
+# Currency toggle
+currency = st.sidebar.radio("Display Currency", ['USD', 'AUD'], index=0 if st.session_state.currency == 'USD' else 1)
+st.session_state.currency = currency
+
+# Exchange rate (approximate)
+usd_to_aud = 1.53  # Update this periodically or fetch from API
 
 # --- Data Loading ---
 def load_history():
@@ -52,11 +62,19 @@ with col1:
         
         # Metrics
         latest = df.iloc[0]
-        current_pnl = latest.get('pnl', 0)
+        current_pnl_usd = latest.get('pnl', 0)
+        
+        # Convert to selected currency
+        if currency == 'AUD':
+            current_pnl = current_pnl_usd * usd_to_aud
+            currency_symbol = 'AUD'
+        else:
+            current_pnl = current_pnl_usd
+            currency_symbol = 'USD'
         
         # Display Metrics
         m1, m2, m3 = st.columns(3)
-        m1.metric("Current PnL (AUD)", f"${current_pnl:,.2f}")
+        m1.metric(f"Trading PnL ({currency_symbol})", f"${current_pnl:,.2f}")
         m2.metric("Total Decisions", len(df))
         m3.metric("Last Action", latest.get('action', 'N/A'))
         
@@ -70,7 +88,7 @@ with col1:
         st.info("No trade history found yet. Start the bot!")
 
 with col2:
-    st.subheader("📜 System Logs")
+    st.subheader("📜    Logs")
     logs = load_logs()
     log_text = "".join(logs)
     st.text_area("Log Output", log_text, height=600, disabled=True)

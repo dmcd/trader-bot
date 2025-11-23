@@ -24,6 +24,7 @@ from config import (
     SIZE_TIER,
     ORDER_SIZE_BY_TIER,
     DAILY_LOSS_PCT_BY_TIER,
+    MAX_TOTAL_EXPOSURE,
     PRIORITY_MOVE_PCT,
     PRIORITY_LOOKBACK_MIN,
     BREAK_GLASS_COOLDOWN_MIN,
@@ -778,6 +779,7 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
 
                     # Build prompt context: cooldown status, priority, fee ratio, last trade age
                     last_trade_age = (now_ts - self.last_trade_ts) if self.last_trade_ts else None
+                    last_trade_age_str = f"{last_trade_age:.0f}s" if last_trade_age is not None else "n/a"
                     fee_ratio_flag = "high" if self._fees_too_high() else "normal"
                     priority_flag = "true" if priority and allow_break_glass else "false"
                     spacing_flag = "clear" if can_trade else f"cooldown {MIN_TRADE_INTERVAL_SECONDS - (now_ts - self.last_trade_ts):.0f}s"
@@ -785,7 +787,7 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                         f"- Cooldown: {spacing_flag}\n"
                         f"- Priority signal allowed: {priority_flag}\n"
                         f"- Fee regime: {fee_ratio_flag}\n"
-                        f"- Last trade age: {last_trade_age:.0f}s\n"
+                        f"- Last trade age: {last_trade_age_str}\n"
                         f"- Order cap: ${min(MAX_ORDER_VALUE, ORDER_SIZE_BY_TIER.get(self.size_tier, MAX_ORDER_VALUE)):.2f}\n"
                         f"- Exposure cap: ${MAX_TOTAL_EXPOSURE:.2f}"
                     )

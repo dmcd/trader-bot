@@ -76,13 +76,13 @@ db = TradingDatabase()
 
 # Show Start or Stop button based on bot status
 if bot_running:
-    if st.sidebar.button("⏹️ Stop Bot", type="secondary", use_container_width=True):
+    if st.sidebar.button("⏹️ Stop Bot", type="secondary", width="stretch"):
         db.create_command("STOP_BOT")
         st.sidebar.warning("Command sent: Stop Bot")
         time.sleep(1)  # Give it a moment to process
         st.rerun()
 else:
-    if st.sidebar.button("▶️ Start Bot", type="primary", use_container_width=True):
+    if st.sidebar.button("▶️ Start Bot", type="primary", width="stretch"):
         if start_bot():
             st.sidebar.success("Bot started successfully!")
             time.sleep(1)  # Give it a moment to start
@@ -90,7 +90,7 @@ else:
 
 # Close All Positions button (always available)
 st.sidebar.markdown("---")
-if st.sidebar.button("🛑 Close All Positions", type="secondary", use_container_width=True):
+if st.sidebar.button("🛑 Close All Positions", type="secondary", width="stretch"):
     if bot_running:
         db.create_command("CLOSE_ALL_POSITIONS")
         st.sidebar.success("Command sent: Close All Positions")
@@ -370,7 +370,7 @@ with col1:
                 "Value": st.column_config.NumberColumn("Value", format="$%.2f"),
             },
             hide_index=True,
-            use_container_width=True
+            width="stretch"
         )
 
     elif session_stats:
@@ -389,7 +389,7 @@ with col1:
         # Dataframe - Rename 'pnl' to 'Trade PnL' for clarity
         st.dataframe(
             df[['timestamp', 'symbol', 'action', 'price', 'quantity', 'pnl', 'fee', 'liquidity', 'reason']],
-            width=None, # Use full width
+            width="stretch",
             hide_index=True,
             column_config={
                 "timestamp": st.column_config.DatetimeColumn("Time", format="HH:mm:ss"),
@@ -401,8 +401,7 @@ with col1:
                 "fee": st.column_config.NumberColumn("Fee", format="$%.4f"),
                 "liquidity": "Liq",
                 "reason": st.column_config.TextColumn("Reason", width="large"),
-            },
-            use_container_width=True
+            }
         )
     else:
         st.info("No trade history found yet. Start the bot!")

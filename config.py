@@ -17,6 +17,7 @@ MAX_DAILY_LOSS_PERCENT = float(os.getenv('MAX_DAILY_LOSS_PERCENT', '3.0')) # per
 MAX_ORDER_VALUE = float(os.getenv('MAX_ORDER_VALUE', '500.0')) # currency depends on venue
 MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '3'))
 MAX_TOTAL_EXPOSURE = float(os.getenv('MAX_TOTAL_EXPOSURE', '1000.0')) # Total portfolio exposure limit
+MIN_TRADE_SIZE = float(os.getenv('MIN_TRADE_SIZE', '200.0')) # Minimum trade size in currency
 
 # Cadence & spacing
 LOOP_INTERVAL_SECONDS = int(os.getenv('LOOP_INTERVAL_SECONDS', '300'))  # main loop sleep (default 5 min)

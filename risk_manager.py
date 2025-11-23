@@ -1,5 +1,5 @@
 import logging
-from config import MAX_DAILY_LOSS, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_POSITIONS, MAX_TOTAL_EXPOSURE, TRADING_MODE
+from config import MAX_DAILY_LOSS, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_POSITIONS, MAX_TOTAL_EXPOSURE, TRADING_MODE, MIN_TRADE_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,12 @@ class RiskManager:
         order_value = quantity * price
         if order_value > MAX_ORDER_VALUE:
             msg = f"Order value ${order_value:.2f} exceeds limit of ${MAX_ORDER_VALUE:.2f}"
+            logger.warning(f"Risk Reject: {msg}")
+            return RiskCheckResult(False, msg)
+
+        # 1.5 Check Min Trade Size
+        if order_value < MIN_TRADE_SIZE:
+            msg = f"Order value ${order_value:.2f} is below minimum of ${MIN_TRADE_SIZE:.2f}"
             logger.warning(f"Risk Reject: {msg}")
             return RiskCheckResult(False, msg)
 

@@ -18,7 +18,8 @@ from config import (
     BREAK_GLASS_COOLDOWN_MIN,
     LOOP_INTERVAL_SECONDS,
     ACTIVE_EXCHANGE,
-    TRADING_MODE
+    TRADING_MODE,
+    MIN_TRADE_SIZE
 )
 
 logger = logging.getLogger(__name__)
@@ -170,7 +171,8 @@ class LLMStrategy(BaseStrategy):
             f"- Fee regime: {fee_ratio_flag}\n"
             f"- Last trade age: {last_trade_age_str}\n"
             f"- Order cap: ${min(MAX_ORDER_VALUE, ORDER_SIZE_BY_TIER.get(self.size_tier, MAX_ORDER_VALUE)):.2f}\n"
-            f"- Exposure cap: ${MAX_TOTAL_EXPOSURE:.2f}"
+            f"- Exposure cap: ${MAX_TOTAL_EXPOSURE:.2f}\n"
+            f"- Min trade size: ${MIN_TRADE_SIZE:.2f}"
         )
 
         decision_json = await self._get_llm_decision(session_id, market_data, current_pnl, prompt_context, context)
@@ -246,6 +248,7 @@ Current Status:
 
 Risk Constraints:
 - Max Order Value: ${MAX_ORDER_VALUE:.2f} USD
+- Min Trade Size: ${MIN_TRADE_SIZE:.2f} USD
 - Max Daily Loss: {MAX_DAILY_LOSS_PERCENT}% of portfolio
 
 Available Symbols: {', '.join(available_symbols)}
@@ -263,6 +266,7 @@ Current Status:
 
 Risk Constraints:
 - Max Order Value: ${MAX_ORDER_VALUE:.2f} AUD
+- Min Trade Size: ${MIN_TRADE_SIZE:.2f} AUD
 - Max Daily Loss: ${MAX_DAILY_LOSS:.2f} AUD
 
 Available Symbols: {', '.join(available_symbols)}
@@ -292,6 +296,7 @@ Return ONLY a JSON object with the following format:
             prompt += "- If cooldown is active and priority signal is NOT allowed, you MUST return HOLD.\n"
             prompt += "- If priority signal allowed = true, you may trade despite cooldown but size must be reduced and within caps.\n"
             prompt += "- Always obey order cap and exposure cap; quantities must fit caps.\n"
+            prompt += f"- Ensure trade value is at least ${MIN_TRADE_SIZE:.2f}.\n"
             prompt += "- If fee regime is high, avoid churn: prefer HOLD or maker-first trades.\n"
             prompt += "- Always use symbols from the Available Symbols list.\n"
 

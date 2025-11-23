@@ -9,6 +9,10 @@ An autonomous trading loop that talks to Interactive Brokers or Gemini via async
 - **State & context** – `database.py` (SQLite), `trading_context.py` for LLM context, `technical_analysis.py` for RSI/MACD/Bollinger/SMA.
 - **Interfaces** – `dashboard.py` (Streamlit control/monitor), `server.py` (FastMCP tools for IB), `run.sh` helper to start loop + dashboard, logs in `bot.log` (human) and `console.log` (debug).
 
+## Documentation
+-   [**Strategy Architecture**](docs/strategy.md): How the `LLMStrategy` works and how to build your own.
+-   [**Backtesting Guide**](docs/backtesting.md): How to replay historical sessions to test your strategies.
+
 ## Requirements
 - Python 3.10+
 - For IB: IB Gateway/TWS running (default paper port 4002; live 7497) and an IB account.

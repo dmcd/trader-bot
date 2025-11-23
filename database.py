@@ -272,15 +272,24 @@ class TradingDatabase:
         """, (session_id,))
         return [dict(row) for row in cursor.fetchall()]
     
-    def get_recent_market_data(self, session_id: int, symbol: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_recent_market_data(self, session_id: int, symbol: str, limit: int = 100, before_timestamp: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get recent market data for technical analysis."""
         cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT * FROM market_data 
-            WHERE session_id = ? AND symbol = ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-        """, (session_id, symbol, limit))
+        
+        if before_timestamp:
+            cursor.execute("""
+                SELECT * FROM market_data 
+                WHERE session_id = ? AND symbol = ? AND timestamp <= ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (session_id, symbol, before_timestamp, limit))
+        else:
+            cursor.execute("""
+                SELECT * FROM market_data 
+                WHERE session_id = ? AND symbol = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (session_id, symbol, limit))
         
         return [dict(row) for row in cursor.fetchall()]
 

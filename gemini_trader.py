@@ -24,6 +24,57 @@ class GeminiTrader(BaseTrader):
         self.exchange = None
         self.connected = False
 
+    async def _populate_precisions(self):
+        """
+        Gemini's sandbox API omits precision data, which breaks ccxt's
+        price/amount helpers. Pull precision from the production API as a
+        fallback so we can still format orders correctly in PAPER mode.
+        """
+        if not self.exchange or not getattr(self.exchange, "markets", None):
+            return
+
+        missing = []
+        for symbol, market in self.exchange.markets.items():
+            precision = market.get('precision', {})
+            if precision.get('price') is None or precision.get('amount') is None:
+                missing.append(symbol)
+
+        if not missing:
+            return
+
+        logger.warning(f"Gemini sandbox missing precision for: {', '.join(missing)}. Loading production precision metadata.")
+
+        fallback_exchange = ccxt.gemini({'enableRateLimit': True})
+        try:
+            await fallback_exchange.load_markets()
+            for symbol in missing:
+                live_market = fallback_exchange.markets.get(symbol, {})
+                live_precision = live_market.get('precision', {})
+                # Use live precision when available, otherwise sensible defaults
+                price_precision = live_precision.get('price', 0.01)
+                amount_precision = live_precision.get('amount', 1e-8)
+
+                market = self.exchange.markets[symbol]
+                market_precision = market.setdefault('precision', {})
+                market_precision['price'] = price_precision
+                market_precision['amount'] = amount_precision
+
+                # Carry over limits if sandbox omitted them
+                if not market.get('limits') and live_market.get('limits'):
+                    market['limits'] = live_market['limits']
+        except Exception as e:
+            logger.warning(f"Failed to load production precision data: {e}. Using default Gemini tick sizes.")
+            for symbol in missing:
+                market = self.exchange.markets[symbol]
+                market_precision = market.setdefault('precision', {})
+                market_precision['price'] = market_precision.get('price', 0.01)
+                market_precision['amount'] = market_precision.get('amount', 1e-8)
+        finally:
+            try:
+                await fallback_exchange.close()
+            except Exception:
+                pass
+
     async def connect_async(self):
         """Connects to Gemini Exchange."""
         if self.connected:
@@ -50,6 +101,7 @@ class GeminiTrader(BaseTrader):
             # Test connection by loading markets
             logger.info("Loading markets...")
             await self.exchange.load_markets()
+            await self._populate_precisions()
             self.connected = True
             logger.info("Connected to Gemini Exchange successfully!")
         except Exception as e:
@@ -112,14 +164,25 @@ class GeminiTrader(BaseTrader):
 
             # Get current market price to set limit price
             ticker = await self.exchange.fetch_ticker(symbol)
+            market = self.exchange.market(symbol)
+
+            # Ensure precision exists (sandbox omits it)
+            market_precision = market.setdefault('precision', {})
+            if market_precision.get('price') is None:
+                market_precision['price'] = 0.01
+            if market_precision.get('amount') is None:
+                market_precision['amount'] = 1e-8
 
             # For immediate execution (like market order):
             # - BUY: use ask price (willing to pay the current ask)
             # - SELL: use bid price (willing to accept the current bid)
             if side == 'buy':
-                limit_price = ticker['ask']
+                limit_price = ticker.get('ask') or ticker.get('last')
             else:
-                limit_price = ticker['bid']
+                limit_price = ticker.get('bid') or ticker.get('last')
+
+            if limit_price is None:
+                raise ValueError(f"Ticker for {symbol} missing price data: {ticker}")
 
             # Use ccxt's precision methods to ensure correct formatting
             # These methods use the exchange's market precision data

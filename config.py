@@ -25,5 +25,6 @@ GEMINI_SANDBOX_API_KEY = os.getenv('GEMINI_SANDBOX_API_KEY', '') # Sandbox Key
 GEMINI_SANDBOX_SECRET = os.getenv('GEMINI_SANDBOX_SECRET', '') # Sandbox Secret
 
 # Exchange Selection
-# Options: 'IB', 'GEMINI', 'ALL'
+# Options: 'IB' or 'GEMINI'
 ACTIVE_EXCHANGE = os.getenv('ACTIVE_EXCHANGE', 'IB').upper()
+

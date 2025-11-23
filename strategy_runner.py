@@ -26,11 +26,17 @@ else:
 
 class StrategyRunner:
     def __init__(self):
-        self.ib_bot = IBTrader()
-        self.gemini_bot = GeminiTrader()
-        # Risk manager needs to handle multiple bots or we wrap them?
-        # For now, let's pass the ib_bot as primary, but we might need to refactor RiskManager
-        self.risk_manager = RiskManager(self.ib_bot) 
+        # Only instantiate the bot for the active exchange
+        if ACTIVE_EXCHANGE == 'IB':
+            self.bot = IBTrader()
+            self.exchange_name = 'IB'
+        elif ACTIVE_EXCHANGE == 'GEMINI':
+            self.bot = GeminiTrader()
+            self.exchange_name = 'GEMINI'
+        else:
+            raise ValueError(f"Invalid ACTIVE_EXCHANGE: {ACTIVE_EXCHANGE}. Must be 'IB' or 'GEMINI'")
+        
+        self.risk_manager = RiskManager(self.bot)
         self.model = genai.GenerativeModel('gemini-2.5-flash')
         self.running = False
         self.history_file = "trade_history.jsonl"
@@ -49,32 +55,19 @@ class StrategyRunner:
             f.write(json.dumps(entry) + "\n")
 
     async def initialize(self):
-        """Connects and initializes the bots."""
-        logger.info(f"Initializing Strategy Runner in {TRADING_MODE} mode (Active: {ACTIVE_EXCHANGE})...")
-        bot_actions_logger.info(f"🤖 Trading Bot Started - Mode: {TRADING_MODE}, Exchange: {ACTIVE_EXCHANGE}")
+        """Connects and initializes the bot."""
+        logger.info(f"Initializing Strategy Runner in {TRADING_MODE} mode (Exchange: {self.exchange_name})...")
+        bot_actions_logger.info(f"🤖 Trading Bot Started - Mode: {TRADING_MODE}, Exchange: {self.exchange_name}")
         
-        # Connect based on config
-        if ACTIVE_EXCHANGE in ['IB', 'ALL']:
-            await self.ib_bot.connect_async()
+        # Connect to the active exchange
+        await self.bot.connect_async()
         
-        if ACTIVE_EXCHANGE in ['GEMINI', 'ALL']:
-            await self.gemini_bot.connect_async()
+        # Get initial PnL
+        initial_pnl = await self.bot.get_pnl_async()
+        logger.info(f"{self.exchange_name} PnL: {initial_pnl}")
         
-        # Initial PnL sync
-        total_pnl = 0.0
-        if ACTIVE_EXCHANGE in ['IB', 'ALL']:
-            ib_pnl = await self.ib_bot.get_pnl_async()
-            total_pnl += ib_pnl
-            logger.info(f"IB PnL: {ib_pnl}")
-
-        if ACTIVE_EXCHANGE in ['GEMINI', 'ALL']:
-            gemini_pnl = await self.gemini_bot.get_pnl_async()
-            total_pnl += gemini_pnl
-            logger.info(f"Gemini PnL: {gemini_pnl}")
-        
-        self.risk_manager.update_pnl(total_pnl)
-        logger.info(f"Total Initial PnL: {total_pnl}")
-        bot_actions_logger.info(f"💰 Starting Portfolio Value: ${total_pnl:,.2f}")
+        self.risk_manager.update_pnl(initial_pnl)
+        bot_actions_logger.info(f"💰 Starting Portfolio Value: ${initial_pnl:,.2f}")
 
     async def get_llm_decision(self, market_data, current_pnl):
         """Asks Gemini for a trading decision."""
@@ -95,7 +88,7 @@ class StrategyRunner:
                 market_summary += f"\n  - {symbol}: Price ${data.get('price', 'N/A')}, Bid ${data.get('bid', 'N/A')}, Ask ${data.get('ask', 'N/A')}"
         
         # Determine if we're trading crypto or stocks
-        is_crypto = ACTIVE_EXCHANGE in ['GEMINI', 'ALL'] and any('/' in symbol for symbol in available_symbols)
+        is_crypto = ACTIVE_EXCHANGE == 'GEMINI' and any('/' in symbol for symbol in available_symbols)
         
         if is_crypto:
             # Crypto trading prompt (supports fractional quantities)
@@ -209,19 +202,13 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
             bot_actions_logger.info(f"⚠️ Error during execution: {str(e)}")
 
     async def cleanup(self):
-        """Cleanup and close all connections."""
+        """Cleanup and close connection."""
         logger.info("Cleaning up connections...")
         try:
-            if ACTIVE_EXCHANGE in ['IB', 'ALL'] and self.ib_bot:
-                await self.ib_bot.close()
+            await self.bot.close()
+            logger.info(f"{self.exchange_name} connection closed")
         except Exception as e:
-            logger.error(f"Error closing IB connection: {e}")
-        
-        try:
-            if ACTIVE_EXCHANGE in ['GEMINI', 'ALL'] and self.gemini_bot:
-                await self.gemini_bot.close()
-        except Exception as e:
-            logger.error(f"Error closing Gemini connection: {e}")
+            logger.error(f"Error closing {self.exchange_name} connection: {e}")
         
         logger.info("Cleanup complete.")
 
@@ -234,13 +221,8 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
             while self.running:
                 try:
                     # 1. Update PnL
-                    total_pnl = 0.0
-                    if ACTIVE_EXCHANGE in ['IB', 'ALL']:
-                        total_pnl += await self.ib_bot.get_pnl_async()
-                    if ACTIVE_EXCHANGE in ['GEMINI', 'ALL']:
-                        total_pnl += await self.gemini_bot.get_pnl_async()
-                    
-                    self.risk_manager.update_pnl(total_pnl)
+                    current_pnl = await self.bot.get_pnl_async()
+                    self.risk_manager.update_pnl(current_pnl)
                     
                     # Check percentage-based daily loss
                     if self.risk_manager.start_of_day_equity and self.risk_manager.start_of_day_equity > 0:
@@ -250,19 +232,20 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded ({loss_percent:.2f}%)")
                             break
 
-                    # 2. Fetch Data
+                    # 2. Fetch Market Data
                     market_data = {}
                     
-                    if ACTIVE_EXCHANGE in ['IB', 'ALL']:
-                        ib_data = await self.ib_bot.get_market_data_async('BHP')
-                        market_data['BHP'] = ib_data
-
-                    if ACTIVE_EXCHANGE in ['GEMINI', 'ALL']:
-                        gemini_data = await self.gemini_bot.get_market_data_async('BTC/USD')
-                        market_data['BTC/USD'] = gemini_data
+                    # Determine which symbol to fetch based on exchange
+                    if ACTIVE_EXCHANGE == 'IB':
+                        symbol = 'BHP'
+                    else:  # GEMINI
+                        symbol = 'BTC/USD'
+                    
+                    data = await self.bot.get_market_data_async(symbol)
+                    market_data[symbol] = data
 
                     # 3. Get Decision
-                    decision_json = await self.get_llm_decision(market_data, total_pnl)
+                    decision_json = await self.get_llm_decision(market_data, current_pnl)
                     
                     # 4. Execute
                     if decision_json:
@@ -272,7 +255,7 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             d = json_lib.loads(decision_json)
                             action = d.get('action')
                             reason = d.get('reason')
-                            symbol = d.get('symbol', 'BHP') # Default to BHP if not specified
+                            symbol = d.get('symbol', symbol)  # Use symbol from decision or default
                             quantity = d.get('quantity', 0)
                         except:
                             action = "ERROR"
@@ -280,43 +263,33 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             symbol = "UNKNOWN"
                             quantity = 0
 
-                        self.log_decision(total_pnl, market_data, decision_json, action, reason)
+                        self.log_decision(current_pnl, market_data, decision_json, action, reason)
                     
-                    # Log decision to user-friendly log
-                    if action == 'HOLD':
-                        bot_actions_logger.info(f"📊 Decision: HOLD - {reason}")
-                    elif action in ['BUY', 'SELL']:
-                        # Format quantity appropriately (show more decimals for small amounts)
-                        if quantity < 1:
-                            qty_str = f"{quantity:.6f}".rstrip('0').rstrip('.')
-                        else:
-                            qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
-                        bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol} - {reason}")
-                    
-                    if action in ['BUY', 'SELL'] and quantity > 0:
-                        # Route to correct bot
-                        if symbol == 'BHP':
-                             # Risk Check needs price
-                             price = ib_data['price'] if ib_data else 0
-                             if self.risk_manager.check_trade_allowed(symbol, action, quantity, price):
-                                 bot_actions_logger.info(f"✅ Executing: {action} {quantity} {symbol} at ${price:.2f}")
-                                 await self.ib_bot.place_order_async(symbol, action, quantity)
-                             else:
-                                 bot_actions_logger.info(f"⛔ Trade Blocked: Risk limits exceeded")
-                        elif symbol == 'BTC/USD':
-                             price = gemini_data['price'] if gemini_data else 0
-                             if self.risk_manager.check_trade_allowed(symbol, action, quantity, price):
-                                 # Format fractional crypto amounts nicely
-                                 if quantity < 1:
-                                     qty_str = f"{quantity:.6f}".rstrip('0').rstrip('.')
-                                 else:
-                                     qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
-                                 bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f}")
-                                 await self.gemini_bot.place_order_async(symbol, action, quantity)
-                             else:
-                                 bot_actions_logger.info(f"⛔ Trade Blocked: Risk limits exceeded")
-                        else:
-                            logger.warning(f"Unknown symbol: {symbol}")
+                        # Log decision to user-friendly log
+                        if action == 'HOLD':
+                            bot_actions_logger.info(f"📊 Decision: HOLD - {reason}")
+                        elif action in ['BUY', 'SELL']:
+                            # Format quantity appropriately (show more decimals for small amounts)
+                            if quantity < 1:
+                                qty_str = f"{quantity:.6f}".rstrip('0').rstrip('.')
+                            else:
+                                qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
+                            bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol} - {reason}")
+                        
+                        if action in ['BUY', 'SELL'] and quantity > 0:
+                            # Get price for risk check
+                            price = data['price'] if data else 0
+                            
+                            if self.risk_manager.check_trade_allowed(symbol, action, quantity, price):
+                                # Format fractional crypto amounts nicely
+                                if quantity < 1:
+                                    qty_str = f"{quantity:.6f}".rstrip('0').rstrip('.')
+                                else:
+                                    qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
+                                bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f}")
+                                await self.bot.place_order_async(symbol, action, quantity)
+                            else:
+                                bot_actions_logger.info(f"⛔ Trade Blocked: Risk limits exceeded")
                     
                     # 5. Sleep
                     logger.info("Sleeping for 10 seconds...")

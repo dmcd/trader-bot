@@ -1,11 +1,8 @@
+import asyncio
 import unittest
-from unittest.mock import MagicMock, AsyncMock, patch
-import asyncio
-from strategy import LLMStrategy, StrategySignal
-
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import MagicMock, AsyncMock, patch
-import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
 from strategy import LLMStrategy, StrategySignal
 
 class TestLLMStrategy(IsolatedAsyncioTestCase):
@@ -13,6 +10,8 @@ class TestLLMStrategy(IsolatedAsyncioTestCase):
         self.mock_db = MagicMock()
         self.mock_ta = MagicMock()
         self.mock_cost_tracker = MagicMock()
+        if hasattr(LLMStrategy, "_prompt_template_cache"):
+            delattr(LLMStrategy, "_prompt_template_cache")
         self.strategy = LLMStrategy(self.mock_db, self.mock_ta, self.mock_cost_tracker)
         
         # Mock the LLM model
@@ -86,6 +85,21 @@ class TestLLMStrategy(IsolatedAsyncioTestCase):
             self.assertIsNotNone(signal)
             self.assertEqual(signal.action, "BUY")
             self.assertEqual(signal.quantity, 0.1)
+
+    def test_prompt_template_loaded_and_rendered(self):
+        template_body = "TEMPLATE {asset_class} {available_symbols} {prompt_context_block}"
+        if hasattr(LLMStrategy, "_prompt_template_cache"):
+            delattr(LLMStrategy, "_prompt_template_cache")
+        with patch('strategy.Path.read_text', return_value=template_body):
+            strategy = LLMStrategy(self.mock_db, self.mock_ta, self.mock_cost_tracker)
+
+        rendered = strategy._build_prompt(
+            asset_class="crypto",
+            available_symbols="BTC/USD",
+            prompt_context_block="CTX",
+        )
+
+        self.assertIn("TEMPLATE crypto BTC/USD CTX", rendered)
 
 if __name__ == '__main__':
     unittest.main()

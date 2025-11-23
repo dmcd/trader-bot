@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 import asyncio
 import json
+from pathlib import Path
 import google.generativeai as genai
 from config import (
     GEMINI_API_KEY,
@@ -63,6 +64,7 @@ class LLMStrategy(BaseStrategy):
         self.last_rejection_reason = None
         # Optional async callable that fetches live open orders from the active exchange
         self.open_orders_provider = open_orders_provider
+        self.prompt_template = self._load_prompt_template()
 
     def _is_choppy(self, symbol: str, market_data_point, recent_data):
         """
@@ -264,6 +266,26 @@ class LLMStrategy(BaseStrategy):
         
         return None
 
+
+    def _load_prompt_template(self) -> str:
+        """Load template from adjacent file to make manual edits easy."""
+        if hasattr(LLMStrategy, "_prompt_template_cache"):
+            return LLMStrategy._prompt_template_cache
+
+        template_path = Path(__file__).with_name("llm_prompt_template.txt")
+        template_text = template_path.read_text()
+        LLMStrategy._prompt_template_cache = template_text
+        return template_text
+
+    def _build_prompt(self, **kwargs) -> str:
+        """Render prompt with a forgiving formatter so optional fields can be empty."""
+
+        class _SafeDict(dict):
+            def __missing__(self, key):
+                return ""
+
+        return self.prompt_template.format_map(_SafeDict(**kwargs))
+
     async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None):
         """Asks Gemini for a trading decision."""
         if not GEMINI_API_KEY:
@@ -300,81 +322,61 @@ class LLMStrategy(BaseStrategy):
                 logger.warning(f"Error getting context/indicators: {e}")
         
         is_crypto = ACTIVE_EXCHANGE == 'GEMINI' and any('/' in symbol for symbol in available_symbols)
-        
-        if is_crypto:
-             prompt = f"""
-You are an autonomous crypto trading bot. Your goal is to make small, profitable trades.
 
-Current Status:
-- Equity: ${equity_now:,.2f} USD
-- Market Data:{market_summary}
-
-Risk Constraints:
-- Max Order Value: ${MAX_ORDER_VALUE:.2f} USD
-- Min Trade Size: ${MIN_TRADE_SIZE:.2f} USD
-- Max Daily Loss: {MAX_DAILY_LOSS_PERCENT}% of portfolio
-
-Available Symbols: {', '.join(available_symbols)}
-
-For crypto trading, you can use FRACTIONAL quantities (e.g., 0.001 BTC).
-Calculate the appropriate fractional amount to stay within the ${MAX_ORDER_VALUE:.2f} max order value.
-"""
-        else:
-            prompt = f"""
-You are an autonomous stock trading bot. Your goal is to make small, profitable trades.
-
-Current Status:
-- Equity: ${equity_now:,.2f} AUD
-- Market Data:{market_summary}
-
-Risk Constraints:
-- Max Order Value: ${MAX_ORDER_VALUE:.2f} AUD
-- Min Trade Size: ${MIN_TRADE_SIZE:.2f} AUD
-- Max Daily Loss: ${MAX_DAILY_LOSS:.2f} AUD
-
-Available Symbols: {', '.join(available_symbols)}
-
-For stock trading, quantities must be WHOLE NUMBERS (integers).
-"""
-
-        if context_summary:
-            prompt += f"\n{context_summary}\n"
-        if indicator_summary:
-            prompt += f"\n{indicator_summary}\n"
-        
-        prompt += """
-Decide on an action for one of the available symbols.
-You may also cancel an open order if it is stale or unsafe.
-Return ONLY a JSON object with the following format:
-{
-    "action": "BUY" | "SELL" | "HOLD" | "CANCEL",
-    "symbol": "<symbol from available symbols>",
-    "quantity": <number>,
-    "reason": "<short explanation>",
-    "order_id": "<order id to cancel when action=CANCEL>"
-}
-"""
-        
+        prompt_context_block = ""
+        rules_block = ""
         if prompt_context:
-            prompt += f"\nCONTEXT:\n{prompt_context}\n"
-            prompt += "\nRULES:\n"
-            prompt += "- If cooldown is active and priority signal is NOT allowed, you MUST return HOLD.\n"
-            prompt += "- If priority signal allowed = true, you may trade despite cooldown but size must be reduced and within caps.\n"
-            prompt += "- Always obey order cap and exposure cap; quantities must fit caps.\n"
-            prompt += f"- Ensure trade value is at least ${MIN_TRADE_SIZE:.2f}.\n"
-            prompt += "- If fee regime is high, avoid churn: prefer HOLD or maker-first trades.\n"
-            prompt += "- Always use symbols from the Available Symbols list.\n"
-            prompt += "- Factor existing open orders into sizing/direction to avoid over-allocation or duplicate legs.\n"
-            prompt += "- You may return action=CANCEL with an order_id from the open orders list to pull a stale or unsafe order.\n"
+            prompt_context_block = f"CONTEXT:\n{prompt_context}\n"
+            rules_block = (
+                "RULES:\n"
+                "- If cooldown is active and priority signal is NOT allowed, you MUST return HOLD.\n"
+                "- If priority signal allowed = true, you may trade despite cooldown but size must be reduced and within caps.\n"
+                "- Always obey order cap and exposure cap; quantities must fit caps.\n"
+                f"- Ensure trade value is at least ${MIN_TRADE_SIZE:.2f}.\n"
+                "- If fee regime is high, avoid churn: prefer HOLD or maker-first trades.\n"
+                "- Always use symbols from the Available Symbols list.\n"
+                "- Factor existing open orders into sizing/direction to avoid over-allocation or duplicate legs.\n"
+                "- You may return action=CANCEL with an order_id from the open orders list to pull a stale or unsafe order.\n"
+            )
 
+        mode_note = ""
         if TRADING_MODE == 'PAPER':
-             prompt += "\nNOTE: You are running in SANDBOX/PAPER mode. The 'Portfolio Value' shown above represents the Profit/Loss (PnL) relative to the starting balance, NOT the total account value. It may be negative. This is expected. You still have sufficient capital to trade. Do NOT stop trading because of a negative Portfolio Value.\n"
+            mode_note = (
+                "NOTE: You are running in SANDBOX/PAPER mode. The 'Portfolio Value' shown above represents "
+                "the Profit/Loss (PnL) relative to the starting balance, NOT the total account value. It may be negative. "
+                "This is expected. You still have sufficient capital to trade. Do NOT stop trading because of a negative Portfolio Value.\n"
+            )
 
+        rejection_note = ""
         if self.last_rejection_reason:
-            prompt += f"\nIMPORTANT: Your previous order was REJECTED by the Risk Manager for the following reason:\n"
-            prompt += f"'{self.last_rejection_reason}'\n"
-            prompt += "You MUST adjust your strategy to avoid this rejection (e.g., lower quantity, check limits).\n"
+            rejection_note = (
+                "IMPORTANT: Your previous order was REJECTED by the Risk Manager for the following reason:\n"
+                f"'{self.last_rejection_reason}'\n"
+                "You MUST adjust your strategy to avoid this rejection (e.g., lower quantity, check limits).\n"
+            )
             self.last_rejection_reason = None
+
+        prompt = self._build_prompt(
+            asset_class="crypto" if is_crypto else "stock",
+            equity_line=f"${equity_now:,.2f} USD" if is_crypto else f"${equity_now:,.2f} AUD",
+            market_summary=market_summary or "  - No market data available",
+            max_order_value=f"${MAX_ORDER_VALUE:.2f} USD" if is_crypto else f"${MAX_ORDER_VALUE:.2f} AUD",
+            min_trade_size=f"${MIN_TRADE_SIZE:.2f} USD" if is_crypto else f"${MIN_TRADE_SIZE:.2f} AUD",
+            max_daily_loss=f"{MAX_DAILY_LOSS_PERCENT}% of portfolio" if is_crypto else f"${MAX_DAILY_LOSS:.2f} AUD",
+            available_symbols=", ".join(available_symbols),
+            quantity_guidance=(
+                "For crypto trading, you can use FRACTIONAL quantities (e.g., 0.001 BTC). "
+                f"Calculate the appropriate fractional amount to stay within the ${MAX_ORDER_VALUE:.2f} max order value."
+                if is_crypto
+                else "For stock trading, quantities must be WHOLE NUMBERS (integers)."
+            ),
+            context_block=f"{context_summary}\n\n" if context_summary else "",
+            indicator_block=f"{indicator_summary}\n\n" if indicator_summary else "",
+            prompt_context_block=prompt_context_block,
+            rules_block=f"{rules_block}\n" if rules_block else "",
+            mode_note=mode_note,
+            rejection_note=rejection_note,
+        )
             
         try:
             response = await asyncio.wait_for(

@@ -149,9 +149,9 @@ with col1:
             width=None, # Use full width
             hide_index=True,
             column_config={
-                "timestamp": st.column_config.DatetimeColumn("Time", format="D MMM HH:mm:ss", width="medium"),
-                "action": st.column_config.TextColumn("Action", width="small"),
-                "trade_value": st.column_config.NumberColumn("Value", format="$%.2f", width="small"),
+                "timestamp": st.column_config.DatetimeColumn("Time", format="D MMM HH:mm:ss"),
+                "action": st.column_config.TextColumn("Action"),
+                "trade_value": st.column_config.NumberColumn("Value", format="$%.2f"),
                 "reason": st.column_config.TextColumn("Reason", width="large"),
             },
             use_container_width=True

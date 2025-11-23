@@ -142,7 +142,9 @@ Current Positions:
                 price = order.get('price')
                 status = order.get('status') or 'open'
                 price_str = f"@ ${price:,.2f}" if price else "@ mkt"
-                context += f"  - {side} {qty:.6f} {sym} {price_str} (rem {remaining:.6f}, {status})\n"
+                order_id = order.get('order_id')
+                id_str = f"#{order_id}" if order_id is not None else "#?"
+                context += f"  - {id_str} {side} {qty:.6f} {sym} {price_str} (rem {remaining:.6f}, {status})\n"
         else:
             context += "  No open orders\n"
 

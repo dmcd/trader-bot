@@ -587,19 +587,36 @@ class StrategyRunner:
                         quantity = signal.quantity
                         reason = signal.reason
                         symbol = signal.symbol
+                        order_id = getattr(signal, 'order_id', None)
                         
                         # Log decision to user-friendly log
                         if action == 'HOLD':
                             bot_actions_logger.info(f"📊 Decision: HOLD - {reason}")
                         
-                        elif action in ['BUY', 'SELL'] and quantity > 0:
-                            # Format quantity appropriately (show more decimals for small amounts)
-                            if quantity < 1:
-                                qty_str = f"{quantity:.6f}".rstrip('0').rstrip('.')
-                            else:
-                                qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
-                            bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol} - {reason}")
+                        elif action == 'CANCEL':
+                            if not order_id:
+                                logger.warning("Skipped cancel: missing order_id")
+                                continue
+                            cancel_id = order_id
+                            if isinstance(order_id, str) and order_id.isdigit():
+                                cancel_id = int(order_id)
+                            try:
+                                success = await self.bot.cancel_open_order_async(cancel_id)
+                                if success:
+                                    bot_actions_logger.info(f"🛑 Cancelled order {order_id}: {reason}")
+                                else:
+                                    bot_actions_logger.info(f"⚠️ Cancel request failed for order {order_id}: {reason}")
+                                # Refresh open orders snapshot so strategy context stays current
+                                try:
+                                    open_orders = await self.bot.get_open_orders_async()
+                                    self.db.replace_open_orders(self.session_id, open_orders)
+                                except Exception as e:
+                                    logger.warning(f"Could not refresh open orders after cancel: {e}")
+                            except Exception as e:
+                                logger.error(f"Cancel order error: {e}")
+                            continue
 
+                        elif action in ['BUY', 'SELL'] and quantity > 0:
                             # Get price for risk checks and execution
                             md = market_data.get(symbol)
                             price = md.get('price') if md else (data['price'] if data else 0)
@@ -614,6 +631,13 @@ class StrategyRunner:
                             if quantity <= 0:
                                 logger.warning("Skipped trade: buffered quantity became non-positive")
                                 continue
+
+                            # Format quantity appropriately (show more decimals for small amounts) after buffering
+                            if quantity < 1:
+                                qty_str = f"{quantity:.6f}".rstrip('0').rstrip('.')
+                            else:
+                                qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
+                            bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol} - {reason}")
 
                             risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
 

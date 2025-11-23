@@ -25,11 +25,12 @@ from config import (
 logger = logging.getLogger(__name__)
 
 class StrategySignal:
-    def __init__(self, action: str, symbol: str, quantity: float, reason: str):
+    def __init__(self, action: str, symbol: str, quantity: float, reason: str, order_id=None):
         self.action = action.upper()
         self.symbol = symbol
         self.quantity = quantity
         self.reason = reason
+        self.order_id = order_id
 
     def __str__(self):
         return f"{self.action} {self.quantity} {self.symbol} ({self.reason})"
@@ -196,7 +197,9 @@ class LLMStrategy(BaseStrategy):
             remaining = order.get('remaining') if order.get('remaining') is not None else qty
             price = order.get('price')
             price_str = f"${price:,.2f}" if price else "mkt"
-            open_order_snippets.append(f"{side} {qty:.4f} {sym} @ {price_str} (rem {remaining:.4f})")
+            order_id = order.get('order_id')
+            id_str = f"#{order_id}" if order_id is not None else "#?"
+            open_order_snippets.append(f"{id_str} {side} {qty:.4f} {sym} @ {price_str} (rem {remaining:.4f})")
         open_orders_summary = "; ".join(open_order_snippets) if open_order_snippets else "none"
 
         prompt_context = (
@@ -211,7 +214,14 @@ class LLMStrategy(BaseStrategy):
             f"- Open orders: {open_order_count} ({open_orders_summary})"
         )
 
-        decision_json = await self._get_llm_decision(session_id, market_data, current_equity, prompt_context, context)
+        decision_json = await self._get_llm_decision(
+            session_id,
+            market_data,
+            current_equity,
+            prompt_context,
+            context,
+            open_orders=open_orders,
+        )
         
         if decision_json:
             try:
@@ -219,7 +229,8 @@ class LLMStrategy(BaseStrategy):
                 action = decision.get('action')
                 quantity = decision.get('quantity', 0)
                 reason = decision.get('reason')
-                
+                order_id = decision.get('order_id')
+
                 if action in ['BUY', 'SELL'] and quantity > 0:
                     # Update state if we are signaling a trade
                     if allow_break_glass and not can_trade:
@@ -244,6 +255,8 @@ class LLMStrategy(BaseStrategy):
                     # The original code checked `can_trade` in the loop.
                     
                     return StrategySignal(action, symbol, quantity, reason)
+                elif action == 'CANCEL' and order_id:
+                    return StrategySignal('CANCEL', symbol or '', 0, reason or 'Cancel open order', order_id=order_id)
                 elif action == 'HOLD':
                     return StrategySignal('HOLD', symbol, 0, reason)
             except json.JSONDecodeError:
@@ -251,10 +264,12 @@ class LLMStrategy(BaseStrategy):
         
         return None
 
-    async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None):
+    async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None):
         """Asks Gemini for a trading decision."""
         if not GEMINI_API_KEY:
             return None
+
+        open_orders = open_orders or []
 
         equity_now = current_equity if current_equity is not None else 0.0
 
@@ -329,12 +344,14 @@ For stock trading, quantities must be WHOLE NUMBERS (integers).
         
         prompt += """
 Decide on an action for one of the available symbols.
+You may also cancel an open order if it is stale or unsafe.
 Return ONLY a JSON object with the following format:
 {
-    "action": "BUY" | "SELL" | "HOLD",
+    "action": "BUY" | "SELL" | "HOLD" | "CANCEL",
     "symbol": "<symbol from available symbols>",
     "quantity": <number>,
-    "reason": "<short explanation>"
+    "reason": "<short explanation>",
+    "order_id": "<order id to cancel when action=CANCEL>"
 }
 """
         
@@ -348,6 +365,7 @@ Return ONLY a JSON object with the following format:
             prompt += "- If fee regime is high, avoid churn: prefer HOLD or maker-first trades.\n"
             prompt += "- Always use symbols from the Available Symbols list.\n"
             prompt += "- Factor existing open orders into sizing/direction to avoid over-allocation or duplicate legs.\n"
+            prompt += "- You may return action=CANCEL with an order_id from the open orders list to pull a stale or unsafe order.\n"
 
         if TRADING_MODE == 'PAPER':
              prompt += "\nNOTE: You are running in SANDBOX/PAPER mode. The 'Portfolio Value' shown above represents the Profit/Loss (PnL) relative to the starting balance, NOT the total account value. It may be negative. This is expected. You still have sufficient capital to trade. Do NOT stop trading because of a negative Portfolio Value.\n"

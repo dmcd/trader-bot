@@ -347,6 +347,19 @@ class GeminiTrader(BaseTrader):
             logger.error(f"Error fetching Gemini open orders: {e}")
             return []
 
+    async def cancel_open_order_async(self, order_id):
+        """Cancel a single open order by ID."""
+        if not self.connected or not order_id:
+            return False
+
+        try:
+            await self.exchange.cancel_order(order_id)
+            logger.info(f"Cancelled Gemini order {order_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error cancelling Gemini order {order_id}: {e}")
+            return False
+
     async def _calculate_total_usd(self, balance: dict):
         """Helper to value holdings in USD; returns (total_usd, btc_price_used)."""
         total_usd = 0.0

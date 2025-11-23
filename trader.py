@@ -41,3 +41,8 @@ class BaseTrader(ABC):
     @abstractmethod
     async def get_open_orders_async(self):
         raise NotImplementedError
+
+    @abstractmethod
+    async def cancel_open_order_async(self, order_id):
+        """Cancel a single open order by ID."""
+        raise NotImplementedError

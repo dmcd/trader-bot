@@ -211,6 +211,24 @@ class IBTrader(BaseTrader):
             logger.error(f"Error fetching IB open orders: {e}")
             return []
 
+    async def cancel_open_order_async(self, order_id):
+        """Cancel a single open order by ID."""
+        if not self.connected or order_id is None:
+            return False
+
+        try:
+            await self.ib.reqOpenOrdersAsync()
+            for trade in self.ib.openOrders():
+                if trade.order.orderId == order_id:
+                    self.ib.cancelOrder(trade.order)
+                    logger.info(f"Cancelled IB order {order_id}")
+                    return True
+            logger.warning(f"IB order {order_id} not found among open orders")
+            return False
+        except Exception as e:
+            logger.error(f"Error cancelling IB order {order_id}: {e}")
+            return False
+
 if __name__ == "__main__":
     # Simple test
     bot = IBTrader()

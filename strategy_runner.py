@@ -358,7 +358,7 @@ class StrategyRunner:
             logger.warning(f"Fee ratio check failed: {e}")
             return False
 
-    async def get_llm_decision(self, market_data, current_pnl):
+    async def get_llm_decision(self, market_data, current_pnl, prompt_context=None):
         """Asks Gemini for a trading decision."""
         if not GEMINI_API_KEY:
             return None
@@ -471,12 +471,19 @@ Return ONLY a JSON object with the following format:
 Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward trend detected"}}
 """
         
-        # Add last rejection reason to prompt if it exists
+        # Add contextual constraints
+        if prompt_context:
+            prompt += f"\nCONTEXT:\n{prompt_context}\n"
+            prompt += "\nRULES:\n"
+            prompt += "- If cooldown is active and priority signal is NOT allowed, you MUST return HOLD.\n"
+            prompt += "- If priority signal allowed = true, you may trade despite cooldown but size must be reduced and within caps.\n"
+            prompt += "- Always obey order cap and exposure cap; quantities must fit caps.\n"
+            prompt += "- If fee regime is high, avoid churn: prefer HOLD or maker-first trades.\n"
+            prompt += "- Always use symbols from the Available Symbols list.\n"
         if hasattr(self, 'last_rejection_reason') and self.last_rejection_reason:
             prompt += f"\nIMPORTANT: Your previous order was REJECTED by the Risk Manager for the following reason:\n"
             prompt += f"'{self.last_rejection_reason}'\n"
             prompt += "You MUST adjust your strategy to avoid this rejection (e.g., lower quantity, check limits).\n"
-            # Clear it after using it once so we don't nag forever if they fix it
             self.last_rejection_reason = None
             
         try:
@@ -769,7 +776,20 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
 
-                    decision_json = await self.get_llm_decision(market_data, current_pnl)
+                    # Build prompt context: cooldown status, priority, fee ratio, last trade age
+                    last_trade_age = (now_ts - self.last_trade_ts) if self.last_trade_ts else None
+                    fee_ratio_flag = "high" if self._fees_too_high() else "normal"
+                    priority_flag = "true" if priority and allow_break_glass else "false"
+                    spacing_flag = "clear" if can_trade else f"cooldown {MIN_TRADE_INTERVAL_SECONDS - (now_ts - self.last_trade_ts):.0f}s"
+                    prompt_context = (
+                        f"- Cooldown: {spacing_flag}\n"
+                        f"- Priority signal allowed: {priority_flag}\n"
+                        f"- Fee regime: {fee_ratio_flag}\n"
+                        f"- Last trade age: {last_trade_age:.0f}s\n"
+                        f"- Order cap: ${min(MAX_ORDER_VALUE, ORDER_SIZE_BY_TIER.get(self.size_tier, MAX_ORDER_VALUE)):.2f}\n"
+                        f"- Exposure cap: ${MAX_TOTAL_EXPOSURE:.2f}"
+                    )
+                    decision_json = await self.get_llm_decision(market_data, current_pnl, prompt_context)
 
                     # 5. Execute
                     if decision_json:

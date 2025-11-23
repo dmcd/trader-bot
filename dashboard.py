@@ -371,7 +371,7 @@ with tab1:
         else:
             st.warning("No session stats available.")
         
-        st.subheader("🧠 Strategy Decisions")
+        st.subheader("🧾 Trade History")
         if not df.empty:
             df = df.sort_values('timestamp', ascending=False)
             st.dataframe(

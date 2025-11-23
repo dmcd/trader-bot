@@ -171,6 +171,19 @@ class LLMStrategy(BaseStrategy):
         equity_now = current_equity if current_equity is not None else 0.0
         headroom = max(0.0, exposure_cap - exposure_now)
 
+        open_orders = self.db.get_open_orders(session_id) if session_id else []
+        open_order_count = len(open_orders)
+        open_order_snippets = []
+        for order in open_orders[:5]:
+            side = (order.get('side') or '').upper() or 'N/A'
+            sym = order.get('symbol') or 'Unknown'
+            qty = order.get('amount') or 0
+            remaining = order.get('remaining') if order.get('remaining') is not None else qty
+            price = order.get('price')
+            price_str = f"${price:,.2f}" if price else "mkt"
+            open_order_snippets.append(f"{side} {qty:.4f} {sym} @ {price_str} (rem {remaining:.4f})")
+        open_orders_summary = "; ".join(open_order_snippets) if open_order_snippets else "none"
+
         prompt_context = (
             f"- Cooldown: {spacing_flag}\n"
             f"- Priority signal allowed: {priority_flag}\n"
@@ -179,7 +192,8 @@ class LLMStrategy(BaseStrategy):
             f"- Equity: ${equity_now:,.2f}\n"
             f"- Exposure: ${exposure_now:,.2f} of ${exposure_cap:,.2f} (room ${headroom:,.2f})\n"
             f"- Order cap: ${order_cap_value:.2f}\n"
-            f"- Min trade size: ${MIN_TRADE_SIZE:.2f}"
+            f"- Min trade size: ${MIN_TRADE_SIZE:.2f}\n"
+            f"- Open orders: {open_order_count} ({open_orders_summary})"
         )
 
         decision_json = await self._get_llm_decision(session_id, market_data, current_equity, prompt_context, context)
@@ -318,6 +332,7 @@ Return ONLY a JSON object with the following format:
             prompt += f"- Ensure trade value is at least ${MIN_TRADE_SIZE:.2f}.\n"
             prompt += "- If fee regime is high, avoid churn: prefer HOLD or maker-first trades.\n"
             prompt += "- Always use symbols from the Available Symbols list.\n"
+            prompt += "- Factor existing open orders into sizing/direction to avoid over-allocation or duplicate legs.\n"
 
         if TRADING_MODE == 'PAPER':
              prompt += "\nNOTE: You are running in SANDBOX/PAPER mode. The 'Portfolio Value' shown above represents the Profit/Loss (PnL) relative to the starting balance, NOT the total account value. It may be negative. This is expected. You still have sufficient capital to trade. Do NOT stop trading because of a negative Portfolio Value.\n"

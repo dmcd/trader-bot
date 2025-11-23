@@ -72,8 +72,9 @@ class TradingContext:
             else:
                 price_trend = f"Sideways ({price_change:+.2f}%)"
         
-        # Get current positions from database
+        # Get current positions and open orders from database
         positions = self.db.get_positions(self.session_id)
+        open_orders = self.db.get_open_orders(self.session_id)
         
         # Build context summary
         context = f"""
@@ -128,7 +129,22 @@ Current Positions:
             context += f"  Total Exposure: ${total_exposure:,.2f}\n"
         else:
             context += "  No open positions\n"
-        
+
+        context += "Open Orders:\n"
+
+        if open_orders:
+            for order in open_orders:
+                side = (order.get('side') or '').upper() or 'N/A'
+                sym = order.get('symbol') or 'Unknown'
+                qty = order.get('amount') or 0
+                remaining = order.get('remaining') if order.get('remaining') is not None else qty
+                price = order.get('price')
+                status = order.get('status') or 'open'
+                price_str = f"@ ${price:,.2f}" if price else "@ mkt"
+                context += f"  - {side} {qty:.6f} {sym} {price_str} (rem {remaining:.6f}, {status})\n"
+        else:
+            context += "  No open orders\n"
+
         context += """
 Recent Activity:
 """

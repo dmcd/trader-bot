@@ -7,7 +7,7 @@ import google.generativeai as genai
 from ib_trader import IBTrader
 from gemini_trader import GeminiTrader
 from risk_manager import RiskManager
-from config import GEMINI_API_KEY, TRADING_MODE, ACTIVE_EXCHANGE, MAX_DAILY_LOSS_PERCENT
+from config import GEMINI_API_KEY, TRADING_MODE, ACTIVE_EXCHANGE, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_DAILY_LOSS
 
 import json
 import datetime
@@ -107,13 +107,13 @@ Current Status:
 - Market Data:{market_summary}
 
 Risk Constraints:
-- Max Order Value: $100 USD
-- Max Daily Loss: 0.1% of portfolio
+- Max Order Value: ${MAX_ORDER_VALUE:.2f} USD
+- Max Daily Loss: {MAX_DAILY_LOSS_PERCENT}% of portfolio
 
 Available Symbols: {', '.join(available_symbols)}
 
 For crypto trading, you can use FRACTIONAL quantities (e.g., 0.001 BTC).
-Calculate the appropriate fractional amount to stay within the $100 max order value.
+Calculate the appropriate fractional amount to stay within the ${MAX_ORDER_VALUE:.2f} max order value.
 
 Decide on an action for one of the available symbols.
 Return ONLY a JSON object with the following format:
@@ -136,8 +136,8 @@ Current Status:
 - Market Data:{market_summary}
 
 Risk Constraints:
-- Max Order Value: $100 AUD
-- Max Daily Loss: $50 AUD
+- Max Order Value: ${MAX_ORDER_VALUE:.2f} AUD
+- Max Daily Loss: ${MAX_DAILY_LOSS:.2f} AUD
 
 Available Symbols: {', '.join(available_symbols)}
 

@@ -11,7 +11,20 @@ from database import TradingDatabase
 from cost_tracker import CostTracker
 from trading_context import TradingContext
 from technical_analysis import TechnicalAnalysis
-from config import GEMINI_API_KEY, TRADING_MODE, ACTIVE_EXCHANGE, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_DAILY_LOSS, LOOP_INTERVAL_SECONDS, MIN_TRADE_INTERVAL_SECONDS, FEE_RATIO_COOLDOWN
+from config import (
+    GEMINI_API_KEY,
+    TRADING_MODE,
+    ACTIVE_EXCHANGE,
+    MAX_DAILY_LOSS_PERCENT,
+    MAX_ORDER_VALUE,
+    MAX_DAILY_LOSS,
+    LOOP_INTERVAL_SECONDS,
+    MIN_TRADE_INTERVAL_SECONDS,
+    FEE_RATIO_COOLDOWN,
+    SIZE_TIER,
+    ORDER_SIZE_BY_TIER,
+    DAILY_LOSS_PCT_BY_TIER,
+)
 
 
 
@@ -56,6 +69,7 @@ class StrategyRunner:
         self.sandbox_seed_symbols = {'USD', 'BTC/USD', 'BTC', 'ETH/USD', 'LTC/USD', 'ZEC/USD', 'BCH/USD'}
         # Simple in-memory holdings tracker for realized PnL
         self.holdings = {}  # symbol -> {'qty': float, 'avg_cost': float}
+        self.size_tier = SIZE_TIER if SIZE_TIER in ORDER_SIZE_BY_TIER else 'MODERATE'
 
     async def initialize(self):
         """Connects and initializes the bot."""
@@ -96,6 +110,12 @@ class StrategyRunner:
             logger.info(f"Holdings rebuilt from trade history: {self.holdings}")
         except Exception as e:
             logger.warning(f"Could not rebuild holdings: {e}")
+
+        # Apply tier-specific daily loss %
+        tier_loss_pct = DAILY_LOSS_PCT_BY_TIER.get(self.size_tier, MAX_DAILY_LOSS_PERCENT)
+        if tier_loss_pct != MAX_DAILY_LOSS_PERCENT:
+            logger.info(f"Overriding daily loss percent to {tier_loss_pct}% for tier {self.size_tier}")
+        self.daily_loss_pct = tier_loss_pct
 
         self.risk_manager.update_pnl(initial_pnl)
         bot_actions_logger.info(f"💰 Starting Portfolio Value: ${initial_pnl:,.2f}")
@@ -584,11 +604,12 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                     current_pnl = await self.bot.get_pnl_async()
                     self.risk_manager.update_pnl(current_pnl)
                     
-                    # Check percentage-based daily loss
+                    # Check percentage-based daily loss (tier-aware)
                     if self.risk_manager.start_of_day_equity and self.risk_manager.start_of_day_equity > 0:
                         loss_percent = (self.risk_manager.daily_loss / self.risk_manager.start_of_day_equity) * 100
-                        if loss_percent > MAX_DAILY_LOSS_PERCENT:
-                            logger.error(f"Max daily loss exceeded: {loss_percent:.2f}% > {MAX_DAILY_LOSS_PERCENT}%. Stopping loop.")
+                        limit_pct = self.daily_loss_pct
+                        if loss_percent > limit_pct:
+                            logger.error(f"Max daily loss exceeded: {loss_percent:.2f}% > {limit_pct}%. Stopping loop.")
                             bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded ({loss_percent:.2f}%)")
                             break
                     # Check absolute daily loss
@@ -718,17 +739,15 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             
                             risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
 
-                            # Auto-reduce if order value is too high
-                            if not risk_result.allowed and "Order value" in risk_result.reason and "exceeds limit" in risk_result.reason:
+                            # Auto-reduce if order value is too high or exceed tier cap
+                            tier_cap = ORDER_SIZE_BY_TIER.get(self.size_tier, MAX_ORDER_VALUE)
+                            max_value = min(MAX_ORDER_VALUE, tier_cap)
+                            if (quantity * price) > max_value:
                                 old_qty = quantity
-                                # Target 99% of max value to be safe
-                                target_value = MAX_ORDER_VALUE * 0.99
+                                target_value = max_value * 0.99
                                 quantity = target_value / price
-                                
-                                logger.info(f"⚠️ Auto-reducing trade size from {old_qty:.4f} to {quantity:.4f} to fit limit")
+                                logger.info(f"⚠️ Auto-reducing trade size from {old_qty:.4f} to {quantity:.4f} to fit cap ${max_value:.2f}")
                                 bot_actions_logger.info(f"📉 Auto-Reducing: Trade size too large, adjusting to {quantity:.4f} {symbol}")
-                                
-                                # Re-check with new quantity
                                 risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
 
                             if risk_result.allowed:

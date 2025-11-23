@@ -23,6 +23,19 @@ LOOP_INTERVAL_SECONDS = int(os.getenv('LOOP_INTERVAL_SECONDS', '300'))  # main l
 MIN_TRADE_INTERVAL_SECONDS = int(os.getenv('MIN_TRADE_INTERVAL_SECONDS', '300'))  # min spacing between trades
 FEE_RATIO_COOLDOWN = float(os.getenv('FEE_RATIO_COOLDOWN', '50.0'))  # if fees > X% of gross PnL, pause trading
 
+# Sizing tiers (override via env if needed)
+SIZE_TIER = os.getenv('SIZE_TIER', 'MODERATE').upper()  # CONSERVATIVE, MODERATE, AGGRESSIVE
+ORDER_SIZE_BY_TIER = {
+    'CONSERVATIVE': float(os.getenv('ORDER_SIZE_CONSERVATIVE', '200.0')),
+    'MODERATE': float(os.getenv('ORDER_SIZE_MODERATE', '500.0')),
+    'AGGRESSIVE': float(os.getenv('ORDER_SIZE_AGGRESSIVE', '1000.0')),
+}
+DAILY_LOSS_PCT_BY_TIER = {
+    'CONSERVATIVE': float(os.getenv('DAILY_LOSS_PCT_CONSERVATIVE', '5.0')),
+    'MODERATE': float(os.getenv('DAILY_LOSS_PCT_MODERATE', '3.0')),
+    'AGGRESSIVE': float(os.getenv('DAILY_LOSS_PCT_AGGRESSIVE', '2.5')),
+}
+
 # API Keys
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '') # LLM Key
 GEMINI_EXCHANGE_API_KEY = os.getenv('GEMINI_EXCHANGE_API_KEY', '') # Trading Key

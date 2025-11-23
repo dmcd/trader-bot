@@ -61,7 +61,8 @@ def load_history():
 def load_logs():
     if os.path.exists("bot.log"):
         with open("bot.log", "r") as f:
-            return f.readlines()[-100:] # Last 100 lines
+            lines = f.readlines()[-100:] # Last 100 lines
+            return lines[::-1] # Reverse to show newest first
     return []
 
 def load_session_stats():
@@ -144,8 +145,15 @@ with col1:
         df = df.rename(columns={'pnl': 'trade_value'})
         st.dataframe(
             df[['timestamp', 'action', 'trade_value', 'reason']],
-            width="stretch",
-            hide_index=True
+            width=None, # Use full width
+            hide_index=True,
+            column_config={
+                "timestamp": st.column_config.DatetimeColumn("Time", format="D MMM HH:mm:ss", width="medium"),
+                "action": st.column_config.TextColumn("Action", width="small"),
+                "trade_value": st.column_config.NumberColumn("Value", format="$%.2f", width="small"),
+                "reason": st.column_config.TextColumn("Reason", width="large"),
+            },
+            use_container_width=True
         )
     else:
         st.info("No trade history found yet. Start the bot!")
@@ -154,7 +162,7 @@ with col2:
     st.subheader("📜    Logs")
     logs = load_logs()
     log_text = "".join(logs)
-    st.text_area("Log Output", log_text, height=600, disabled=True)
+    st.text_area("Log Output", log_text, height=900, disabled=True)
 
 # --- Auto Refresh ---
 time.sleep(refresh_rate)

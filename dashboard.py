@@ -63,7 +63,7 @@ with col1:
         # Dataframe
         st.dataframe(
             df[['timestamp', 'action', 'pnl', 'reason', 'market_data']],
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
     else:

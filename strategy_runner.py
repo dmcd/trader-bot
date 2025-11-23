@@ -13,7 +13,7 @@ import datetime
 from logger_config import setup_logging
 
 # Configure logging
-setup_logging()
+bot_actions_logger = setup_logging()
 logger = logging.getLogger(__name__)
 
 # Configure Gemini
@@ -49,6 +49,7 @@ class StrategyRunner:
     async def initialize(self):
         """Connects and initializes the bots."""
         logger.info(f"Initializing Strategy Runner in {TRADING_MODE} mode (Active: {ACTIVE_EXCHANGE})...")
+        bot_actions_logger.info(f"🤖 Trading Bot Started - Mode: {TRADING_MODE}, Exchange: {ACTIVE_EXCHANGE}")
         
         # Connect based on config
         if ACTIVE_EXCHANGE in ['IB', 'ALL']:
@@ -71,31 +72,86 @@ class StrategyRunner:
         
         self.risk_manager.update_pnl(total_pnl)
         logger.info(f"Total Initial PnL: {total_pnl}")
+        bot_actions_logger.info(f"💰 Starting Portfolio Value: ${total_pnl:,.2f}")
 
     async def get_llm_decision(self, market_data, current_pnl):
         """Asks Gemini for a trading decision."""
         if not GEMINI_API_KEY:
             return None
 
-        prompt = f"""
-        You are an autonomous trading bot. Your goal is to cover token costs by making small, profitable trades.
+        # Determine what symbols are available and build appropriate prompt
+        available_symbols = list(market_data.keys())
         
-        Current Status:
-        - PnL (Net Liquidation): {current_pnl} AUD
-        - Market Data (BHP): {market_data}
+        if not available_symbols:
+            logger.warning("No market data available for decision making")
+            return None
         
-        Risk Constraints:
-        - Max Order Value: $100 AUD
-        - Max Daily Loss: $50 AUD
+        # Build market data summary
+        market_summary = ""
+        for symbol, data in market_data.items():
+            if data:
+                market_summary += f"\n  - {symbol}: Price ${data.get('price', 'N/A')}, Bid ${data.get('bid', 'N/A')}, Ask ${data.get('ask', 'N/A')}"
         
-        Decide on an action for BHP.
-        Return ONLY a JSON object with the following format:
-        {{
-            "action": "BUY" | "SELL" | "HOLD",
-            "quantity": <integer>,
-            "reason": "<short explanation>"
-        }}
-        """
+        # Determine if we're trading crypto or stocks
+        is_crypto = ACTIVE_EXCHANGE in ['GEMINI', 'ALL'] and any('/' in symbol for symbol in available_symbols)
+        
+        if is_crypto:
+            # Crypto trading prompt (supports fractional quantities)
+            prompt = f"""
+You are an autonomous crypto trading bot. Your goal is to make small, profitable trades.
+
+Current Status:
+- Portfolio Value: ${current_pnl:,.2f} USD
+- Market Data:{market_summary}
+
+Risk Constraints:
+- Max Order Value: $100 USD
+- Max Daily Loss: 0.1% of portfolio
+
+Available Symbols: {', '.join(available_symbols)}
+
+For crypto trading, you can use FRACTIONAL quantities (e.g., 0.001 BTC).
+Calculate the appropriate fractional amount to stay within the $100 max order value.
+
+Decide on an action for one of the available symbols.
+Return ONLY a JSON object with the following format:
+{{
+    "action": "BUY" | "SELL" | "HOLD",
+    "symbol": "<symbol from available symbols>",
+    "quantity": <float (fractional amounts allowed)>,
+    "reason": "<short explanation>"
+}}
+
+Example: {{"action": "BUY", "symbol": "BTC/USD", "quantity": 0.0012, "reason": "Price dip, good entry"}}
+"""
+        else:
+            # Stock trading prompt (integer quantities only)
+            prompt = f"""
+You are an autonomous stock trading bot. Your goal is to make small, profitable trades.
+
+Current Status:
+- Portfolio Value: ${current_pnl:,.2f} AUD
+- Market Data:{market_summary}
+
+Risk Constraints:
+- Max Order Value: $100 AUD
+- Max Daily Loss: $50 AUD
+
+Available Symbols: {', '.join(available_symbols)}
+
+For stock trading, quantities must be WHOLE NUMBERS (integers).
+
+Decide on an action for one of the available symbols.
+Return ONLY a JSON object with the following format:
+{{
+    "action": "BUY" | "SELL" | "HOLD",
+    "symbol": "<symbol from available symbols>",
+    "quantity": <integer>,
+    "reason": "<short explanation>"
+}}
+
+Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward trend detected"}}
+"""
         
         try:
             response = self.model.generate_content(prompt)
@@ -103,9 +159,12 @@ class StrategyRunner:
             text = response.text.strip()
             if text.startswith('```json'):
                 text = text[7:-3]
+            elif text.startswith('```'):
+                text = text[3:-3]
             return text
         except Exception as e:
             logger.error(f"LLM Error: {e}")
+            return None
             return None
 
     async def execute_decision(self, decision_json, price):
@@ -119,21 +178,33 @@ class StrategyRunner:
             
             logger.info(f"LLM Decision: {action} {quantity} - {reason}")
             
+            # Log to user-friendly bot.log
+            if action == 'HOLD':
+                bot_actions_logger.info(f"📊 Decision: HOLD - {reason}")
+            elif action in ['BUY', 'SELL']:
+                bot_actions_logger.info(f"📊 Decision: {action} {quantity} units - {reason}")
+            
             if action in ['BUY', 'SELL'] and quantity > 0:
                 # Risk Check
                 if self.risk_manager.check_trade_allowed('BHP', action, quantity, price):
                     logger.info(f"Executing {action} {quantity} BHP...")
+                    bot_actions_logger.info(f"✅ Executing: {action} {quantity} units at ${price:.2f}")
                     result = await self.bot.place_order_async('BHP', action, quantity)
                     logger.info(f"Order Result: {result}")
+                    if result:
+                        bot_actions_logger.info(f"✅ Order Completed: {result}")
                 else:
                     logger.warning("Trade blocked by Risk Manager.")
+                    bot_actions_logger.info(f"⛔ Trade Blocked: Risk limits exceeded")
             elif action == 'HOLD':
                 logger.info("Holding position.")
             
         except json.JSONDecodeError:
             logger.error(f"Failed to parse LLM response: {decision_json}")
+            bot_actions_logger.info(f"⚠️ Error: Could not parse trading decision")
         except Exception as e:
             logger.error(f"Execution Error: {e}")
+            bot_actions_logger.info(f"⚠️ Error during execution: {str(e)}")
 
     async def cleanup(self):
         """Cleanup and close all connections."""
@@ -174,6 +245,7 @@ class StrategyRunner:
                         loss_percent = (self.risk_manager.daily_loss / self.risk_manager.start_of_day_equity) * 100
                         if loss_percent > MAX_DAILY_LOSS_PERCENT:
                             logger.error(f"Max daily loss exceeded: {loss_percent:.2f}% > {MAX_DAILY_LOSS_PERCENT}%. Stopping loop.")
+                            bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded ({loss_percent:.2f}%)")
                             break
 
                     # 2. Fetch Data
@@ -207,20 +279,42 @@ class StrategyRunner:
                             quantity = 0
 
                         self.log_decision(total_pnl, market_data, decision_json, action, reason)
-                        
-                        if action in ['BUY', 'SELL'] and quantity > 0:
-                            # Route to correct bot
-                            if symbol == 'BHP':
-                                 # Risk Check needs price
-                                 price = ib_data['price'] if ib_data else 0
-                                 if self.risk_manager.check_trade_allowed(symbol, action, quantity, price):
-                                     await self.ib_bot.place_order_async(symbol, action, quantity)
-                            elif symbol == 'BTC/USD':
-                                 price = gemini_data['price'] if gemini_data else 0
-                                 if self.risk_manager.check_trade_allowed(symbol, action, quantity, price):
-                                     await self.gemini_bot.place_order_async(symbol, action, quantity)
-                            else:
-                                logger.warning(f"Unknown symbol: {symbol}")
+                    
+                    # Log decision to user-friendly log
+                    if action == 'HOLD':
+                        bot_actions_logger.info(f"📊 Decision: HOLD - {reason}")
+                    elif action in ['BUY', 'SELL']:
+                        # Format quantity appropriately (show more decimals for small amounts)
+                        if quantity < 1:
+                            qty_str = f"{quantity:.6f}".rstrip('0').rstrip('.')
+                        else:
+                            qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
+                        bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol} - {reason}")
+                    
+                    if action in ['BUY', 'SELL'] and quantity > 0:
+                        # Route to correct bot
+                        if symbol == 'BHP':
+                             # Risk Check needs price
+                             price = ib_data['price'] if ib_data else 0
+                             if self.risk_manager.check_trade_allowed(symbol, action, quantity, price):
+                                 bot_actions_logger.info(f"✅ Executing: {action} {quantity} {symbol} at ${price:.2f}")
+                                 await self.ib_bot.place_order_async(symbol, action, quantity)
+                             else:
+                                 bot_actions_logger.info(f"⛔ Trade Blocked: Risk limits exceeded")
+                        elif symbol == 'BTC/USD':
+                             price = gemini_data['price'] if gemini_data else 0
+                             if self.risk_manager.check_trade_allowed(symbol, action, quantity, price):
+                                 # Format fractional crypto amounts nicely
+                                 if quantity < 1:
+                                     qty_str = f"{quantity:.6f}".rstrip('0').rstrip('.')
+                                 else:
+                                     qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
+                                 bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f}")
+                                 await self.gemini_bot.place_order_async(symbol, action, quantity)
+                             else:
+                                 bot_actions_logger.info(f"⛔ Trade Blocked: Risk limits exceeded")
+                        else:
+                            logger.warning(f"Unknown symbol: {symbol}")
                     
                     # 5. Sleep
                     logger.info("Sleeping for 10 seconds...")

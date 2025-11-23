@@ -21,8 +21,8 @@ class LoggerWriter:
 def setup_logging():
     """
     Configures the logging system.
-    - bot.log: INFO level (for Dashboard)
-    - console.log: DEBUG level (for Debugging, captures stdout/stderr)
+    - bot.log: User-friendly log showing only trading decisions and reasoning (via bot_actions logger)
+    - console.log: Technical DEBUG level log (for Debugging, captures stdout/stderr)
     - Terminal: INFO level
     """
     # Save original streams to avoid infinite loops
@@ -38,29 +38,33 @@ def setup_logging():
         logger.handlers.clear()
 
     # Formatters
-    simple_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    simple_formatter = logging.Formatter('%(asctime)s - %(message)s')
     detailed_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-    # 1. Dashboard Log (bot.log)
-    # Only INFO and above, simplified format
-    bot_handler = logging.FileHandler('bot.log', mode='a')
-    bot_handler.setLevel(logging.INFO)
-    bot_handler.setFormatter(simple_formatter)
-    logger.addHandler(bot_handler)
-
-    # 2. Debug Log (console.log)
+    # 1. Console Log (console.log) - Technical debug log
     # DEBUG and above, detailed format, captures everything
     console_handler = logging.FileHandler('console.log', mode='w') # Overwrite for fresh debug log each run
     console_handler.setLevel(logging.DEBUG)
     console_handler.setFormatter(detailed_formatter)
     logger.addHandler(console_handler)
 
-    # 3. Real Terminal Output
+    # 2. Real Terminal Output
     # So the user still sees what's going on
     stream_handler = logging.StreamHandler(original_stdout)
     stream_handler.setLevel(logging.INFO)
-    stream_handler.setFormatter(simple_formatter)
+    stream_handler.setFormatter(detailed_formatter)
     logger.addHandler(stream_handler)
+
+    # 3. Bot Actions Log (bot.log) - User-friendly log
+    # Create a separate logger specifically for user-facing bot actions
+    bot_actions_logger = logging.getLogger('bot_actions')
+    bot_actions_logger.setLevel(logging.INFO)
+    bot_actions_logger.propagate = False  # Don't propagate to root logger
+    
+    bot_handler = logging.FileHandler('bot.log', mode='w')  # Overwrite for fresh log each run
+    bot_handler.setLevel(logging.INFO)
+    bot_handler.setFormatter(simple_formatter)
+    bot_actions_logger.addHandler(bot_handler)
 
     # Redirect stdout and stderr to the logger
     # We use specific loggers for these so we can identify the source
@@ -68,3 +72,5 @@ def setup_logging():
     sys.stderr = LoggerWriter(logging.getLogger('STDERR'), logging.ERROR)
 
     logging.info("Logging initialized. stdout/stderr redirected to console.log")
+    
+    return bot_actions_logger

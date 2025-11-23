@@ -102,7 +102,7 @@ class GeminiTrader(BaseTrader):
             return None
 
     async def place_order_async(self, symbol, action, quantity):
-        """Places a market order."""
+        """Places a limit order (Gemini requires limit orders)."""
         if not self.connected:
             return None
 
@@ -110,8 +110,21 @@ class GeminiTrader(BaseTrader):
             side = 'buy' if action == 'BUY' else 'sell'
             logger.info(f"Placing Gemini order: {side} {quantity} {symbol}")
             
-            # Create market order
-            order = await self.exchange.create_market_order(symbol, side, quantity)
+            # Get current market price to set limit price
+            ticker = await self.exchange.fetch_ticker(symbol)
+            
+            # For immediate execution (like market order):
+            # - BUY: use ask price (willing to pay the current ask)
+            # - SELL: use bid price (willing to accept the current bid)
+            if side == 'buy':
+                limit_price = ticker['ask']
+            else:
+                limit_price = ticker['bid']
+            
+            logger.info(f"Placing limit order at ${limit_price}")
+            
+            # Create limit order
+            order = await self.exchange.create_limit_order(symbol, side, quantity, limit_price)
             
             return {
                 'order_id': order['id'],

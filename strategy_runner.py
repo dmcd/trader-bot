@@ -105,6 +105,10 @@ class StrategyRunner:
         # Initialize trading context
         self.context = TradingContext(self.db, self.session_id)
         
+        # Sync trades from exchange to ensure local state is up to date before risk/holdings init
+        logger.info("Syncing trades from exchange before initialization...")
+        await self.sync_trades_from_exchange()
+        
         # Seed risk manager with persisted start-of-day equity to survive restarts
         start_equity = None
         if self.session and self.session.get('starting_balance') is not None:

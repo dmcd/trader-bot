@@ -316,23 +316,27 @@ with col1:
         
         st.markdown("---")
         
-        # Active Positions Table
+        # Active Positions Table - Always show heading and table
+        st.subheader("📈 Active Positions")
         if active_positions:
-            st.subheader("📈 Active Positions")
             pos_df = pd.DataFrame(active_positions)
-            st.dataframe(
-                pos_df,
-                column_config={
-                    "Symbol": "Symbol",
-                    "Quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
-                    "Avg Price": st.column_config.NumberColumn("Avg Price", format="$%.2f"),
-                    "Current Price": st.column_config.NumberColumn("Current Price", format="$%.2f"),
-                    "Unrealized PnL": st.column_config.NumberColumn("Unrealized PnL", format="$%.2f"),
-                    "Value": st.column_config.NumberColumn("Value", format="$%.2f"),
-                },
-                hide_index=True,
-                use_container_width=True
-            )
+        else:
+            # Create empty DataFrame with the same columns
+            pos_df = pd.DataFrame(columns=['Symbol', 'Quantity', 'Avg Price', 'Current Price', 'Unrealized PnL', 'Value'])
+        
+        st.dataframe(
+            pos_df,
+            column_config={
+                "Symbol": "Symbol",
+                "Quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
+                "Avg Price": st.column_config.NumberColumn("Avg Price", format="$%.2f"),
+                "Current Price": st.column_config.NumberColumn("Current Price", format="$%.2f"),
+                "Unrealized PnL": st.column_config.NumberColumn("Unrealized PnL", format="$%.2f"),
+                "Value": st.column_config.NumberColumn("Value", format="$%.2f"),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
 
     elif session_stats:
         # Fallback if no trades yet

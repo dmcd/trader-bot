@@ -11,7 +11,7 @@ from database import TradingDatabase
 from cost_tracker import CostTracker
 from trading_context import TradingContext
 from technical_analysis import TechnicalAnalysis
-from config import GEMINI_API_KEY, TRADING_MODE, ACTIVE_EXCHANGE, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_DAILY_LOSS, LOOP_INTERVAL_SECONDS, MIN_TRADE_INTERVAL_SECONDS
+from config import GEMINI_API_KEY, TRADING_MODE, ACTIVE_EXCHANGE, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_DAILY_LOSS, LOOP_INTERVAL_SECONDS, MIN_TRADE_INTERVAL_SECONDS, FEE_RATIO_COOLDOWN
 
 
 
@@ -227,6 +227,41 @@ class StrategyRunner:
                 t['quantity'],
                 t['price']
             )
+
+    def _is_choppy(self, symbol: str, market_data_point, recent_data):
+        """
+        Simple regime filter: skip when Bollinger width is tight and RSI is neutral.
+        """
+        try:
+            if not recent_data or len(recent_data) < 20:
+                return False
+            indicators = self.technical_analysis.calculate_indicators(recent_data)
+            if not indicators:
+                return False
+            bb_width = indicators.get('bb_width', 0)
+            rsi = indicators.get('rsi', 50)
+            # Define chop as very tight bands and RSI near 50
+            if bb_width is not None and bb_width < 1.0 and abs(rsi - 50) < 5:
+                return True
+        except Exception as e:
+            logger.warning(f"Chop filter error: {e}")
+        return False
+
+    def _fees_too_high(self):
+        """
+        Check fee ratio vs gross PnL; returns True to pause when fees dominate.
+        """
+        try:
+            stats = self.db.get_session_stats(self.session_id)
+            gross = stats.get('gross_pnl', 0) or 0
+            fees = stats.get('total_fees', 0) or 0
+            if gross == 0:
+                return False
+            ratio = (fees / abs(gross)) * 100
+            return ratio >= FEE_RATIO_COOLDOWN
+        except Exception as e:
+            logger.warning(f"Fee ratio check failed: {e}")
+            return False
 
     async def get_llm_decision(self, market_data, current_pnl):
         """Asks Gemini for a trading decision."""
@@ -581,6 +616,13 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                         self.db.replace_positions(self.session_id, live_positions)
                     except Exception as e:
                         logger.warning(f"Could not refresh positions: {e}")
+
+                    # Skip trading if fees are dominating
+                    if self._fees_too_high():
+                        bot_actions_logger.info(f"⏸ Pausing: fee ratio above {FEE_RATIO_COOLDOWN}%")
+                        logger.info("Skipping trading due to high fee ratio")
+                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        continue
                     
                     # Log market data to database
                     if data and self.session_id:
@@ -596,10 +638,17 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                         except Exception as e:
                             logger.warning(f"Error logging market data: {e}")
 
-                    # 3. Get Decision
+                    # 3. Simple chop filter
+                    recent_data = self.db.get_recent_market_data(self.session_id, symbol, limit=50)
+                    if self._is_choppy(symbol, data, recent_data):
+                        bot_actions_logger.info("⏸ Skipping trade: market in chop (tight bands, neutral RSI)")
+                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        continue
+
+                    # 4. Get Decision
                     decision_json = await self.get_llm_decision(market_data, current_pnl)
                     
-                    # 4. Execute
+                    # 5. Execute
                     if decision_json:
                         # Parse for logging
                         import json as json_lib
@@ -723,9 +772,9 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                 bot_actions_logger.info(f"⛔ Trade Blocked: {risk_result.reason}")
                                 self.last_rejection_reason = risk_result.reason
                     
-                    # 5. Sleep
-                            logger.info(f"Sleeping for {LOOP_INTERVAL_SECONDS} seconds...")
-                            await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                    # 6. Sleep
+                    logger.info(f"Sleeping for {LOOP_INTERVAL_SECONDS} seconds...")
+                    await asyncio.sleep(LOOP_INTERVAL_SECONDS)
 
                 except KeyboardInterrupt:
                     logger.info("Stopping loop...")

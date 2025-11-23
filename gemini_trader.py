@@ -138,7 +138,7 @@ class GeminiTrader(BaseTrader):
             return None
 
     async def get_pnl_async(self):
-        """Calculates total USD value of assets."""
+        """Calculates total USD value of assets, minus starting balance in PAPER mode."""
         if not self.connected:
             return 0.0
 
@@ -154,11 +154,20 @@ class GeminiTrader(BaseTrader):
                 total_usd += balance['total']['USD']
                 
             # Check BTC
+            btc_price = 0
             if 'BTC' in balance['total'] and balance['total']['BTC'] > 0:
                 ticker = await self.exchange.fetch_ticker('BTC/USD')
-                total_usd += balance['total']['BTC'] * ticker['last']
-                
-            return total_usd
+                btc_price = ticker['last']
+                total_usd += balance['total']['BTC'] * btc_price
+            
+            # In PAPER mode (sandbox), subtract starting balance (1000 BTC) to show only trading PnL
+            # In LIVE mode, show actual total value
+            if self.sandbox and btc_price > 0:
+                starting_btc_value = 1000 * btc_price
+                trading_pnl = total_usd - starting_btc_value
+                return trading_pnl
+            else:
+                return total_usd
         except Exception as e:
             logger.error(f"Error calculating Gemini PnL: {e}")
             return 0.0

@@ -78,6 +78,10 @@ class TradingDatabase:
             cursor.execute("ALTER TABLE trades ADD COLUMN realized_pnl REAL DEFAULT 0.0")
         except sqlite3.OperationalError:
             pass
+        try:
+            cursor.execute("ALTER TABLE trades ADD COLUMN trade_id TEXT")
+        except sqlite3.OperationalError:
+            pass
         
         # Market data table
         cursor.execute("""
@@ -200,13 +204,21 @@ class TradingDatabase:
         return dict(row) if row else None
     
     def log_trade(self, session_id: int, symbol: str, action: str, 
-                  quantity: float, price: float, fee: float, reason: str = "", liquidity: str = "unknown", realized_pnl: float = 0.0):
+                  quantity: float, price: float, fee: float, reason: str = "", liquidity: str = "unknown", realized_pnl: float = 0.0, trade_id: str = None):
         """Log a trade to the database."""
         cursor = self.conn.cursor()
+        
+        # Check for duplicates if trade_id is provided
+        if trade_id:
+            cursor.execute("SELECT id FROM trades WHERE trade_id = ?", (trade_id,))
+            if cursor.fetchone():
+                logger.debug(f"Skipping duplicate trade {trade_id}")
+                return
+
         cursor.execute("""
-            INSERT INTO trades (session_id, timestamp, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, datetime.now().isoformat(), symbol, action, quantity, price, fee, liquidity, realized_pnl, reason))
+            INSERT INTO trades (session_id, timestamp, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, datetime.now().isoformat(), symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id))
         
         # Update session trade count and fees
         cursor.execute("""

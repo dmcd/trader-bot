@@ -78,6 +78,10 @@ class StrategyRunner:
             self.cost_tracker, 
             self.size_tier
         )
+        
+        # Trade syncing state
+        self.order_reasons = {}  # order_id -> reason
+        self.processed_trade_ids = set()
 
     async def initialize(self):
         """Connects and initializes the bot."""
@@ -306,6 +310,62 @@ class StrategyRunner:
         except Exception as e:
             logger.error(f"Reconnect failed: {e}")
 
+    async def sync_trades_from_exchange(self):
+        """Sync recent trades from exchange to DB."""
+        if not self.session_id:
+            return
+
+        try:
+            # Fetch recent trades
+            trades = await self.bot.get_my_trades_async('BTC/USD', limit=20)
+            
+            for t in trades:
+                trade_id = str(t['id'])
+                if trade_id in self.processed_trade_ids:
+                    continue
+                
+                # Check DB for existence
+                existing = self.db.conn.execute("SELECT id FROM trades WHERE trade_id = ?", (trade_id,)).fetchone()
+                if existing:
+                    self.processed_trade_ids.add(trade_id)
+                    continue
+                
+                order_id = t.get('order')
+                symbol = t['symbol']
+                side = t['side'].upper()
+                price = t['price']
+                quantity = t['amount']
+                fee = t.get('fee', {}).get('cost', 0.0)
+                
+                # Extract liquidity if available
+                liquidity = 'unknown'
+                if 'liquidity' in t.get('info', {}):
+                    liquidity = t['info']['liquidity']
+                
+                # Get reason from local memory
+                reason = self.order_reasons.get(str(order_id), "Synced from exchange")
+                
+                # Calculate realized PnL
+                realized_pnl = self._update_holdings_and_realized(symbol, side, quantity, price, fee)
+                
+                self.db.log_trade(
+                    self.session_id,
+                    symbol,
+                    side,
+                    quantity,
+                    price,
+                    fee,
+                    reason,
+                    liquidity=liquidity,
+                    realized_pnl=realized_pnl,
+                    trade_id=trade_id
+                )
+                self.processed_trade_ids.add(trade_id)
+                bot_actions_logger.info(f"✅ Synced trade: {side} {quantity} {symbol} @ ${price:,.2f} (Fee: ${fee:.4f})")
+                
+        except Exception as e:
+            logger.error(f"Error syncing trades: {e}")
+
     async def cleanup(self):
         """Cleanup and close connection."""
         logger.info("Cleaning up connections...")
@@ -463,6 +523,9 @@ class StrategyRunner:
                         except Exception as e:
                             logger.warning(f"Error logging market data: {e}")
 
+                    # 2.5 Sync Trades from Exchange
+                    await self.sync_trades_from_exchange()
+
                     # 3. Generate Signal via Strategy
                     signal = await self.strategy.generate_signal(
                         self.session_id, 
@@ -549,40 +612,17 @@ class StrategyRunner:
                                 now_ts = asyncio.get_event_loop().time()
                                 self.strategy.on_trade_executed(now_ts)
                                 
-                                # Log trade to database
-                                if self.session_id and order_result:
-                                    try:
-                                        # Use actual fill data if available
-                                        filled_qty = order_result.get('filled', quantity)
-                                        fill_price = order_result.get('avg_fill_price') or price
-                                        actual_fee = order_result.get('fee', 0.0)
-                                        
-                                        # Fallback to estimate if fee is 0 (common in sandbox or if not parsed)
-                                        if actual_fee == 0.0:
-                                            actual_fee = self.cost_tracker.calculate_trade_fee(symbol, filled_qty, fill_price, action)
+                                # Store reason for syncing
+                                if order_result and order_result.get('order_id'):
+                                    self.order_reasons[str(order_result['order_id'])] = reason
+                                    
+                                # Snapshot open orders if any remain
+                                try:
+                                    open_orders = await self.bot.get_open_orders_async()
+                                    self.db.replace_open_orders(self.session_id, open_orders)
+                                except Exception as e:
+                                    logger.warning(f"Could not snapshot open orders: {e}")
 
-                                        realized_pnl = self._update_holdings_and_realized(symbol, action, filled_qty, fill_price, actual_fee)
-                                        self.db.log_trade(
-                                            self.session_id,
-                                            symbol,
-                                            action,
-                                            filled_qty,
-                                            fill_price,
-                                            actual_fee,
-                                            reason,
-                                            liquidity=liquidity,
-                                            realized_pnl=realized_pnl
-                                        )
-                                        # Snapshot open orders if any remain
-                                        try:
-                                            open_orders = await self.bot.get_open_orders_async()
-                                            self.db.replace_open_orders(self.session_id, open_orders)
-                                        except Exception as e:
-                                            logger.warning(f"Could not snapshot open orders: {e}")
-                                    except Exception as e:
-                                        logger.warning(f"Error logging trade: {e}")
-                                elif self.session_id and not order_result:
-                                    bot_actions_logger.info("⚠️ Order failed or timed out; not logged.")
                             else:
                                 bot_actions_logger.info(f"⛔ Trade Blocked: {risk_result.reason}")
                                 self.strategy.on_trade_rejected(risk_result.reason)

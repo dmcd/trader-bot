@@ -344,3 +344,14 @@ class GeminiTrader(BaseTrader):
         except Exception as e:
             logger.error(f"Error fetching Gemini open orders: {e}")
             return []
+    async def get_my_trades_async(self, symbol: str, since: int = None, limit: int = None):
+        """Fetch past trades for a symbol."""
+        if not self.connected:
+            return []
+
+        try:
+            trades = await self.exchange.fetch_my_trades(symbol, since, limit)
+            return trades
+        except Exception as e:
+            logger.error(f"Error fetching Gemini trades for {symbol}: {e}")
+            return []

@@ -234,8 +234,14 @@ class GeminiTrader(BaseTrader):
                 else:
                     raise
 
+            # Fetch order status to handle partial fills/timeouts
+            try:
+                order = await self.exchange.fetch_order(order['id'], symbol)
+            except Exception as e:
+                logger.warning(f"Could not fetch order status: {e}")
+
             return {
-                'order_id': order['id'],
+                'order_id': order.get('id'),
                 'status': order.get('status'),
                 'filled': order.get('filled', 0),
                 'remaining': order.get('remaining', 0),

@@ -113,15 +113,23 @@ class IBTrader(BaseTrader):
         trade = self.ib.placeOrder(contract, order)
         logger.info(f"Order placed: {action} {quantity} {symbol}")
         
-        # Wait for order status to update
-        await asyncio.sleep(1)
+        # Wait for order status updates; timeout after a few seconds
+        try:
+            await asyncio.wait_for(trade.fillEvent, timeout=5)
+        except Exception:
+            pass  # proceed with whatever status we have
         
+        status = trade.orderStatus.status
+        filled = trade.orderStatus.filled
+        remaining = trade.orderStatus.remaining
+        avg_price = trade.orderStatus.avgFillPrice
+
         return {
             'order_id': trade.order.orderId,
-            'status': trade.orderStatus.status,
-            'filled': trade.orderStatus.filled,
-            'remaining': trade.orderStatus.remaining,
-            'avg_fill_price': trade.orderStatus.avgFillPrice
+            'status': status,
+            'filled': filled,
+            'remaining': remaining,
+            'avg_fill_price': avg_price
         }
     
     async def get_pnl_async(self):

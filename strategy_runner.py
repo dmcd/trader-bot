@@ -69,6 +69,7 @@ class StrategyRunner:
         # Simple in-memory holdings tracker for realized PnL
         self.holdings = {}  # symbol -> {'qty': float, 'avg_cost': float}
         self.size_tier = SIZE_TIER if SIZE_TIER in ORDER_SIZE_BY_TIER else 'MODERATE'
+        self.size_tier = SIZE_TIER if SIZE_TIER in ORDER_SIZE_BY_TIER else 'MODERATE'
 
     async def initialize(self):
         """Connects and initializes the bot."""

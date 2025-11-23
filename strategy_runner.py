@@ -70,6 +70,7 @@ class StrategyRunner:
         self.holdings = {}  # symbol -> {'qty': float, 'avg_cost': float}
         self.size_tier = SIZE_TIER if SIZE_TIER in ORDER_SIZE_BY_TIER else 'MODERATE'
         self._last_reconnect = 0.0
+        self._kill_switch = False
         self.size_tier = SIZE_TIER if SIZE_TIER in ORDER_SIZE_BY_TIER else 'MODERATE'
 
     async def initialize(self):
@@ -285,6 +286,7 @@ class StrategyRunner:
                     logger.error(f"Error flattening {symbol}: {e}")
         except Exception as e:
             logger.error(f"Flatten-all failed: {e}")
+            self._kill_switch = True
 
     async def _reconnect_bot(self):
         """Reconnect the broker client with a cooldown to avoid thrash."""
@@ -669,12 +671,14 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded ({loss_percent:.2f}%)")
                             # Attempt to flatten positions before stopping
                             await self._close_all_positions_safely()
+                            self._kill_switch = True
                             break
                     # Check absolute daily loss
                     if self.risk_manager.daily_loss > MAX_DAILY_LOSS:
                         logger.error(f"Max daily loss exceeded: ${self.risk_manager.daily_loss:.2f} > ${MAX_DAILY_LOSS:.2f}. Stopping loop.")
                         bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded (${self.risk_manager.daily_loss:.2f})")
                         await self._close_all_positions_safely()
+                        self._kill_switch = True
                         break
 
                     # 2. Fetch Market Data
@@ -701,6 +705,12 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                     if self._fees_too_high():
                         bot_actions_logger.info(f"⏸ Pausing: fee ratio above {FEE_RATIO_COOLDOWN}%")
                         logger.info("Skipping trading due to high fee ratio")
+                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        continue
+
+                    # Kill switch check
+                    if self._kill_switch:
+                        bot_actions_logger.info("🛑 Kill switch active; not trading.")
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
                     
@@ -823,15 +833,22 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                 bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (fee: ${fee:.4f})")
                                 
                                 # Execute trade
-                                try:
-                                    order_result = await asyncio.wait_for(
-                                        self.bot.place_order_async(symbol, action, quantity, prefer_maker=True),
-                                        timeout=15
-                                    )
-                                except asyncio.TimeoutError:
-                                    logger.error("Order placement timed out")
-                                    await self._reconnect_bot()
-                                    order_result = None
+                                retries = 0
+                                order_result = None
+                                while retries < 2 and order_result is None:
+                                    try:
+                                        order_result = await asyncio.wait_for(
+                                            self.bot.place_order_async(symbol, action, quantity, prefer_maker=True),
+                                            timeout=15
+                                        )
+                                    except asyncio.TimeoutError:
+                                        logger.error("Order placement timed out")
+                                        await self._reconnect_bot()
+                                        retries += 1
+                                    except Exception as e:
+                                        logger.error(f"Order placement error: {e}")
+                                        await self._reconnect_bot()
+                                        retries += 1
 
                                 # Capture reported liquidity if present
                                 if order_result and isinstance(order_result, dict) and order_result.get('liquidity'):

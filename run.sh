@@ -8,6 +8,7 @@ cleanup() {
     if pgrep -f "strategy_runner.py" > /dev/null 2>&1; then
         echo "Stopping all Trader Bot processes..."
         pkill -f "strategy_runner.py" 2>/dev/null
+        pkill -f "streamlit" 2>/dev/null
         sleep 1  # Give processes time to shut down gracefully
     fi
     

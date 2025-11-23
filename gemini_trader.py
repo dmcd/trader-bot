@@ -260,18 +260,7 @@ class GeminiTrader(BaseTrader):
 
         try:
             balance = await self.exchange.fetch_balance()
-            total_usd = 0.0
-
-            # Sum USD and major holdings
-            if 'USD' in balance['total']:
-                total_usd += balance['total']['USD']
-
-            # Check BTC
-            btc_price = 0
-            if 'BTC' in balance['total'] and balance['total']['BTC'] > 0:
-                ticker = await self.exchange.fetch_ticker('BTC/USD')
-                btc_price = ticker['last']
-                total_usd += balance['total']['BTC'] * btc_price
+            total_usd, btc_price = await self._calculate_total_usd(balance)
 
             # In PAPER mode (sandbox), subtract starting balances to show only trading PnL
             # In LIVE mode, show actual total value
@@ -284,6 +273,19 @@ class GeminiTrader(BaseTrader):
                 return total_usd
         except Exception as e:
             logger.error(f"Error calculating Gemini PnL: {e}")
+            return 0.0
+
+    async def get_equity_async(self):
+        """Returns total USD-equivalent account value (no sandbox adjustment)."""
+        if not self.connected:
+            return 0.0
+
+        try:
+            balance = await self.exchange.fetch_balance()
+            total_usd, _ = await self._calculate_total_usd(balance)
+            return total_usd
+        except Exception as e:
+            logger.error(f"Error calculating Gemini equity: {e}")
             return 0.0
 
     async def get_adjusted_btc_balance(self, btc_balance: float) -> float:
@@ -344,6 +346,22 @@ class GeminiTrader(BaseTrader):
         except Exception as e:
             logger.error(f"Error fetching Gemini open orders: {e}")
             return []
+
+    async def _calculate_total_usd(self, balance: dict):
+        """Helper to value holdings in USD; returns (total_usd, btc_price_used)."""
+        total_usd = 0.0
+        btc_price = 0.0
+
+        if 'USD' in balance.get('total', {}):
+            total_usd += balance['total']['USD']
+
+        btc_qty = balance.get('total', {}).get('BTC', 0)
+        if btc_qty and btc_qty > 0:
+            ticker = await self.exchange.fetch_ticker('BTC/USD')
+            btc_price = ticker.get('last') or 0.0
+            total_usd += btc_qty * btc_price
+
+        return total_usd, btc_price
     async def get_my_trades_async(self, symbol: str, since: int = None, limit: int = None):
         """Fetch past trades for a symbol."""
         if not self.connected:

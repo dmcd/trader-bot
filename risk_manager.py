@@ -26,18 +26,16 @@ class RiskManager:
         if start_equity is not None:
             self.start_of_day_equity = start_equity
 
-    def update_pnl(self, current_equity):
-        """Updates the daily PnL based on equity change."""
+    def update_equity(self, current_equity: float):
+        """Track drawdown off start-of-day equity (keeps loss limits consistent)."""
         if self.start_of_day_equity is None:
             self.start_of_day_equity = current_equity
-        
-        # Calculate change from start of day (simplified PnL tracking)
-        # In a real system, we'd track realized vs unrealized more carefully
-        self.daily_loss = self.start_of_day_equity - current_equity
-        
-        # If profit, daily_loss is negative
-        if self.daily_loss < 0:
-            self.daily_loss = 0 # We only care about loss for the limit
+
+        drawdown = (self.start_of_day_equity or 0) - (current_equity or 0)
+        self.daily_loss = max(0.0, drawdown)
+
+    # Backward compatibility
+    update_pnl = update_equity
 
     def update_positions(self, positions: dict):
         """Updates the current positions for exposure calculation.
@@ -81,21 +79,8 @@ class RiskManager:
         # 3. Check Max Positions (only for BUY orders)
         if action == 'BUY':
             # Check Total Exposure
-            current_exposure = 0.0
-            for sym, data in self.positions.items():
-                qty = data.get('quantity', 0)
-                curr_price = data.get('current_price', 0)
-                
-                # Adjust BTC quantity to exclude sandbox starting balance
-                if self.is_sandbox and sym in ['BTC/USD', 'BTC']:
-                    qty = max(0.0, qty - self.SANDBOX_STARTING_BTC)
-                
-                # If we don't have current price, use the trade price if it's the same symbol, else skip (risky but practical)
-                if sym == symbol:
-                    curr_price = price
-                current_exposure += qty * curr_price
-            
-            # Add new trade exposure
+            price_overrides = {symbol: price} if price else None
+            current_exposure = self.get_total_exposure(price_overrides=price_overrides)
             new_exposure = current_exposure + order_value
             
             if new_exposure > MAX_TOTAL_EXPOSURE:
@@ -112,3 +97,22 @@ class RiskManager:
             pass
 
         return RiskCheckResult(True, "Trade allowed")
+
+    def get_total_exposure(self, price_overrides: dict = None) -> float:
+        """Return total notional exposure using marked prices (sandbox-adjusted)."""
+        exposure = 0.0
+        for sym, data in self.positions.items():
+            qty = data.get('quantity', 0) or 0.0
+            curr_price = 0.0
+
+            if price_overrides and sym in price_overrides and price_overrides[sym]:
+                curr_price = price_overrides[sym]
+            else:
+                curr_price = data.get('current_price', 0) or 0.0
+
+            if self.is_sandbox and sym in ['BTC/USD', 'BTC']:
+                qty = max(0.0, qty - self.SANDBOX_STARTING_BTC)
+
+            exposure += qty * curr_price
+
+        return exposure

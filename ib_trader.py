@@ -157,6 +157,10 @@ class IBTrader(BaseTrader):
                     cash = None
         return net_liq if net_liq is not None else (cash or 0.0)
 
+    async def get_equity_async(self):
+        """IB NetLiq already reflects total equity."""
+        return await self.get_pnl_async()
+
     def run(self):
         """Keeps the script running to maintain connection (for standalone testing)."""
         self.ib.run()

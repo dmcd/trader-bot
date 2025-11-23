@@ -11,11 +11,13 @@ class TestRiskManager(unittest.TestCase):
         self.orig_max_total_exposure = rm_module.MAX_TOTAL_EXPOSURE
         self.orig_daily_loss_pct = rm_module.MAX_DAILY_LOSS_PERCENT
         self.orig_daily_loss_abs = rm_module.MAX_DAILY_LOSS
+        self.orig_min_trade_size = rm_module.MIN_TRADE_SIZE
 
         rm_module.MAX_ORDER_VALUE = 500.0
         rm_module.MAX_TOTAL_EXPOSURE = 1000.0
         rm_module.MAX_DAILY_LOSS_PERCENT = 5.0
         rm_module.MAX_DAILY_LOSS = 50.0
+        rm_module.MIN_TRADE_SIZE = 1.0
 
         self.rm = RiskManager()
         # Seed start of day equity so percent checks work
@@ -26,6 +28,7 @@ class TestRiskManager(unittest.TestCase):
         rm_module.MAX_TOTAL_EXPOSURE = self.orig_max_total_exposure
         rm_module.MAX_DAILY_LOSS_PERCENT = self.orig_daily_loss_pct
         rm_module.MAX_DAILY_LOSS = self.orig_daily_loss_abs
+        rm_module.MIN_TRADE_SIZE = self.orig_min_trade_size
 
     def test_invalid_price_or_quantity_rejected(self):
         result = self.rm.check_trade_allowed("BHP", "BUY", 0, 100.0)
@@ -40,8 +43,8 @@ class TestRiskManager(unittest.TestCase):
         self.assertIn("Order value", result.reason)
 
     def test_daily_loss_percent_and_absolute(self):
-        # Simulate loss beyond percent
-        self.rm.daily_loss = (rm_module.MAX_DAILY_LOSS_PERCENT / 100.0 * self.rm.start_of_day_equity) + 1
+        # Simulate equity drop beyond percent
+        self.rm.update_equity(890.0)  # 11% drawdown from 1000
         result = self.rm.check_trade_allowed("BHP", "BUY", 1, 10.0)
         self.assertFalse(result.allowed)
 
@@ -73,6 +76,14 @@ class TestRiskManager(unittest.TestCase):
         self.rm.update_positions({"ABC": {"quantity": 9.0, "current_price": near_cap_price}})
         result = self.rm.check_trade_allowed("XYZ", "BUY", 1, price=1.0)
         self.assertTrue(result.allowed)
+
+    def test_get_total_exposure_respects_overrides_and_sandbox(self):
+        self.rm.is_sandbox = True
+        self.rm.update_positions({"BTC/USD": {"quantity": 1005.0, "current_price": 30000.0}})
+
+        exposure = self.rm.get_total_exposure(price_overrides={"BTC/USD": 20000.0})
+        # Sandbox should discount 1000 BTC, leaving 5 * 20000
+        self.assertAlmostEqual(100000.0, exposure)
 
 
 if __name__ == "__main__":

@@ -51,7 +51,7 @@ class TestLLMStrategy(IsolatedAsyncioTestCase):
         self.mock_ta.calculate_indicators.return_value = {'bb_width': 2.0, 'rsi': 50} # Not choppy
         
         # Execute
-        signal = await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000)
+        signal = await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000, 0)
         
         # Should return None due to cooldown
         self.assertIsNone(signal)
@@ -81,7 +81,7 @@ class TestLLMStrategy(IsolatedAsyncioTestCase):
         with patch.object(self.strategy, '_get_llm_decision', new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = '{"action": "BUY", "symbol": "BTC/USD", "quantity": 0.1, "reason": "Test"}'
             
-            signal = await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000)
+            signal = await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000, 0)
             
             self.assertIsNotNone(signal)
             self.assertEqual(signal.action, "BUY")

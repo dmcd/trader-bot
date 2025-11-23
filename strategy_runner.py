@@ -91,12 +91,12 @@ class StrategyRunner:
         # Connect to the active exchange
         await self.bot.connect_async()
         
-        # Get initial PnL
-        initial_pnl = await self.bot.get_pnl_async()
-        logger.info(f"{self.exchange_name} PnL: {initial_pnl}")
+        # Get initial equity (full account value)
+        initial_equity = await self.bot.get_equity_async()
+        logger.info(f"{self.exchange_name} Equity: {initial_equity}")
         
         # Create or load today's trading session
-        self.session_id = self.db.get_or_create_session(starting_balance=initial_pnl)
+        self.session_id = self.db.get_or_create_session(starting_balance=initial_equity)
         self.session = self.db.get_session(self.session_id)
         
         # Clear any old pending commands from previous sessions
@@ -135,8 +135,8 @@ class StrategyRunner:
             logger.info(f"Overriding daily loss percent to {tier_loss_pct}% for tier {self.size_tier}")
         self.daily_loss_pct = tier_loss_pct
 
-        self.risk_manager.update_pnl(initial_pnl)
-        bot_actions_logger.info(f"💰 Starting Portfolio Value: ${initial_pnl:,.2f}")
+        self.risk_manager.update_equity(initial_equity)
+        bot_actions_logger.info(f"💰 Starting Equity: ${initial_equity:,.2f}")
 
     async def reconcile_exchange_state(self):
         """Pull positions/open orders from exchange and compare to local session."""
@@ -458,15 +458,14 @@ class StrategyRunner:
                             self.running = False
                             break
                     
-                    # 1. Update PnL
-                    current_pnl = await self.bot.get_pnl_async()
-                    # Log equity snapshot for MTM tracking
+                    # 1. Update Equity / PnL
+                    current_equity = await self.bot.get_equity_async()
                     if self.session_id is not None:
                         try:
-                            self.db.log_equity_snapshot(self.session_id, current_pnl)
+                            self.db.log_equity_snapshot(self.session_id, current_equity)
                         except Exception as e:
                             logger.warning(f"Could not log equity snapshot: {e}")
-                    self.risk_manager.update_pnl(current_pnl)
+                    self.risk_manager.update_equity(current_equity)
                     
                     # Check percentage-based daily loss (tier-aware)
                     if self.risk_manager.start_of_day_equity and self.risk_manager.start_of_day_equity > 0:
@@ -507,6 +506,35 @@ class StrategyRunner:
                     except Exception as e:
                         logger.warning(f"Could not refresh positions: {e}")
 
+                    # Build latest positions with marks for exposure checks
+                    positions_dict = {}
+                    current_exposure = 0.0
+                    try:
+                        positions_data = self.db.get_positions(self.session_id)
+                        for pos in positions_data:
+                            sym = pos['symbol']
+                            current_price = pos.get('avg_price') or 0
+
+                            # Prefer most recent market tick
+                            recent_data = self.db.get_recent_market_data(self.session_id, sym, limit=1)
+                            if recent_data and recent_data[0].get('price'):
+                                current_price = recent_data[0]['price']
+
+                            # If this is the actively traded symbol, use live price
+                            if sym == symbol and data and data.get('price'):
+                                current_price = data['price']
+
+                            if current_price:
+                                positions_dict[sym] = {
+                                    'quantity': pos['quantity'],
+                                    'current_price': current_price
+                                }
+                        self.risk_manager.update_positions(positions_dict)
+                        price_overrides = {symbol: data['price']} if data and data.get('price') else None
+                        current_exposure = self.risk_manager.get_total_exposure(price_overrides=price_overrides)
+                    except Exception as e:
+                        logger.warning(f"Could not build positions for exposure: {e}")
+
                     # Kill switch check
                     if self._kill_switch:
                         bot_actions_logger.info("🛑 Kill switch active; not trading.")
@@ -532,9 +560,10 @@ class StrategyRunner:
 
                     # 3. Generate Signal via Strategy
                     signal = await self.strategy.generate_signal(
-                        self.session_id, 
-                        market_data, 
-                        current_pnl, 
+                        self.session_id,
+                        market_data,
+                        current_equity,
+                        current_exposure,
                         self.context
                     )
 
@@ -565,22 +594,6 @@ class StrategyRunner:
                                 logger.warning("Skipped trade: missing price data")
                                 continue
 
-                            # Update RiskManager with current positions for exposure calculation
-                            positions_data = self.db.get_positions(self.session_id)
-                            positions_dict = {}
-                            for pos in positions_data:
-                                sym = pos['symbol']
-                                current_price = pos.get('avg_price') or 0
-                                recent_data = self.db.get_recent_market_data(self.session_id, sym, limit=1)
-                                if recent_data and recent_data[0].get('price'):
-                                    current_price = recent_data[0]['price']
-                                if current_price:
-                                    positions_dict[sym] = {
-                                        'quantity': pos['quantity'],
-                                        'current_price': current_price
-                                    }
-                            self.risk_manager.update_positions(positions_dict)
-                            
                             risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
 
                             if risk_result.allowed:

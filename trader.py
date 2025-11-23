@@ -30,6 +30,10 @@ class BaseTrader(ABC):
     async def get_pnl_async(self):
         raise NotImplementedError
 
+    async def get_equity_async(self):
+        """Return total account equity; default to PnL if not overridden."""
+        return await self.get_pnl_async()
+
     @abstractmethod
     async def get_positions_async(self):
         raise NotImplementedError

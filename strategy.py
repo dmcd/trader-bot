@@ -41,7 +41,7 @@ class BaseStrategy(ABC):
         self.cost_tracker = cost_tracker
 
     @abstractmethod
-    async def generate_signal(self, session_id: int, market_data: Dict[str, Any], current_pnl: float, context: Any = None) -> Optional[StrategySignal]:
+    async def generate_signal(self, session_id: int, market_data: Dict[str, Any], current_equity: float, current_exposure: float, context: Any = None) -> Optional[StrategySignal]:
         """
         Analyze market data and return a trading signal.
         """
@@ -120,7 +120,7 @@ class LLMStrategy(BaseStrategy):
             logger.warning(f"Fee ratio check failed: {e}")
             return False
 
-    async def generate_signal(self, session_id: int, market_data: Dict[str, Any], current_pnl: float, context: Any = None) -> Optional[StrategySignal]:
+    async def generate_signal(self, session_id: int, market_data: Dict[str, Any], current_equity: float, current_exposure: float, context: Any = None) -> Optional[StrategySignal]:
         if not market_data:
             return None
 
@@ -165,17 +165,24 @@ class LLMStrategy(BaseStrategy):
         priority_flag = "true" if priority and allow_break_glass else "false"
         spacing_flag = "clear" if can_trade else f"cooldown {MIN_TRADE_INTERVAL_SECONDS - (now_ts - self.last_trade_ts):.0f}s"
         
+        order_cap_value = min(MAX_ORDER_VALUE, ORDER_SIZE_BY_TIER.get(self.size_tier, MAX_ORDER_VALUE))
+        exposure_cap = MAX_TOTAL_EXPOSURE
+        exposure_now = current_exposure if current_exposure is not None else 0.0
+        equity_now = current_equity if current_equity is not None else 0.0
+        headroom = max(0.0, exposure_cap - exposure_now)
+
         prompt_context = (
             f"- Cooldown: {spacing_flag}\n"
             f"- Priority signal allowed: {priority_flag}\n"
             f"- Fee regime: {fee_ratio_flag}\n"
             f"- Last trade age: {last_trade_age_str}\n"
-            f"- Order cap: ${min(MAX_ORDER_VALUE, ORDER_SIZE_BY_TIER.get(self.size_tier, MAX_ORDER_VALUE)):.2f}\n"
-            f"- Exposure cap: ${MAX_TOTAL_EXPOSURE:.2f}\n"
+            f"- Equity: ${equity_now:,.2f}\n"
+            f"- Exposure: ${exposure_now:,.2f} of ${exposure_cap:,.2f} (room ${headroom:,.2f})\n"
+            f"- Order cap: ${order_cap_value:.2f}\n"
             f"- Min trade size: ${MIN_TRADE_SIZE:.2f}"
         )
 
-        decision_json = await self._get_llm_decision(session_id, market_data, current_pnl, prompt_context, context)
+        decision_json = await self._get_llm_decision(session_id, market_data, current_equity, prompt_context, context)
         
         if decision_json:
             try:
@@ -188,6 +195,16 @@ class LLMStrategy(BaseStrategy):
                     # Update state if we are signaling a trade
                     if allow_break_glass and not can_trade:
                          self._last_break_glass = now_ts
+
+                    price = data.get('price') if data else None
+
+                    if action == 'BUY':
+                        max_order_value = min(order_cap_value, headroom)
+                        if not price or max_order_value <= 0:
+                            return StrategySignal('HOLD', symbol, 0, 'No exposure headroom')
+                        max_qty = max_order_value / price
+                        if quantity > max_qty:
+                            quantity = max_qty
                     
                     # We don't update last_trade_ts here, we let the runner do it upon execution success? 
                     # Actually better to update it here to prevent double signaling if execution takes time, 
@@ -205,10 +222,12 @@ class LLMStrategy(BaseStrategy):
         
         return None
 
-    async def _get_llm_decision(self, session_id, market_data, current_pnl, prompt_context=None, trading_context=None):
+    async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None):
         """Asks Gemini for a trading decision."""
         if not GEMINI_API_KEY:
             return None
+
+        equity_now = current_equity if current_equity is not None else 0.0
 
         available_symbols = list(market_data.keys())
         if not available_symbols:
@@ -243,7 +262,7 @@ class LLMStrategy(BaseStrategy):
 You are an autonomous crypto trading bot. Your goal is to make small, profitable trades.
 
 Current Status:
-- Portfolio Value: ${current_pnl:,.2f} USD
+- Equity: ${equity_now:,.2f} USD
 - Market Data:{market_summary}
 
 Risk Constraints:
@@ -261,7 +280,7 @@ Calculate the appropriate fractional amount to stay within the ${MAX_ORDER_VALUE
 You are an autonomous stock trading bot. Your goal is to make small, profitable trades.
 
 Current Status:
-- Portfolio Value: ${current_pnl:,.2f} AUD
+- Equity: ${equity_now:,.2f} AUD
 - Market Data:{market_summary}
 
 Risk Constraints:

@@ -517,11 +517,11 @@ class StrategyRunner:
                             risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
 
                             if risk_result.allowed:
-                                # Calculate fee before execution
-                                fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, action)
+                                # Calculate fee before execution (estimate)
+                                estimated_fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, action)
                                 liquidity = "maker_intent"
                                 
-                                bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (fee: ${fee:.4f})")
+                                bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (est. fee: ${estimated_fee:.4f})")
                                 
                                 # Execute trade
                                 retries = 0
@@ -552,14 +552,23 @@ class StrategyRunner:
                                 # Log trade to database
                                 if self.session_id and order_result:
                                     try:
-                                        realized_pnl = self._update_holdings_and_realized(symbol, action, quantity, price, fee)
+                                        # Use actual fill data if available
+                                        filled_qty = order_result.get('filled', quantity)
+                                        fill_price = order_result.get('avg_fill_price') or price
+                                        actual_fee = order_result.get('fee', 0.0)
+                                        
+                                        # Fallback to estimate if fee is 0 (common in sandbox or if not parsed)
+                                        if actual_fee == 0.0:
+                                            actual_fee = self.cost_tracker.calculate_trade_fee(symbol, filled_qty, fill_price, action)
+
+                                        realized_pnl = self._update_holdings_and_realized(symbol, action, filled_qty, fill_price, actual_fee)
                                         self.db.log_trade(
                                             self.session_id,
                                             symbol,
                                             action,
-                                            quantity,
-                                            price,
-                                            fee,
+                                            filled_qty,
+                                            fill_price,
+                                            actual_fee,
                                             reason,
                                             liquidity=liquidity,
                                             realized_pnl=realized_pnl

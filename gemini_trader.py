@@ -246,7 +246,8 @@ class GeminiTrader(BaseTrader):
                 'filled': order.get('filled', 0),
                 'remaining': order.get('remaining', 0),
                 'avg_fill_price': order.get('average'),
-                'liquidity': liquidity
+                'liquidity': liquidity,
+                'fee': order.get('fee', {}).get('cost', 0.0) if order.get('fee') else 0.0
             }
         except Exception as e:
             logger.error(f"Error placing Gemini order: {e}")

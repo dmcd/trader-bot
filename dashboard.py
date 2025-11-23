@@ -239,14 +239,10 @@ st.title("🤖 AI Trader Bot Dashboard")
 if 'refresh_rate' not in st.session_state:
     st.session_state.refresh_rate = 5
 
-if 'currency' not in st.session_state:
-    st.session_state.currency = 'USD'
-
 refresh_rate = st.sidebar.slider("Refresh Rate (seconds)", 1, 60, st.session_state.refresh_rate)
 st.session_state.refresh_rate = refresh_rate
 
-currency = st.sidebar.radio("Display Currency", ['USD', 'AUD'], index=0 if st.session_state.currency == 'USD' else 1)
-st.session_state.currency = currency
+
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🤖 Bot Status")
@@ -281,7 +277,7 @@ if st.sidebar.button("🛑 Close All Positions", type="secondary", width="stretc
         st.sidebar.warning("Bot must be running to close positions")
 db.close()
 
-usd_to_aud = 1.53
+
 
 # --- Main Content ---
 tab1, tab2 = st.tabs(["🔴 Live Trading", "🧪 Backtesting"])
@@ -301,16 +297,10 @@ with tab1:
             
             gross_pnl_usd = realized_pnl + unrealized_pnl
             
-            if currency == 'AUD':
-                gross_pnl = gross_pnl_usd * usd_to_aud
-                realized_disp = realized_pnl * usd_to_aud
-                unrealized_disp = unrealized_pnl * usd_to_aud
-                currency_symbol = 'AUD'
-            else:
-                gross_pnl = gross_pnl_usd
-                realized_disp = realized_pnl
-                unrealized_disp = unrealized_pnl
-                currency_symbol = 'USD'
+            gross_pnl = gross_pnl_usd
+            realized_disp = realized_pnl
+            unrealized_disp = unrealized_pnl
+            currency_symbol = 'USD'
 
             fees = session_stats.get('total_fees', 0)
             llm_cost = session_stats.get('total_llm_cost', 0)

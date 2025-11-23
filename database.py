@@ -46,6 +46,7 @@ class TradingDatabase:
                 quantity REAL NOT NULL,
                 price REAL NOT NULL,
                 fee REAL DEFAULT 0.0,
+                liquidity TEXT DEFAULT 'unknown',
                 reason TEXT,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
@@ -65,6 +66,13 @@ class TradingDatabase:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
+
+        # Backfill liquidity column for existing installs (SQLite allows additive ALTER)
+        try:
+            cursor.execute("ALTER TABLE trades ADD COLUMN liquidity TEXT DEFAULT 'unknown'")
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
         
         # Market data table
         cursor.execute("""
@@ -176,13 +184,13 @@ class TradingDatabase:
         return dict(row) if row else None
     
     def log_trade(self, session_id: int, symbol: str, action: str, 
-                  quantity: float, price: float, fee: float, reason: str = ""):
+                  quantity: float, price: float, fee: float, reason: str = "", liquidity: str = "unknown"):
         """Log a trade to the database."""
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO trades (session_id, timestamp, symbol, action, quantity, price, fee, reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, datetime.now().isoformat(), symbol, action, quantity, price, fee, reason))
+            INSERT INTO trades (session_id, timestamp, symbol, action, quantity, price, fee, liquidity, reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, datetime.now().isoformat(), symbol, action, quantity, price, fee, liquidity, reason))
         
         # Update session trade count and fees
         cursor.execute("""

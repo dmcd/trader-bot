@@ -111,13 +111,13 @@ def load_history():
         today = date.today().isoformat()
         cursor = db.conn.cursor()
         cursor.execute(
-            "SELECT timestamp, symbol, action, price, quantity, fee, reason FROM trades WHERE session_id = (SELECT id FROM sessions WHERE date = ?)",
+            "SELECT timestamp, symbol, action, price, quantity, fee, liquidity, reason FROM trades WHERE session_id = (SELECT id FROM sessions WHERE date = ?)",
             (today,)
         )
         rows = cursor.fetchall()
         db.close()
         if rows:
-            df = pd.DataFrame(rows, columns=["timestamp", "symbol", "action", "price", "quantity", "fee", "reason"])
+            df = pd.DataFrame(rows, columns=["timestamp", "symbol", "action", "price", "quantity", "fee", "liquidity", "reason"])
             # Compute trade_value as price * quantity
             df["trade_value"] = df["price"] * df["quantity"]
 
@@ -379,7 +379,7 @@ with col1:
         
         # Dataframe - Rename 'pnl' to 'Trade PnL' for clarity
         st.dataframe(
-            df[['timestamp', 'symbol', 'action', 'price', 'quantity', 'pnl', 'reason']],
+            df[['timestamp', 'symbol', 'action', 'price', 'quantity', 'pnl', 'fee', 'reason']],
             width=None, # Use full width
             hide_index=True,
             column_config={
@@ -389,6 +389,7 @@ with col1:
                 "price": st.column_config.NumberColumn("Price", format="$%.2f"),
                 "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
                 "pnl": st.column_config.NumberColumn("Realized PnL", format="$%.2f"),
+                "fee": st.column_config.NumberColumn("Fee", format="$%.4f"),
                 "reason": st.column_config.TextColumn("Reason", width="large"),
             },
             use_container_width=True

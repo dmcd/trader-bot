@@ -465,7 +465,8 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                                 quantity,
                                                 price,
                                                 fee,
-                                                "Manual close all positions"
+                                                "Manual close all positions",
+                                                liquidity="taker"
                                             )
                                             bot_actions_logger.info(f"✅ Closed: {quantity} {symbol} @ ${price:,.2f}")
                                     except Exception as e:
@@ -622,6 +623,7 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             if risk_result.allowed:
                                 # Calculate fee before execution
                                 fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, action)
+                                liquidity = "maker_intent"
                                 
                                 # Format fractional crypto amounts nicely
                                 if quantity < 1:
@@ -645,7 +647,8 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                             quantity,
                                             price,
                                             fee,
-                                            reason
+                                            reason,
+                                            liquidity=liquidity
                                         )
                                     except Exception as e:
                                         logger.warning(f"Error logging trade: {e}")

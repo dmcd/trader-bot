@@ -1,112 +1,70 @@
-# AI Trading Bot & MCP Server
+# AI Trading Bot (IB or Gemini) + MCP + Dashboard
 
-This project implements an autonomous trading bot for Interactive Brokers (IB) using `ib_insync`, exposed via a Model Context Protocol (MCP) server, and controlled by a Gemini-powered strategy loop.
+An autonomous trading loop that talks to Interactive Brokers or Gemini via async adapters, guards orders with a risk engine, logs everything to SQLite, and exposes tooling through both a Streamlit dashboard and an MCP server.
 
-## Project Overview
+## What’s Inside
+- **Strategy loop (`strategy_runner.py`)** – orchestrates data fetch, Gemini 2.5 Flash decisioning, risk checks, order placement, logging, and cost tracking.
+- **Brokers** – `ib_trader.py` (IB via `ib_insync`) and `gemini_trader.py` (Gemini via `ccxt`, sandbox-aware precision fixes).
+- **Risk & cost controls** – `risk_manager.py` for order/daily/exposure caps, `cost_tracker.py` for fees and LLM usage.
+- **State & context** – `database.py` (SQLite), `trading_context.py` for LLM context, `technical_analysis.py` for RSI/MACD/Bollinger/SMA.
+- **Interfaces** – `dashboard.py` (Streamlit control/monitor), `server.py` (FastMCP tools for IB), `run.sh` helper to start loop + dashboard, logs in `bot.log` (human) and `console.log` (debug).
 
-The system consists of three main layers:
-1.  **Core Trading Layer (`trader.py`)**: Handles connection to IB Gateway/TWS, market data subscriptions, and order placement.
-2.  **Risk Management Layer (`risk_manager.py`)**: Acts as a safety guard, enforcing limits on daily losses and maximum order sizes before any trade is executed.
-3.  **Autonomous Strategy Layer (`strategy_runner.py`)**: The "Brain" that fetches data, prompts the Gemini LLM for trading decisions, and executes them via the Risk Manager.
-4.  **MCP Server (`server.py`)**: Exposes the bot's capabilities (Get Account, Get Price, Buy, Sell) as standard MCP tools, allowing external LLM agents to interact with the trading engine.
+## Requirements
+- Python 3.10+
+- For IB: IB Gateway/TWS running (default paper port 4002; live 7497) and an IB account.
+- For Gemini: API keys (live and/or sandbox). The trading loop always uses a single active venue: `IB` **or** `GEMINI`.
 
-## Key Files
-
--   `ib_trader.py`: `IBTrader` class. Wraps `ib_insync` for async stock trading.
--   `gemini_trader.py`: `GeminiTrader` class. Wraps `ccxt` for crypto trading.
--   `risk_manager.py`: `RiskManager` class. Checks `MAX_DAILY_LOSS` and `MAX_ORDER_VALUE`.
--   `strategy_runner.py`: Main entry point for the autonomous loop.
--   `server.py`: FastMCP server implementation.
--   `config.py`: Configuration loader (Env vars).
--   `requirements.txt`: Python dependencies.
-
-## Setup & Bootstrap
-
-### 1. Prerequisites
--   **Interactive Brokers Account**: Paper Trading account recommended.
--   **IB Gateway or TWS**: Must be running and listening on port `4002` (Paper) or `7497` (Live).
--   **Python 3.10+**
-
-### 2. Installation
+## Setup
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Configuration
-Create a `.env` file in the root directory:
+Create a `.env` in the repo root (fill the secrets you use):
 ```env
-# Trading Mode
-TRADING_MODE=PAPER
+# Core routing
+TRADING_MODE=PAPER            # PAPER or LIVE
+ACTIVE_EXCHANGE=GEMINI        # IB or GEMINI
 
-# IB Connection
+# IB
 IB_HOST=127.0.0.1
 IB_PORT=4002
 IB_CLIENT_ID=1
 
-# Risk Limits (AUD)
-MAX_DAILY_LOSS=50.0
-MAX_ORDER_VALUE=100.0
-MAX_POSITIONS=3
-
-# Gemini API Key (Required for Strategy Runner)
-GEMINI_API_KEY=your_gemini_api_key_here
-
-# Crypto Support (Gemini Exchange)
-# Get keys from: https://exchange.gemini.com/settings/api
-GEMINI_EXCHANGE_API_KEY=your_key
-GEMINI_EXCHANGE_SECRET=your_secret
-
-# Sandbox Support (Paper Trading)
-# Get keys from: https://exchange.sandbox.gemini.com/settings/api
+# Gemini (LLM and exchange)
+GEMINI_API_KEY=your_gemini_llm_key
+GEMINI_EXCHANGE_API_KEY=your_gemini_key
+GEMINI_EXCHANGE_SECRET=your_gemini_secret
 GEMINI_SANDBOX_API_KEY=your_sandbox_key
 GEMINI_SANDBOX_SECRET=your_sandbox_secret
 
-# Exchange Selection
-# Options: 'IB', 'GEMINI', 'ALL'
-ACTIVE_EXCHANGE=ALL
+# Risk + sizing (set to your appetite)
+MAX_DAILY_LOSS=500.0
+MAX_DAILY_LOSS_PERCENT=3.0
+MAX_ORDER_VALUE=500.0
+MAX_TOTAL_EXPOSURE=1000.0
+SIZE_TIER=MODERATE            # CONSERVATIVE | MODERATE | AGGRESSIVE
+
+# Loop cadence & safety
+LOOP_INTERVAL_SECONDS=300
+MIN_TRADE_INTERVAL_SECONDS=300
+FEE_RATIO_COOLDOWN=50.0
+PRIORITY_MOVE_PCT=1.5
+PRIORITY_LOOKBACK_MIN=5
+BREAK_GLASS_COOLDOWN_MIN=60
+BREAK_GLASS_SIZE_FACTOR=0.6
 ```
+See `config.py` for every configurable option (fee overrides, tier caps, etc.).
 
-### 4. Running the Bot
+## Running
+- **Quick start (loop + dashboard)**: `chmod +x run.sh && ./run.sh`
+- **Strategy loop only**: `python strategy_runner.py`
+- **Dashboard only**: `streamlit run dashboard.py`
+- **MCP server (IB tools)**: `python server.py`
+- **Smoke the MCP wiring**: `python test_server.py`
 
-**The Easy Way (Single Command):**
-```bash
-chmod +x run.sh
-./run.sh
-```
-This will start the autonomous bot in the background and launch the dashboard in your browser.
+The loop stores state in `trading.db`, writes human-readable events to `bot.log`, and detailed diagnostics to `console.log`.
 
-**Manual Mode:**
-
-**Autonomous Mode (Strategy Loop):**
-```bash
-python strategy_runner.py
-```
-
-**MCP Server Mode (Tool Exposure):**
-```bash
-python server.py
-```
-
-**Dashboard:**
-```bash
-streamlit run dashboard.py
-```
-
--   Run `python test_server.py` to test MCP server tools.
-
-## Crypto Support & Sandbox
-
-The bot supports trading on the **Gemini Exchange** via the `ccxt` library.
-
-### Paper Trading (Sandbox)
-To test crypto strategies without real funds:
-1.  Set `TRADING_MODE=PAPER` in your `.env`.
-2.  Generate Sandbox API keys at [exchange.sandbox.gemini.com](https://exchange.sandbox.gemini.com/).
-3.  Add them to `.env` as `GEMINI_SANDBOX_API_KEY` and `GEMINI_SANDBOX_SECRET`.
-4.  The bot will automatically connect to the Sandbox environment.
-
-### Single Exchange Mode
-You can restrict the bot to a specific exchange using `ACTIVE_EXCHANGE` in `.env`:
--   `ACTIVE_EXCHANGE=IB`: Only trade stocks (requires IB Gateway).
--   `ACTIVE_EXCHANGE=GEMINI`: Only trade crypto (no IB Gateway needed).
--   `ACTIVE_EXCHANGE=ALL`: Trade both simultaneously.
+## Notes & limitations
+- One active venue at a time (`ACTIVE_EXCHANGE`), and the loop currently fetches/trades a single symbol per venue (`BHP` for IB, `BTC/USD` for Gemini).
+- Paper mode on Gemini uses sandbox URLs and backfills missing precision metadata so orders format correctly.
+- Fees/LLM costs are tracked per session; the dashboard shows realized/unrealized PnL, exposure, costs, and recent trades.

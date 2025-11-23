@@ -5,6 +5,18 @@ import os
 import subprocess
 from database import TradingDatabase
 
+# Simple helper to map percentage-of-gross values to a color-coded label
+def format_ratio_badge(ratio):
+    color = "#2ecc71"  # green
+    label = "Good"
+    if ratio is None:
+        return None
+    if ratio > 25:
+        color, label = "#e74c3c", "High"  # red
+    elif ratio > 10:
+        color, label = "#f39c12", "Moderate"  # orange
+    return f"<span style='color:{color}; font-weight:600'>{label} ({ratio:.1f}% of Gross)</span>"
+
 # Bot status detection
 def is_bot_running():
     """Check if the trading bot process is running."""
@@ -314,6 +326,8 @@ with col1:
         total_costs = fees + llm_cost
         cost_ratio = (total_costs / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
         fee_ratio = (fees / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
+        fee_badge = format_ratio_badge(fee_ratio if gross_pnl else None)
+        cost_badge = format_ratio_badge(cost_ratio if gross_pnl else None)
         
         # Profitability status
         status = "✅ Profitable" if net_pnl > 0 else "❌ Unprofitable"
@@ -332,6 +346,10 @@ with col1:
         c2.metric("LLM Costs", f"${llm_cost:.4f}")
         c3.metric("Total Costs", f"${total_costs:.2f}", f"{cost_ratio:.1f}% of Gross" if gross_pnl else None)
         c4.metric("Total Trades", session_stats.get('total_trades', 0))
+        if fee_badge:
+            c1.markdown(fee_badge, unsafe_allow_html=True)
+        if cost_badge:
+            c3.markdown(cost_badge, unsafe_allow_html=True)
         
         st.markdown("---")
         

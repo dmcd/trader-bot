@@ -55,7 +55,6 @@ class StrategyRunner:
         self.risk_manager = RiskManager(self.bot)
         self.model = genai.GenerativeModel('gemini-2.5-flash')
         self.running = False
-        # self.history_file = "trade_history.jsonl"  # Deprecated: using DB instead
         
         # Professional trading infrastructure
         self.db = TradingDatabase()
@@ -98,7 +97,9 @@ class StrategyRunner:
         if self.session and self.session.get('starting_balance') is not None:
             start_equity = self.session.get('starting_balance')
         else:
-            start_equity = initial_pnl
+            # Prefer latest broker equity snapshot if available
+            latest_equity = self.db.get_latest_equity(self.session_id)
+            start_equity = latest_equity if latest_equity is not None else initial_pnl
         self.risk_manager.seed_start_of_day(start_equity)
         
         # Reconcile with exchange state
@@ -637,6 +638,12 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                     
                     # 1. Update PnL
                     current_pnl = await self.bot.get_pnl_async()
+                    # Log equity snapshot for MTM tracking
+                    if self.session_id is not None:
+                        try:
+                            self.db.log_equity_snapshot(self.session_id, current_pnl)
+                        except Exception as e:
+                            logger.warning(f"Could not log equity snapshot: {e}")
                     self.risk_manager.update_pnl(current_pnl)
                     
                     # Check percentage-based daily loss (tier-aware)
@@ -823,6 +830,12 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                             liquidity=liquidity,
                                             realized_pnl=realized_pnl
                                         )
+                                        # Snapshot open orders if any remain
+                                        try:
+                                            open_orders = await self.bot.get_open_orders_async()
+                                            self.db.replace_open_orders(self.session_id, open_orders)
+                                        except Exception as e:
+                                            logger.warning(f"Could not snapshot open orders: {e}")
                                     except Exception as e:
                                         logger.warning(f"Error logging trade: {e}")
                             else:

@@ -93,6 +93,17 @@ class TradingDatabase:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
+
+        # Equity snapshots table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS equity_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                equity REAL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        """)
         
         # Technical indicators table
         cursor.execute("""
@@ -272,6 +283,27 @@ class TradingDatabase:
         """, (session_id, symbol, limit))
         
         return [dict(row) for row in cursor.fetchall()]
+
+    def log_equity_snapshot(self, session_id: int, equity: float):
+        """Log mark-to-market equity snapshot."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO equity_snapshots (session_id, timestamp, equity)
+            VALUES (?, ?, ?)
+        """, (session_id, datetime.now().isoformat(), equity))
+        self.conn.commit()
+
+    def get_latest_equity(self, session_id: int) -> Optional[float]:
+        """Get most recent equity snapshot."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT equity FROM equity_snapshots
+            WHERE session_id = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """, (session_id,))
+        row = cursor.fetchone()
+        return row['equity'] if row else None
 
     def get_session_stats(self, session_id: int) -> Dict[str, Any]:
         """Get session statistics."""

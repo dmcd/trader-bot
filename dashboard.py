@@ -111,7 +111,7 @@ def load_history():
         today = date.today().isoformat()
         cursor = db.conn.cursor()
         cursor.execute(
-            "SELECT timestamp, symbol, action, price, quantity, fee, liquidity, reason FROM trades WHERE session_id = (SELECT id FROM sessions WHERE date = ?)",
+            "SELECT timestamp, symbol, action, price, quantity, fee, liquidity, realized_pnl, reason FROM trades WHERE session_id = (SELECT id FROM sessions WHERE date = ?)",
             (today,)
         )
         rows = cursor.fetchall()

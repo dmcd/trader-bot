@@ -1,5 +1,5 @@
 import logging
-from config import MAX_DAILY_LOSS, MAX_ORDER_VALUE, MAX_POSITIONS
+from config import MAX_DAILY_LOSS, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_POSITIONS
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +32,17 @@ class RiskManager:
             logger.warning(f"Risk Reject: Order value {order_value} > Limit {MAX_ORDER_VALUE}")
             return False
 
-        # 2. Check Daily Loss
+        # 2. Check Daily Loss (both absolute and percentage)
         # We need to fetch current equity to update PnL first, but assuming it's updated periodically
+        if self.start_of_day_equity and self.start_of_day_equity > 0:
+            loss_percent = (self.daily_loss / self.start_of_day_equity) * 100
+            if loss_percent > MAX_DAILY_LOSS_PERCENT:
+                logger.warning(f"Risk Reject: Daily loss {loss_percent:.2f}% > Limit {MAX_DAILY_LOSS_PERCENT}%")
+                return False
+        
+        # Also check absolute loss for small accounts
         if self.daily_loss > MAX_DAILY_LOSS:
-            logger.warning(f"Risk Reject: Daily loss {self.daily_loss} > Limit {MAX_DAILY_LOSS}")
+            logger.warning(f"Risk Reject: Daily loss ${self.daily_loss:.2f} > Limit ${MAX_DAILY_LOSS}")
             return False
 
         # 3. Check Max Positions (only for BUY orders)

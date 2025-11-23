@@ -5,7 +5,7 @@ import google.generativeai as genai
 from ib_trader import IBTrader
 from gemini_trader import GeminiTrader
 from risk_manager import RiskManager
-from config import GEMINI_API_KEY, TRADING_MODE, ACTIVE_EXCHANGE
+from config import GEMINI_API_KEY, TRADING_MODE, ACTIVE_EXCHANGE, MAX_DAILY_LOSS_PERCENT
 
 import json
 import datetime
@@ -29,7 +29,7 @@ class StrategyRunner:
         # Risk manager needs to handle multiple bots or we wrap them?
         # For now, let's pass the ib_bot as primary, but we might need to refactor RiskManager
         self.risk_manager = RiskManager(self.ib_bot) 
-        self.model = genai.GenerativeModel('gemini-pro')
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
         self.running = False
         self.history_file = "trade_history.jsonl"
 
@@ -135,82 +135,107 @@ class StrategyRunner:
         except Exception as e:
             logger.error(f"Execution Error: {e}")
 
+    async def cleanup(self):
+        """Cleanup and close all connections."""
+        logger.info("Cleaning up connections...")
+        try:
+            if ACTIVE_EXCHANGE in ['IB', 'ALL'] and self.ib_bot:
+                await self.ib_bot.close()
+        except Exception as e:
+            logger.error(f"Error closing IB connection: {e}")
+        
+        try:
+            if ACTIVE_EXCHANGE in ['GEMINI', 'ALL'] and self.gemini_bot:
+                await self.gemini_bot.close()
+        except Exception as e:
+            logger.error(f"Error closing Gemini connection: {e}")
+        
+        logger.info("Cleanup complete.")
+
     async def run_loop(self):
         """Main autonomous loop."""
-        await self.initialize()
-        self.running = True
-        
-        while self.running:
-            try:
-                # 1. Update PnL
-                total_pnl = 0.0
-                if ACTIVE_EXCHANGE in ['IB', 'ALL']:
-                    total_pnl += await self.ib_bot.get_pnl_async()
-                if ACTIVE_EXCHANGE in ['GEMINI', 'ALL']:
-                    total_pnl += await self.gemini_bot.get_pnl_async()
-                
-                self.risk_manager.update_pnl(total_pnl)
-                
-                if self.risk_manager.daily_loss > 50: # Hardcoded check from config
-                    logger.error("Max daily loss exceeded. Stopping loop.")
-                    break
-
-                # 2. Fetch Data
-                market_data = {}
-                
-                if ACTIVE_EXCHANGE in ['IB', 'ALL']:
-                    ib_data = await self.ib_bot.get_market_data_async('BHP')
-                    market_data['BHP'] = ib_data
-
-                if ACTIVE_EXCHANGE in ['GEMINI', 'ALL']:
-                    gemini_data = await self.gemini_bot.get_market_data_async('BTC/USD')
-                    market_data['BTC/USD'] = gemini_data
-
-                # 3. Get Decision
-                decision_json = await self.get_llm_decision(market_data, total_pnl)
-                
-                # 4. Execute
-                if decision_json:
-                    # Parse for logging
-                    import json as json_lib
-                    try:
-                        d = json_lib.loads(decision_json)
-                        action = d.get('action')
-                        reason = d.get('reason')
-                        symbol = d.get('symbol', 'BHP') # Default to BHP if not specified
-                        quantity = d.get('quantity', 0)
-                    except:
-                        action = "ERROR"
-                        reason = "Failed to parse"
-                        symbol = "UNKNOWN"
-                        quantity = 0
-
-                    self.log_decision(total_pnl, market_data, decision_json, action, reason)
+        try:
+            await self.initialize()
+            self.running = True
+            
+            while self.running:
+                try:
+                    # 1. Update PnL
+                    total_pnl = 0.0
+                    if ACTIVE_EXCHANGE in ['IB', 'ALL']:
+                        total_pnl += await self.ib_bot.get_pnl_async()
+                    if ACTIVE_EXCHANGE in ['GEMINI', 'ALL']:
+                        total_pnl += await self.gemini_bot.get_pnl_async()
                     
-                    if action in ['BUY', 'SELL'] and quantity > 0:
-                        # Route to correct bot
-                        if symbol == 'BHP':
-                             # Risk Check needs price
-                             price = ib_data['price'] if ib_data else 0
-                             if self.risk_manager.check_trade_allowed(symbol, action, quantity, price):
-                                 await self.ib_bot.place_order_async(symbol, action, quantity)
-                        elif symbol == 'BTC/USD':
-                             price = gemini_data['price'] if gemini_data else 0
-                             if self.risk_manager.check_trade_allowed(symbol, action, quantity, price):
-                                 await self.gemini_bot.place_order_async(symbol, action, quantity)
-                        else:
-                            logger.warning(f"Unknown symbol: {symbol}")
-                
-                # 5. Sleep
-                logger.info("Sleeping for 10 seconds...")
-                await asyncio.sleep(10)
+                    self.risk_manager.update_pnl(total_pnl)
+                    
+                    # Check percentage-based daily loss
+                    if self.risk_manager.start_of_day_equity and self.risk_manager.start_of_day_equity > 0:
+                        loss_percent = (self.risk_manager.daily_loss / self.risk_manager.start_of_day_equity) * 100
+                        if loss_percent > MAX_DAILY_LOSS_PERCENT:
+                            logger.error(f"Max daily loss exceeded: {loss_percent:.2f}% > {MAX_DAILY_LOSS_PERCENT}%. Stopping loop.")
+                            break
 
-            except KeyboardInterrupt:
-                logger.info("Stopping loop...")
-                self.running = False
-            except Exception as e:
-                logger.error(f"Loop Error: {e}")
-                await asyncio.sleep(5)
+                    # 2. Fetch Data
+                    market_data = {}
+                    
+                    if ACTIVE_EXCHANGE in ['IB', 'ALL']:
+                        ib_data = await self.ib_bot.get_market_data_async('BHP')
+                        market_data['BHP'] = ib_data
+
+                    if ACTIVE_EXCHANGE in ['GEMINI', 'ALL']:
+                        gemini_data = await self.gemini_bot.get_market_data_async('BTC/USD')
+                        market_data['BTC/USD'] = gemini_data
+
+                    # 3. Get Decision
+                    decision_json = await self.get_llm_decision(market_data, total_pnl)
+                    
+                    # 4. Execute
+                    if decision_json:
+                        # Parse for logging
+                        import json as json_lib
+                        try:
+                            d = json_lib.loads(decision_json)
+                            action = d.get('action')
+                            reason = d.get('reason')
+                            symbol = d.get('symbol', 'BHP') # Default to BHP if not specified
+                            quantity = d.get('quantity', 0)
+                        except:
+                            action = "ERROR"
+                            reason = "Failed to parse"
+                            symbol = "UNKNOWN"
+                            quantity = 0
+
+                        self.log_decision(total_pnl, market_data, decision_json, action, reason)
+                        
+                        if action in ['BUY', 'SELL'] and quantity > 0:
+                            # Route to correct bot
+                            if symbol == 'BHP':
+                                 # Risk Check needs price
+                                 price = ib_data['price'] if ib_data else 0
+                                 if self.risk_manager.check_trade_allowed(symbol, action, quantity, price):
+                                     await self.ib_bot.place_order_async(symbol, action, quantity)
+                            elif symbol == 'BTC/USD':
+                                 price = gemini_data['price'] if gemini_data else 0
+                                 if self.risk_manager.check_trade_allowed(symbol, action, quantity, price):
+                                     await self.gemini_bot.place_order_async(symbol, action, quantity)
+                            else:
+                                logger.warning(f"Unknown symbol: {symbol}")
+                    
+                    # 5. Sleep
+                    logger.info("Sleeping for 10 seconds...")
+                    await asyncio.sleep(10)
+
+                except KeyboardInterrupt:
+                    logger.info("Stopping loop...")
+                    self.running = False
+                    break
+                except Exception as e:
+                    logger.error(f"Loop Error: {e}")
+                    await asyncio.sleep(5)
+        finally:
+            # Always cleanup, even if there's an exception or break
+            await self.cleanup()
 
 async def main():
     runner = StrategyRunner()

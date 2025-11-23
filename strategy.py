@@ -17,7 +17,8 @@ from config import (
     PRIORITY_LOOKBACK_MIN,
     BREAK_GLASS_COOLDOWN_MIN,
     LOOP_INTERVAL_SECONDS,
-    ACTIVE_EXCHANGE
+    ACTIVE_EXCHANGE,
+    TRADING_MODE
 )
 
 logger = logging.getLogger(__name__)
@@ -293,6 +294,9 @@ Return ONLY a JSON object with the following format:
             prompt += "- Always obey order cap and exposure cap; quantities must fit caps.\n"
             prompt += "- If fee regime is high, avoid churn: prefer HOLD or maker-first trades.\n"
             prompt += "- Always use symbols from the Available Symbols list.\n"
+
+        if TRADING_MODE == 'PAPER':
+             prompt += "\nNOTE: You are running in SANDBOX/PAPER mode. The 'Portfolio Value' shown above represents the Profit/Loss (PnL) relative to the starting balance, NOT the total account value. It may be negative. This is expected. You still have sufficient capital to trade. Do NOT stop trading because of a negative Portfolio Value.\n"
 
         if self.last_rejection_reason:
             prompt += f"\nIMPORTANT: Your previous order was REJECTED by the Risk Manager for the following reason:\n"

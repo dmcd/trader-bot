@@ -29,8 +29,8 @@ GEMINI_SANDBOX_SECRET = os.getenv('GEMINI_SANDBOX_SECRET', '') # Sandbox Secret
 ACTIVE_EXCHANGE = os.getenv('ACTIVE_EXCHANGE', 'IB').upper()
 
 # Exchange Fees
-GEMINI_MAKER_FEE = float(os.getenv('GEMINI_MAKER_FEE', '0.0035'))  # 0.35%
-GEMINI_TAKER_FEE = float(os.getenv('GEMINI_TAKER_FEE', '0.0035'))  # 0.35%
+GEMINI_MAKER_FEE = float(os.getenv('GEMINI_MAKER_FEE', '0.0020'))  # 0.20%
+GEMINI_TAKER_FEE = float(os.getenv('GEMINI_TAKER_FEE', '0.0040'))  # 0.40%
 IB_STOCK_FEE_PER_SHARE = float(os.getenv('IB_STOCK_FEE_PER_SHARE', '0.005'))  # $0.005 per share
 IB_MIN_FEE = float(os.getenv('IB_MIN_FEE', '1.00'))  # $1 minimum
 

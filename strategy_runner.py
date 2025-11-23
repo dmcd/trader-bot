@@ -51,6 +51,7 @@ class StrategyRunner:
         self.session_id = None
         self.context = None
         self.session = None
+        self.last_rejection_reason = None
 
     async def initialize(self):
         """Connects and initializes the bot."""
@@ -256,6 +257,14 @@ Return ONLY a JSON object with the following format:
 Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward trend detected"}}
 """
         
+        # Add last rejection reason to prompt if it exists
+        if hasattr(self, 'last_rejection_reason') and self.last_rejection_reason:
+            prompt += f"\nIMPORTANT: Your previous order was REJECTED by the Risk Manager for the following reason:\n"
+            prompt += f"'{self.last_rejection_reason}'\n"
+            prompt += "You MUST adjust your strategy to avoid this rejection (e.g., lower quantity, check limits).\n"
+            # Clear it after using it once so we don't nag forever if they fix it
+            self.last_rejection_reason = None
+            
         try:
             response = self.model.generate_content(prompt)
             
@@ -302,7 +311,8 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
             
             if action in ['BUY', 'SELL'] and quantity > 0:
                 # Risk Check
-                if self.risk_manager.check_trade_allowed('BHP', action, quantity, price):
+                risk_result = self.risk_manager.check_trade_allowed('BHP', action, quantity, price)
+                if risk_result.allowed:
                     logger.info(f"Executing {action} {quantity} BHP...")
                     bot_actions_logger.info(f"✅ Executing: {action} {quantity} units at ${price:.2f}")
                     result = await self.bot.place_order_async('BHP', action, quantity)
@@ -310,8 +320,10 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                     if result:
                         bot_actions_logger.info(f"✅ Order Completed: {result}")
                 else:
-                    logger.warning("Trade blocked by Risk Manager.")
-                    bot_actions_logger.info(f"⛔ Trade Blocked: Risk limits exceeded")
+                    logger.warning(f"Trade blocked by Risk Manager: {risk_result.reason}")
+                    bot_actions_logger.info(f"⛔ Trade Blocked: {risk_result.reason}")
+                    # Store reason for next turn
+                    self.last_rejection_reason = risk_result.reason
             elif action == 'HOLD':
                 logger.info("Holding position.")
             
@@ -462,7 +474,22 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             # Get price for risk check
                             price = data['price'] if data else 0
                             
-                            if self.risk_manager.check_trade_allowed(symbol, action, quantity, price):
+                            risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
+                            
+                            # Auto-reduce if order value is too high
+                            if not risk_result.allowed and "Order value" in risk_result.reason and "exceeds limit" in risk_result.reason:
+                                old_qty = quantity
+                                # Target 99% of max value to be safe
+                                target_value = MAX_ORDER_VALUE * 0.99
+                                quantity = target_value / price
+                                
+                                logger.info(f"⚠️ Auto-reducing trade size from {old_qty:.4f} to {quantity:.4f} to fit limit")
+                                bot_actions_logger.info(f"📉 Auto-Reducing: Trade size too large, adjusting to {quantity:.4f} {symbol}")
+                                
+                                # Re-check with new quantity
+                                risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
+
+                            if risk_result.allowed:
                                 # Calculate fee before execution
                                 fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, action)
                                 
@@ -492,7 +519,8 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                     except Exception as e:
                                         logger.warning(f"Error logging trade: {e}")
                             else:
-                                bot_actions_logger.info(f"⛔ Trade Blocked: Risk limits exceeded")
+                                bot_actions_logger.info(f"⛔ Trade Blocked: {risk_result.reason}")
+                                self.last_rejection_reason = risk_result.reason
                     
                     # 5. Sleep
                     logger.info("Sleeping for 10 seconds...")

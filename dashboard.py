@@ -46,8 +46,8 @@ def load_history():
         db.close()
         if rows:
             df = pd.DataFrame(rows, columns=["timestamp", "action", "price", "quantity", "fee", "reason"])
-            # Compute pnl as price * quantity - fee
-            df["pnl"] = df["price"] * df["quantity"] - df["fee"]
+            # Compute trade_value as price * quantity
+            df["trade_value"] = df["price"] * df["quantity"]
 
             # Ensure timestamp column is datetime
             df["timestamp"] = pd.to_datetime(df["timestamp"])
@@ -98,26 +98,24 @@ with col1:
         
         # Metrics
         latest = df.iloc[0]
-        current_pnl_usd = latest.get('pnl', 0)
         
-        # Convert to selected currency
-        if currency == 'AUD':
-            current_pnl = current_pnl_usd * usd_to_aud
-            currency_symbol = 'AUD'
-        else:
-            current_pnl = current_pnl_usd
-            currency_symbol = 'USD'
-        
-        # Load session stats for cost metrics
+        # Load session stats for accurate PnL
         session_stats = load_session_stats()
-
+        
         if session_stats:
-            # Calculate net PnL after fees and LLM costs
-            gross_pnl = current_pnl_usd - session_stats.get('starting_balance', 0)
-            net_pnl = gross_pnl - session_stats.get('total_fees', 0) - session_stats.get('total_llm_cost', 0)
+            gross_pnl_usd = session_stats.get('gross_pnl', 0)
+            
+            # Convert to selected currency
             if currency == 'AUD':
-                net_pnl = net_pnl * usd_to_aud
-                gross_pnl = gross_pnl * usd_to_aud
+                gross_pnl = gross_pnl_usd * usd_to_aud
+                currency_symbol = 'AUD'
+            else:
+                gross_pnl = gross_pnl_usd
+                currency_symbol = 'USD'
+
+            # Calculate net PnL after fees and LLM costs
+            net_pnl = gross_pnl - session_stats.get('total_fees', 0) - session_stats.get('total_llm_cost', 0)
+            
             total_costs = session_stats.get('total_fees', 0) + session_stats.get('total_llm_cost', 0)
             cost_ratio = (total_costs / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
 
@@ -139,16 +137,13 @@ with col1:
             status = "✅ Profitable" if net_pnl > 0 else "❌ Unprofitable"
             st.metric("Status", status)
         else:
-            # Fallback to basic metrics if no DB stats yet
-            # Display Metrics
-            m1, m2, m3 = st.columns(3)
-            m1.metric(f"Trading PnL ({currency_symbol})", f"${current_pnl:,.2f}")
-            m2.metric("Total Decisions", len(df))
-            m3.metric("Last Action", latest.get('action', 'N/A'))
+            # Fallback if no stats
+            st.warning("No session stats available.")
         
-        # Dataframe
+        # Dataframe - Rename 'pnl' to 'Trade Value' for clarity
+        df = df.rename(columns={'pnl': 'trade_value'})
         st.dataframe(
-            df[['timestamp', 'action', 'pnl', 'reason']],
+            df[['timestamp', 'action', 'trade_value', 'reason']],
             width="stretch",
             hide_index=True
         )

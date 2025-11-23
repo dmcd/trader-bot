@@ -2,7 +2,36 @@ import streamlit as st
 import pandas as pd
 import time
 import os
+import subprocess
 from database import TradingDatabase
+
+# Bot status detection
+def is_bot_running():
+    """Check if the trading bot process is running."""
+    try:
+        result = subprocess.run(
+            ['pgrep', '-f', 'strategy_runner.py'],
+            capture_output=True,
+            text=True
+        )
+        return bool(result.stdout.strip())
+    except:
+        return False
+
+def start_bot():
+    """Start the trading bot in the background."""
+    try:
+        subprocess.Popen(
+            ['python', 'strategy_runner.py'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        return True
+    except Exception as e:
+        st.error(f"Failed to start bot: {e}")
+        return False
 
 # Page Config
 st.set_page_config(
@@ -26,6 +55,49 @@ st.session_state.refresh_rate = refresh_rate
 # Currency toggle
 currency = st.sidebar.radio("Display Currency", ['USD', 'AUD'], index=0 if st.session_state.currency == 'USD' else 1)
 st.session_state.currency = currency
+
+# Bot Status & Controls
+st.sidebar.markdown("---")
+st.sidebar.subheader("🤖 Bot Status")
+
+# Check if bot is running
+bot_running = is_bot_running()
+
+# Display status
+if bot_running:
+    st.sidebar.success("✅ Bot Running")
+else:
+    st.sidebar.error("⏹️ Bot Stopped")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🎮 Bot Controls")
+
+db = TradingDatabase()
+
+# Show Start or Stop button based on bot status
+if bot_running:
+    if st.sidebar.button("⏹️ Stop Bot", type="secondary", use_container_width=True):
+        db.create_command("STOP_BOT")
+        st.sidebar.warning("Command sent: Stop Bot")
+        time.sleep(1)  # Give it a moment to process
+        st.rerun()
+else:
+    if st.sidebar.button("▶️ Start Bot", type="primary", use_container_width=True):
+        if start_bot():
+            st.sidebar.success("Bot started successfully!")
+            time.sleep(1)  # Give it a moment to start
+            st.rerun()
+
+# Close All Positions button (always available)
+st.sidebar.markdown("---")
+if st.sidebar.button("🛑 Close All Positions", type="secondary", use_container_width=True):
+    if bot_running:
+        db.create_command("CLOSE_ALL_POSITIONS")
+        st.sidebar.success("Command sent: Close All Positions")
+    else:
+        st.sidebar.warning("Bot must be running to close positions")
+
+db.close()
 
 # Exchange rate (approximate)
 usd_to_aud = 1.53  # Update this periodically or fetch from API

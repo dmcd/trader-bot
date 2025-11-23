@@ -67,6 +67,9 @@ class TradingContext:
             else:
                 price_trend = f"Sideways ({price_change:+.2f}%)"
         
+        # Get current positions from database
+        positions = self.db.get_positions(self.session_id)
+        
         # Build context summary
         context = f"""
 === TRADING SESSION CONTEXT ===
@@ -81,6 +84,41 @@ Performance:
 - Total LLM Costs: ${session['total_llm_cost']:.4f}
 - Net PnL: ${session['net_pnl']:.2f}
 
+Current Positions:
+"""
+        
+        # Add position details with unrealized PnL
+        if positions:
+            total_exposure = 0.0
+            for pos in positions:
+                sym = pos['symbol']
+                qty = pos['quantity']
+                avg_price = pos.get('avg_price') or 0
+                
+                # Get current price for this symbol
+                current_price = avg_price  # Default fallback
+                recent_data = self.db.get_recent_market_data(self.session_id, sym, limit=1)
+                if recent_data and recent_data[0].get('price'):
+                    current_price = recent_data[0]['price']
+                
+                # Skip if we don't have valid prices
+                if not avg_price or not current_price:
+                    continue
+                
+                # Calculate unrealized PnL
+                cost_basis = qty * avg_price
+                current_value = qty * current_price
+                unrealized_pnl = current_value - cost_basis
+                
+                total_exposure += current_value
+                
+                context += f"  - {sym}: {qty:.6f} units @ ${avg_price:,.2f} avg (Current: ${current_price:,.2f}, Unrealized PnL: ${unrealized_pnl:+,.2f})\n"
+            
+            context += f"  Total Exposure: ${total_exposure:,.2f}\n"
+        else:
+            context += "  No open positions\n"
+        
+        context += """
 Recent Activity:
 """
         

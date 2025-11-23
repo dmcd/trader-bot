@@ -69,6 +69,9 @@ class StrategyRunner:
         self.session_id = self.db.get_or_create_session(starting_balance=initial_pnl)
         self.session = self.db.get_session(self.session_id)
         
+        # Clear any old pending commands from previous sessions
+        self.db.clear_old_commands()
+        
         # Initialize trading context
         self.context = TradingContext(self.db, self.session_id)
         
@@ -402,6 +405,58 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
             
             while self.running:
                 try:
+                    # 0. Check for pending commands from dashboard
+                    pending_commands = self.db.get_pending_commands()
+                    for cmd in pending_commands:
+                        command = cmd['command']
+                        command_id = cmd['id']
+                        
+                        if command == 'CLOSE_ALL_POSITIONS':
+                            logger.info("Executing command: CLOSE_ALL_POSITIONS")
+                            bot_actions_logger.info("🛑 Manual Command: Closing all positions...")
+                            
+                            # Get current positions
+                            positions = self.db.get_positions(self.session_id)
+                            for pos in positions:
+                                symbol = pos['symbol']
+                                quantity = pos['quantity']
+                                if quantity > 0:
+                                    try:
+                                        # Get current price
+                                        data = await self.bot.get_market_data_async(symbol)
+                                        price = data.get('price', 0) if data else 0
+                                        
+                                        # Execute sell order
+                                        logger.info(f"Closing position: SELL {quantity} {symbol}")
+                                        result = await self.bot.place_order_async(symbol, 'SELL', quantity)
+                                        
+                                        if result:
+                                            # Log the trade
+                                            fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, 'SELL')
+                                            self.db.log_trade(
+                                                self.session_id,
+                                                symbol,
+                                                'SELL',
+                                                quantity,
+                                                price,
+                                                fee,
+                                                "Manual close all positions"
+                                            )
+                                            bot_actions_logger.info(f"✅ Closed: {quantity} {symbol} @ ${price:,.2f}")
+                                    except Exception as e:
+                                        logger.error(f"Error closing position {symbol}: {e}")
+                                        bot_actions_logger.info(f"⚠️ Error closing {symbol}: {str(e)}")
+                            
+                            bot_actions_logger.info("✅ All positions closed")
+                            self.db.mark_command_executed(command_id)
+                            
+                        elif command == 'STOP_BOT':
+                            logger.info("Executing command: STOP_BOT")
+                            bot_actions_logger.info("🛑 Manual Command: Stopping bot...")
+                            self.db.mark_command_executed(command_id)
+                            self.running = False
+                            break
+                    
                     # 1. Update PnL
                     current_pnl = await self.bot.get_pnl_async()
                     self.risk_manager.update_pnl(current_pnl)
@@ -473,6 +528,25 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                         if action in ['BUY', 'SELL'] and quantity > 0:
                             # Get price for risk check
                             price = data['price'] if data else 0
+                            
+                            # Update RiskManager with current positions for exposure calculation
+                            positions_data = self.db.get_positions(self.session_id)
+                            positions_dict = {}
+                            for pos in positions_data:
+                                sym = pos['symbol']
+                                # Get current price for this position
+                                current_price = pos.get('avg_price') or 0
+                                recent_data = self.db.get_recent_market_data(self.session_id, sym, limit=1)
+                                if recent_data and recent_data[0].get('price'):
+                                    current_price = recent_data[0]['price']
+                                
+                                # Only add if we have a valid price
+                                if current_price:
+                                    positions_dict[sym] = {
+                                        'quantity': pos['quantity'],
+                                        'current_price': current_price
+                                    }
+                            self.risk_manager.update_positions(positions_dict)
                             
                             risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
                             

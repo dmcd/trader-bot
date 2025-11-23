@@ -129,6 +129,17 @@ class TradingDatabase:
             )
         """)
         
+        # Commands table for dashboard-to-bot communication
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS commands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                command TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                executed_at TEXT
+            )
+        """)
+        
         self.conn.commit()
         logger.info(f"Database initialized at {self.db_path}")
     
@@ -338,6 +349,51 @@ class TradingDatabase:
         """, (session_id,))
         rows = cursor.fetchall()
         return {row['symbol']: row['net_qty'] for row in rows}
+    
+    def create_command(self, command: str):
+        """Create a new command for the bot to execute."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO commands (command, status)
+            VALUES (?, 'pending')
+        """, (command,))
+        self.conn.commit()
+        logger.info(f"Created command: {command}")
+    
+    def get_pending_commands(self) -> List[Dict[str, Any]]:
+        """Get all pending commands."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM commands 
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+    
+    def mark_command_executed(self, command_id: int):
+        """Mark a command as executed."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE commands 
+            SET status = 'executed',
+                executed_at = ?
+            WHERE id = ?
+        """, (datetime.now().isoformat(), command_id))
+        self.conn.commit()
+    
+    def clear_old_commands(self):
+        """Clear all pending commands (called on bot startup)."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE commands 
+            SET status = 'cancelled',
+                executed_at = ?
+            WHERE status = 'pending'
+        """, (datetime.now().isoformat(),))
+        cancelled_count = cursor.rowcount
+        self.conn.commit()
+        if cancelled_count > 0:
+            logger.info(f"Cancelled {cancelled_count} old pending command(s) from previous session")
     
     def close(self):
         """Close database connection."""

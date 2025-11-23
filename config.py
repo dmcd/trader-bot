@@ -16,6 +16,7 @@ MAX_DAILY_LOSS = float(os.getenv('MAX_DAILY_LOSS', '50.0')) # AUD (absolute)
 MAX_DAILY_LOSS_PERCENT = float(os.getenv('MAX_DAILY_LOSS_PERCENT', '0.1')) # Percentage (0.1 = 0.1%)
 MAX_ORDER_VALUE = float(os.getenv('MAX_ORDER_VALUE', '100.0')) # AUD
 MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '3'))
+MAX_TOTAL_EXPOSURE = float(os.getenv('MAX_TOTAL_EXPOSURE', '1000.0')) # Total portfolio exposure limit
 
 # API Keys
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '') # LLM Key

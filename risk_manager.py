@@ -1,5 +1,5 @@
 import logging
-from config import MAX_DAILY_LOSS, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_POSITIONS
+from config import MAX_DAILY_LOSS, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_POSITIONS, MAX_TOTAL_EXPOSURE
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,12 @@ class RiskManager:
         if self.daily_loss < 0:
             self.daily_loss = 0 # We only care about loss for the limit
 
+    def update_positions(self, positions: dict):
+        """Updates the current positions for exposure calculation.
+        positions: dict of {symbol: {'quantity': float, 'current_price': float}}
+        """
+        self.positions = positions
+
     def check_trade_allowed(self, symbol, action, quantity, price) -> RiskCheckResult:
         """Checks if a trade is allowed based on risk limits."""
         
@@ -62,6 +68,28 @@ class RiskManager:
 
         # 3. Check Max Positions (only for BUY orders)
         if action == 'BUY':
+            # Check Total Exposure
+            current_exposure = 0.0
+            for sym, data in self.positions.items():
+                qty = data.get('quantity', 0)
+                curr_price = data.get('current_price', 0)
+                # If we don't have current price, use the trade price if it's the same symbol, else skip (risky but practical)
+                if sym == symbol:
+                    curr_price = price
+                current_exposure += qty * curr_price
+            
+            # Add new trade exposure
+            new_exposure = current_exposure + order_value
+            
+            if new_exposure > MAX_TOTAL_EXPOSURE:
+                msg = f"Total exposure ${new_exposure:.2f} would exceed limit of ${MAX_TOTAL_EXPOSURE:.2f}"
+                logger.warning(f"Risk Reject: {msg}")
+                return RiskCheckResult(False, msg)
+                
+            # Safe Buffer Warning (90%)
+            if new_exposure > (MAX_TOTAL_EXPOSURE * 0.9):
+                logger.warning(f"Risk Warning: Total exposure ${new_exposure:.2f} is close to limit of ${MAX_TOTAL_EXPOSURE:.2f}")
+
             # This requires the bot to have a way to count positions
             # For now, we'll skip or implement a simple check if we can access positions
             pass

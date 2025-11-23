@@ -39,15 +39,16 @@ def load_history():
         today = date.today().isoformat()
         cursor = db.conn.cursor()
         cursor.execute(
-            "SELECT timestamp, action, price, quantity, fee, reason, market_data FROM trades WHERE session_id = (SELECT id FROM sessions WHERE date = ?)",
+            "SELECT timestamp, action, price, quantity, fee, reason FROM trades WHERE session_id = (SELECT id FROM sessions WHERE date = ?)",
             (today,)
         )
         rows = cursor.fetchall()
         db.close()
         if rows:
-            df = pd.DataFrame(rows, columns=["timestamp", "action", "price", "quantity", "fee", "reason", "market_data"])
+            df = pd.DataFrame(rows, columns=["timestamp", "action", "price", "quantity", "fee", "reason"])
             # Compute pnl as price * quantity - fee
             df["pnl"] = df["price"] * df["quantity"] - df["fee"]
+
             # Ensure timestamp column is datetime
             df["timestamp"] = pd.to_datetime(df["timestamp"])
             return df
@@ -147,7 +148,7 @@ with col1:
         
         # Dataframe
         st.dataframe(
-            df[['timestamp', 'action', 'pnl', 'reason', 'market_data']],
+            df[['timestamp', 'action', 'pnl', 'reason']],
             width="stretch",
             hide_index=True
         )

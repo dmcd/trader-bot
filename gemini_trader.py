@@ -158,7 +158,7 @@ class GeminiTrader(BaseTrader):
             return None
 
     async def place_order_async(self, symbol, action, quantity, prefer_maker=True):
-        """Places a limit order. Gemini requires limit orders; prefer maker when requested."""
+        """Places a limit order. Gemini requires limit orders; prefer maker when requested, fallback to taker."""
         if not self.connected:
             return None
 
@@ -180,17 +180,20 @@ class GeminiTrader(BaseTrader):
             bid = ticker.get('bid') or ticker.get('last')
             ask = ticker.get('ask') or ticker.get('last')
 
-            if prefer_maker:
-                # Nudge price inside the spread to stay maker; small tick buffer to avoid taker
-                if side == 'buy':
-                    base_price = bid or ticker.get('last')
-                    limit_price = base_price * 0.9995 if base_price else ticker.get('last')
+            def compute_price(post_only: bool):
+                if post_only:
+                    # Nudge price inside the spread to stay maker; small tick buffer to avoid taker
+                    if side == 'buy':
+                        base_price = bid or ticker.get('last')
+                        return base_price * 0.9995 if base_price else ticker.get('last')
+                    else:
+                        base_price = ask or ticker.get('last')
+                        return base_price * 1.0005 if base_price else ticker.get('last')
                 else:
-                    base_price = ask or ticker.get('last')
-                    limit_price = base_price * 1.0005 if base_price else ticker.get('last')
-            else:
-                # Taker-style limit-at-touch
-                limit_price = ask if side == 'buy' else bid
+                    # Taker-style limit-at-touch
+                    return ask if side == 'buy' else bid
+
+            limit_price = compute_price(prefer_maker)
 
             if limit_price is None:
                 raise ValueError(f"Ticker for {symbol} missing price data: {ticker}")
@@ -207,14 +210,37 @@ class GeminiTrader(BaseTrader):
             if prefer_maker:
                 params['postOnly'] = True
 
-            order = await self.exchange.create_limit_order(symbol, side, quantity, limit_price, params)
+            liquidity = "maker_intent" if prefer_maker else "taker"
+            try:
+                order = await self.exchange.create_limit_order(symbol, side, quantity, limit_price, params)
+                # Detect maker/taker if exchange reports it
+                info = order.get('info', {}) if isinstance(order, dict) else {}
+                reported = info.get('liquidity') or info.get('fillLiquidity')
+                if reported:
+                    liquidity = reported.lower()
+                # If postOnly rejected, fallback to taker
+                status = order.get('status')
+                if prefer_maker and status in ('canceled', 'rejected'):
+                    logger.warning(f"Post-only rejected ({status}), retrying as taker for {symbol}")
+                    limit_price = compute_price(False)
+                    order = await self.exchange.create_limit_order(symbol, side, quantity, limit_price)
+                    liquidity = "taker"
+            except Exception as maker_err:
+                if prefer_maker:
+                    logger.warning(f"Maker attempt failed ({maker_err}); retrying as taker")
+                    limit_price = compute_price(False)
+                    order = await self.exchange.create_limit_order(symbol, side, quantity, limit_price)
+                    liquidity = "taker"
+                else:
+                    raise
 
             return {
                 'order_id': order['id'],
-                'status': order['status'],
+                'status': order.get('status'),
                 'filled': order.get('filled', 0),
                 'remaining': order.get('remaining', 0),
-                'avg_fill_price': order.get('average')
+                'avg_fill_price': order.get('average'),
+                'liquidity': liquidity
             }
         except Exception as e:
             logger.error(f"Error placing Gemini order: {e}")

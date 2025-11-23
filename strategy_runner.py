@@ -54,6 +54,8 @@ class StrategyRunner:
         self.last_rejection_reason = None
         self.last_trade_ts = None
         self.sandbox_seed_symbols = {'USD', 'BTC/USD', 'BTC', 'ETH/USD', 'LTC/USD', 'ZEC/USD', 'BCH/USD'}
+        # Simple in-memory holdings tracker for realized PnL
+        self.holdings = {}  # symbol -> {'qty': float, 'avg_cost': float}
 
     async def initialize(self):
         """Connects and initializes the bot."""
@@ -87,6 +89,13 @@ class StrategyRunner:
         
         # Reconcile with exchange state
         await self.reconcile_exchange_state()
+
+        # Rebuild holdings from historical trades to keep realized PnL continuity after restarts
+        try:
+            self._load_holdings_from_db()
+            logger.info(f"Holdings rebuilt from trade history: {self.holdings}")
+        except Exception as e:
+            logger.warning(f"Could not rebuild holdings: {e}")
 
         self.risk_manager.update_pnl(initial_pnl)
         bot_actions_logger.info(f"💰 Starting Portfolio Value: ${initial_pnl:,.2f}")
@@ -167,6 +176,57 @@ class StrategyRunner:
                 continue
             cleaned.append(pos)
         return cleaned
+
+    def _update_holdings_and_realized(self, symbol: str, action: str, quantity: float, price: float, fee: float) -> float:
+        """
+        Maintain in-memory holdings to compute realized PnL per trade.
+        Realized PnL subtracts fee; buys record negative fee only.
+        """
+        pos = self.holdings.get(symbol, {'qty': 0.0, 'avg_cost': 0.0})
+        qty = pos['qty']
+        avg_cost = pos['avg_cost']
+        realized = 0.0
+
+        if action == 'BUY':
+            new_qty = qty + quantity
+            if new_qty > 0:
+                new_avg = ((qty * avg_cost) + (quantity * price)) / new_qty
+            else:
+                new_avg = 0.0
+            self.holdings[symbol] = {'qty': new_qty, 'avg_cost': new_avg}
+            realized = -fee
+        else:  # SELL
+            realized = (price - avg_cost) * quantity - fee
+            new_qty = max(0.0, qty - quantity)
+            self.holdings[symbol] = {'qty': new_qty, 'avg_cost': avg_cost if new_qty > 0 else 0.0}
+
+        return realized
+
+    def _apply_trade_to_holdings(self, symbol: str, action: str, quantity: float, price: float):
+        """Update holdings without computing realized PnL (used for replay)."""
+        pos = self.holdings.get(symbol, {'qty': 0.0, 'avg_cost': 0.0})
+        qty = pos['qty']
+        avg_cost = pos['avg_cost']
+
+        if action == 'BUY':
+            new_qty = qty + quantity
+            new_avg = ((qty * avg_cost) + (quantity * price)) / new_qty if new_qty > 0 else 0.0
+            self.holdings[symbol] = {'qty': new_qty, 'avg_cost': new_avg}
+        else:
+            new_qty = max(0.0, qty - quantity)
+            self.holdings[symbol] = {'qty': new_qty, 'avg_cost': avg_cost if new_qty > 0 else 0.0}
+
+    def _load_holdings_from_db(self):
+        """Rebuild holdings from historical trades for this session."""
+        trades = self.db.get_trades_for_session(self.session_id)
+        self.holdings = {}
+        for t in trades:
+            self._apply_trade_to_holdings(
+                t['symbol'],
+                t['action'],
+                t['quantity'],
+                t['price']
+            )
 
     async def get_llm_decision(self, market_data, current_pnl):
         """Asks Gemini for a trading decision."""
@@ -458,6 +518,7 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                         if result:
                                             # Log the trade
                                             fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, 'SELL')
+                                            realized_pnl = self._update_holdings_and_realized(symbol, 'SELL', quantity, price, fee)
                                             self.db.log_trade(
                                                 self.session_id,
                                                 symbol,
@@ -466,7 +527,8 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                                 price,
                                                 fee,
                                                 "Manual close all positions",
-                                                liquidity="taker"
+                                                liquidity="taker",
+                                                realized_pnl=realized_pnl
                                             )
                                             bot_actions_logger.info(f"✅ Closed: {quantity} {symbol} @ ${price:,.2f}")
                                     except Exception as e:
@@ -635,11 +697,15 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                 
                                 # Execute trade
                                 order_result = await self.bot.place_order_async(symbol, action, quantity, prefer_maker=True)
+                                # Capture reported liquidity if present
+                                if order_result and order_result.get('liquidity'):
+                                    liquidity = order_result.get('liquidity')
                                 self.last_trade_ts = asyncio.get_event_loop().time()
                                 
                                 # Log trade to database
                                 if self.session_id and order_result:
                                     try:
+                                        realized_pnl = self._update_holdings_and_realized(symbol, action, quantity, price, fee)
                                         self.db.log_trade(
                                             self.session_id,
                                             symbol,
@@ -648,7 +714,8 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                             price,
                                             fee,
                                             reason,
-                                            liquidity=liquidity
+                                            liquidity=liquidity,
+                                            realized_pnl=realized_pnl
                                         )
                                     except Exception as e:
                                         logger.warning(f"Error logging trade: {e}")

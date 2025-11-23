@@ -47,6 +47,7 @@ class TradingDatabase:
                 price REAL NOT NULL,
                 fee REAL DEFAULT 0.0,
                 liquidity TEXT DEFAULT 'unknown',
+                realized_pnl REAL DEFAULT 0.0,
                 reason TEXT,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
@@ -72,6 +73,10 @@ class TradingDatabase:
             cursor.execute("ALTER TABLE trades ADD COLUMN liquidity TEXT DEFAULT 'unknown'")
         except sqlite3.OperationalError:
             # Column already exists
+            pass
+        try:
+            cursor.execute("ALTER TABLE trades ADD COLUMN realized_pnl REAL DEFAULT 0.0")
+        except sqlite3.OperationalError:
             pass
         
         # Market data table
@@ -184,13 +189,13 @@ class TradingDatabase:
         return dict(row) if row else None
     
     def log_trade(self, session_id: int, symbol: str, action: str, 
-                  quantity: float, price: float, fee: float, reason: str = "", liquidity: str = "unknown"):
+                  quantity: float, price: float, fee: float, reason: str = "", liquidity: str = "unknown", realized_pnl: float = 0.0):
         """Log a trade to the database."""
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO trades (session_id, timestamp, symbol, action, quantity, price, fee, liquidity, reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, datetime.now().isoformat(), symbol, action, quantity, price, fee, liquidity, reason))
+            INSERT INTO trades (session_id, timestamp, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, datetime.now().isoformat(), symbol, action, quantity, price, fee, liquidity, realized_pnl, reason))
         
         # Update session trade count and fees
         cursor.execute("""
@@ -244,6 +249,16 @@ class TradingDatabase:
             LIMIT ?
         """, (session_id, limit))
         
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_trades_for_session(self, session_id: int) -> List[Dict[str, Any]]:
+        """Get all trades for a session ordered chronologically."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM trades 
+            WHERE session_id = ?
+            ORDER BY timestamp ASC
+        """, (session_id,))
         return [dict(row) for row in cursor.fetchall()]
     
     def get_recent_market_data(self, session_id: int, symbol: str, limit: int = 100) -> List[Dict[str, Any]]:

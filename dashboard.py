@@ -117,7 +117,7 @@ def load_history():
         rows = cursor.fetchall()
         db.close()
         if rows:
-            df = pd.DataFrame(rows, columns=["timestamp", "symbol", "action", "price", "quantity", "fee", "liquidity", "reason"])
+            df = pd.DataFrame(rows, columns=["timestamp", "symbol", "action", "price", "quantity", "fee", "liquidity", "realized_pnl", "reason"])
             # Compute trade_value as price * quantity
             df["trade_value"] = df["price"] * df["quantity"]
 
@@ -163,8 +163,11 @@ def calculate_pnl(df, current_prices):
     realized_pnl = 0.0
     holdings = {} # {symbol: {'qty': 0.0, 'avg_cost': 0.0}}
     
-    # Add pnl column to df
-    df['pnl'] = 0.0
+    # Add pnl column to df (prefer stored realized_pnl if present)
+    if 'realized_pnl' in df.columns:
+        df['pnl'] = df['realized_pnl'].fillna(0.0)
+    else:
+        df['pnl'] = 0.0
     
     # Sort by timestamp to process chronologically
     df = df.sort_values('timestamp', ascending=True)
@@ -207,8 +210,9 @@ def calculate_pnl(df, current_prices):
             trade_pnl = (price - avg_cost) * quantity
             realized_pnl += trade_pnl
             
-            # Record PnL for this specific trade
-            df.at[index, 'pnl'] = trade_pnl
+            # Record PnL for this specific trade if missing
+            if 'realized_pnl' not in df.columns or pd.isna(df.at[index, 'pnl']):
+                df.at[index, 'pnl'] = trade_pnl
             
             # Update holding quantity
             holdings[symbol]['qty'] = max(0.0, holdings[symbol]['qty'] - quantity)
@@ -379,7 +383,7 @@ with col1:
         
         # Dataframe - Rename 'pnl' to 'Trade PnL' for clarity
         st.dataframe(
-            df[['timestamp', 'symbol', 'action', 'price', 'quantity', 'pnl', 'fee', 'reason']],
+            df[['timestamp', 'symbol', 'action', 'price', 'quantity', 'pnl', 'fee', 'liquidity', 'reason']],
             width=None, # Use full width
             hide_index=True,
             column_config={
@@ -390,6 +394,7 @@ with col1:
                 "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
                 "pnl": st.column_config.NumberColumn("Realized PnL", format="$%.2f"),
                 "fee": st.column_config.NumberColumn("Fee", format="$%.4f"),
+                "liquidity": "Liq",
                 "reason": st.column_config.TextColumn("Reason", width="large"),
             },
             use_container_width=True

@@ -89,57 +89,58 @@ def load_session_stats():
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    st.subheader("🧠 Strategy Decisions")
+    st.subheader("📊 Session Performance")
     df = load_history()
     
+    # Load session stats for accurate PnL
+    session_stats = load_session_stats()
+    
+    if session_stats:
+        gross_pnl_usd = session_stats.get('gross_pnl', 0)
+        
+        # Convert to selected currency
+        if currency == 'AUD':
+            gross_pnl = gross_pnl_usd * usd_to_aud
+            currency_symbol = 'AUD'
+        else:
+            gross_pnl = gross_pnl_usd
+            currency_symbol = 'USD'
+
+        # Calculate net PnL after fees and LLM costs
+        net_pnl = gross_pnl - session_stats.get('total_fees', 0) - session_stats.get('total_llm_cost', 0)
+        
+        total_costs = session_stats.get('total_fees', 0) + session_stats.get('total_llm_cost', 0)
+        cost_ratio = (total_costs / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
+        
+        # Profitability status
+        status = "✅ Profitable" if net_pnl > 0 else "❌ Unprofitable"
+
+        # Display extended metrics - Row 1
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric(f"Net PnL ({currency_symbol})", f"${net_pnl:,.2f}")
+        m2.metric(f"Gross PnL ({currency_symbol})", f"${gross_pnl:,.2f}")
+        m3.metric("Total Trades", session_stats.get('total_trades', 0))
+        m4.metric("Status", status)
+
+        # Cost summary - Row 2
+        st.markdown("---")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Fees", f"${session_stats.get('total_fees', 0):.2f}")
+        c2.metric("LLM Costs", f"${session_stats.get('total_llm_cost', 0):.4f}")
+        c3.metric("Total Costs", f"${total_costs:.2f}")
+        c4.metric("Cost Ratio", f"{cost_ratio:.2f}%")
+        
+        st.markdown("---")
+
+    else:
+        # Fallback if no stats
+        st.warning("No session stats available.")
+    
+    st.subheader("🧠 Strategy Decisions")
     if not df.empty:
         # Convert timestamp
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df = df.sort_values('timestamp', ascending=False)
-        
-        # Metrics
-        latest = df.iloc[0]
-        
-        # Load session stats for accurate PnL
-        session_stats = load_session_stats()
-        
-        if session_stats:
-            gross_pnl_usd = session_stats.get('gross_pnl', 0)
-            
-            # Convert to selected currency
-            if currency == 'AUD':
-                gross_pnl = gross_pnl_usd * usd_to_aud
-                currency_symbol = 'AUD'
-            else:
-                gross_pnl = gross_pnl_usd
-                currency_symbol = 'USD'
-
-            # Calculate net PnL after fees and LLM costs
-            net_pnl = gross_pnl - session_stats.get('total_fees', 0) - session_stats.get('total_llm_cost', 0)
-            
-            total_costs = session_stats.get('total_fees', 0) + session_stats.get('total_llm_cost', 0)
-            cost_ratio = (total_costs / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
-
-            # Display extended metrics
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric(f"Net PnL ({currency_symbol})", f"${net_pnl:,.2f}")
-            m2.metric(f"Gross PnL ({currency_symbol})", f"${gross_pnl:,.2f}")
-            m3.metric("Total Trades", session_stats.get('total_trades', 0))
-            m4.metric("LLM Costs", f"${session_stats.get('total_llm_cost', 0):.4f}")
-
-            # Cost summary
-            st.markdown("---")
-            col_a, col_b, col_c = st.columns(3)
-            col_a.metric("Total Fees", f"${session_stats.get('total_fees', 0):.2f}")
-            col_b.metric("Total Costs", f"${total_costs:.2f}")
-            col_c.metric("Cost Ratio", f"{cost_ratio:.2f}%")
-
-            # Profitability status
-            status = "✅ Profitable" if net_pnl > 0 else "❌ Unprofitable"
-            st.metric("Status", status)
-        else:
-            # Fallback if no stats
-            st.warning("No session stats available.")
         
         # Dataframe - Rename 'pnl' to 'Trade Value' for clarity
         df = df.rename(columns={'pnl': 'trade_value'})

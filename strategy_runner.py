@@ -7,10 +7,13 @@ import google.generativeai as genai
 from ib_trader import IBTrader
 from gemini_trader import GeminiTrader
 from risk_manager import RiskManager
+from database import TradingDatabase
+from cost_tracker import CostTracker
+from trading_context import TradingContext
+from technical_analysis import TechnicalAnalysis
 from config import GEMINI_API_KEY, TRADING_MODE, ACTIVE_EXCHANGE, MAX_DAILY_LOSS_PERCENT, MAX_ORDER_VALUE, MAX_DAILY_LOSS
 
-import json
-import datetime
+
 
 from logger_config import setup_logging
 
@@ -39,20 +42,14 @@ class StrategyRunner:
         self.risk_manager = RiskManager(self.bot)
         self.model = genai.GenerativeModel('gemini-2.5-flash')
         self.running = False
-        self.history_file = "trade_history.jsonl"
-
-    def log_decision(self, pnl, market_data, decision_json, action, reason):
-        """Logs the decision to a JSONL file."""
-        entry = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "pnl": pnl,
-            "market_data": market_data,
-            "decision_raw": decision_json,
-            "action": action,
-            "reason": reason
-        }
-        with open(self.history_file, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+        # self.history_file = "trade_history.jsonl"  # Deprecated: using DB instead
+        
+        # Professional trading infrastructure
+        self.db = TradingDatabase()
+        self.cost_tracker = CostTracker(self.exchange_name)
+        self.technical_analysis = TechnicalAnalysis()
+        self.session_id = None
+        self.context = None
 
     async def initialize(self):
         """Connects and initializes the bot."""
@@ -65,6 +62,12 @@ class StrategyRunner:
         # Get initial PnL
         initial_pnl = await self.bot.get_pnl_async()
         logger.info(f"{self.exchange_name} PnL: {initial_pnl}")
+        
+        # Create or load today's trading session
+        self.session_id = self.db.get_or_create_session(starting_balance=initial_pnl)
+        
+        # Initialize trading context
+        self.context = TradingContext(self.db, self.session_id)
         
         self.risk_manager.update_pnl(initial_pnl)
         bot_actions_logger.info(f"💰 Starting Portfolio Value: ${initial_pnl:,.2f}")
@@ -87,6 +90,26 @@ class StrategyRunner:
             if data:
                 market_summary += f"\n  - {symbol}: Price ${data.get('price', 'N/A')}, Bid ${data.get('bid', 'N/A')}, Ask ${data.get('ask', 'N/A')}"
         
+        # Get trading context summary and technical indicators
+        symbol = available_symbols[0] if available_symbols else None
+        context_summary = ""
+        indicator_summary = ""
+        
+        if symbol and self.context:
+            try:
+                # Get session context
+                context_summary = self.context.get_context_summary(symbol)
+                
+                # Calculate technical indicators from recent market data
+                recent_data = self.db.get_recent_market_data(self.session_id, symbol, limit=50)
+                if recent_data and len(recent_data) >= 20:
+                    indicators = self.technical_analysis.calculate_indicators(recent_data)
+                    if indicators:
+                        current_price = market_data[symbol]['price']
+                        indicator_summary = self.technical_analysis.format_indicators_for_llm(indicators, current_price)
+            except Exception as e:
+                logger.warning(f"Error getting context/indicators: {e}")
+        
         # Determine if we're trading crypto or stocks
         is_crypto = ACTIVE_EXCHANGE == 'GEMINI' and any('/' in symbol for symbol in available_symbols)
         
@@ -107,7 +130,14 @@ Available Symbols: {', '.join(available_symbols)}
 
 For crypto trading, you can use FRACTIONAL quantities (e.g., 0.001 BTC).
 Calculate the appropriate fractional amount to stay within the ${MAX_ORDER_VALUE:.2f} max order value.
-
+"""
+            # Add context and indicators if available
+            if context_summary:
+                prompt += f"\n{context_summary}\n"
+            if indicator_summary:
+                prompt += f"\n{indicator_summary}\n"
+            
+            prompt += """
 Decide on an action for one of the available symbols.
 Return ONLY a JSON object with the following format:
 {{
@@ -135,7 +165,14 @@ Risk Constraints:
 Available Symbols: {', '.join(available_symbols)}
 
 For stock trading, quantities must be WHOLE NUMBERS (integers).
-
+"""
+            # Add context and indicators if available
+            if context_summary:
+                prompt += f"\n{context_summary}\n"
+            if indicator_summary:
+                prompt += f"\n{indicator_summary}\n"
+            
+            prompt += """
 Decide on an action for one of the available symbols.
 Return ONLY a JSON object with the following format:
 {{
@@ -150,6 +187,20 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
         
         try:
             response = self.model.generate_content(prompt)
+            
+            # Track token usage and cost
+            if hasattr(response, 'usage_metadata') and self.session_id:
+                try:
+                    input_tokens = response.usage_metadata.prompt_token_count
+                    output_tokens = response.usage_metadata.candidates_token_count
+                    cost = self.cost_tracker.calculate_llm_cost(input_tokens, output_tokens)
+                    
+                    # Log to database
+                    self.db.log_llm_call(self.session_id, input_tokens, output_tokens, cost, response.text[:500])
+                    logger.debug(f"LLM call: {input_tokens + output_tokens} tokens, ${cost:.6f}")
+                except Exception as e:
+                    logger.warning(f"Error tracking LLM usage: {e}")
+            
             # Simple cleanup to ensure JSON
             text = response.text.strip()
             if text.startswith('```json'):
@@ -159,7 +210,6 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
             return text
         except Exception as e:
             logger.error(f"LLM Error: {e}")
-            return None
             return None
 
     async def execute_decision(self, decision_json, price):
@@ -204,11 +254,60 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
     async def cleanup(self):
         """Cleanup and close connection."""
         logger.info("Cleaning up connections...")
+        
+        # Save final session statistics
+        if self.session_id:
+            try:
+                # Get final PnL
+                final_pnl = await self.bot.get_pnl_async()
+                
+                # Get session stats
+                session_stats = self.db.get_session_stats(self.session_id)
+                
+                # Calculate net PnL
+                gross_pnl = final_pnl - session_stats['starting_balance']
+                net_pnl = self.cost_tracker.calculate_net_pnl(
+                    gross_pnl,
+                    session_stats['total_fees'],
+                    session_stats['total_llm_cost']
+                )
+                
+                # Update database
+                self.db.update_session_balance(self.session_id, final_pnl, net_pnl)
+                
+                # Log summary to bot.log
+                bot_actions_logger.info("=" * 50)
+                bot_actions_logger.info("📊 SESSION SUMMARY")
+                bot_actions_logger.info("=" * 50)
+                bot_actions_logger.info(f"Total Trades: {session_stats['total_trades']}")
+                bot_actions_logger.info(f"Gross PnL: ${gross_pnl:,.2f}")
+                bot_actions_logger.info(f"Trading Fees: ${session_stats['total_fees']:.2f}")
+                bot_actions_logger.info(f"LLM Costs: ${session_stats['total_llm_cost']:.4f}")
+                bot_actions_logger.info(f"Net PnL: ${net_pnl:,.2f}")
+                
+                if net_pnl > 0:
+                    bot_actions_logger.info(f"✅ Profitable session!")
+                else:
+                    bot_actions_logger.info(f"❌ Unprofitable session")
+                bot_actions_logger.info("=" * 50)
+                
+            except Exception as e:
+                logger.error(f"Error saving session stats: {e}")
+        
+        # Close bot connection
         try:
             await self.bot.close()
             logger.info(f"{self.exchange_name} connection closed")
         except Exception as e:
             logger.error(f"Error closing {self.exchange_name} connection: {e}")
+        
+        # Close database
+        try:
+            if self.db:
+                self.db.close()
+                logger.info("Database connection closed")
+        except Exception as e:
+            logger.error(f"Error closing database: {e}")
         
         logger.info("Cleanup complete.")
 
@@ -243,6 +342,20 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                     
                     data = await self.bot.get_market_data_async(symbol)
                     market_data[symbol] = data
+                    
+                    # Log market data to database
+                    if data and self.session_id:
+                        try:
+                            self.db.log_market_data(
+                                self.session_id,
+                                symbol,
+                                data.get('price', 0),
+                                data.get('bid', 0),
+                                data.get('ask', 0),
+                                data.get('volume', 0)
+                            )
+                        except Exception as e:
+                            logger.warning(f"Error logging market data: {e}")
 
                     # 3. Get Decision
                     decision_json = await self.get_llm_decision(market_data, current_pnl)
@@ -262,8 +375,6 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             reason = "Failed to parse"
                             symbol = "UNKNOWN"
                             quantity = 0
-
-                        self.log_decision(current_pnl, market_data, decision_json, action, reason)
                     
                         # Log decision to user-friendly log
                         if action == 'HOLD':
@@ -281,13 +392,34 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                             price = data['price'] if data else 0
                             
                             if self.risk_manager.check_trade_allowed(symbol, action, quantity, price):
+                                # Calculate fee before execution
+                                fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, action)
+                                
                                 # Format fractional crypto amounts nicely
                                 if quantity < 1:
                                     qty_str = f"{quantity:.6f}".rstrip('0').rstrip('.')
                                 else:
                                     qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
-                                bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f}")
-                                await self.bot.place_order_async(symbol, action, quantity)
+                                
+                                bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (fee: ${fee:.4f})")
+                                
+                                # Execute trade
+                                order_result = await self.bot.place_order_async(symbol, action, quantity)
+                                
+                                # Log trade to database
+                                if self.session_id and order_result:
+                                    try:
+                                        self.db.log_trade(
+                                            self.session_id,
+                                            symbol,
+                                            action,
+                                            quantity,
+                                            price,
+                                            fee,
+                                            reason
+                                        )
+                                    except Exception as e:
+                                        logger.warning(f"Error logging trade: {e}")
                             else:
                                 bot_actions_logger.info(f"⛔ Trade Blocked: Risk limits exceeded")
                     

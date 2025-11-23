@@ -28,3 +28,13 @@ GEMINI_SANDBOX_SECRET = os.getenv('GEMINI_SANDBOX_SECRET', '') # Sandbox Secret
 # Options: 'IB' or 'GEMINI'
 ACTIVE_EXCHANGE = os.getenv('ACTIVE_EXCHANGE', 'IB').upper()
 
+# Exchange Fees
+GEMINI_MAKER_FEE = float(os.getenv('GEMINI_MAKER_FEE', '0.0035'))  # 0.35%
+GEMINI_TAKER_FEE = float(os.getenv('GEMINI_TAKER_FEE', '0.0035'))  # 0.35%
+IB_STOCK_FEE_PER_SHARE = float(os.getenv('IB_STOCK_FEE_PER_SHARE', '0.005'))  # $0.005 per share
+IB_MIN_FEE = float(os.getenv('IB_MIN_FEE', '1.00'))  # $1 minimum
+
+# LLM Costs (Gemini 2.5 Flash pricing per token)
+GEMINI_INPUT_COST_PER_TOKEN = float(os.getenv('GEMINI_INPUT_COST', '0.000000075'))   # $0.075 per 1M tokens
+GEMINI_OUTPUT_COST_PER_TOKEN = float(os.getenv('GEMINI_OUTPUT_COST', '0.00000030'))  # $0.30 per 1M tokens
+

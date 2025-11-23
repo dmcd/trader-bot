@@ -1,2 +1,7 @@
 .env*
-bot.log
+*.log
+__pycache__/
+*.pyc
+.env
+.DS_Store
+trading.db

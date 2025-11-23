@@ -157,6 +157,8 @@ def calculate_pnl(df, current_prices):
         unrealized_pnl (float)
         positions (list of dicts)
         df (DataFrame with 'pnl' column added)
+        exposure (float)
+        trade_spacing (dict)
     """
     realized_pnl = 0.0
     holdings = {} # {symbol: {'qty': 0.0, 'avg_cost': 0.0}}
@@ -166,6 +168,14 @@ def calculate_pnl(df, current_prices):
     
     # Sort by timestamp to process chronologically
     df = df.sort_values('timestamp', ascending=True)
+
+    # Trade spacing metrics
+    trade_spacing = {"avg_seconds": None, "last_seconds": None}
+    if len(df) >= 2:
+        deltas = df['timestamp'].diff().dt.total_seconds().dropna()
+        if not deltas.empty:
+            trade_spacing["avg_seconds"] = deltas.mean()
+            trade_spacing["last_seconds"] = deltas.iloc[-1]
     
     for index, row in df.iterrows():
         symbol = row['symbol']
@@ -207,6 +217,7 @@ def calculate_pnl(df, current_prices):
     # Calculate Unrealized PnL
     unrealized_pnl = 0.0
     active_positions = []
+    exposure = 0.0
     
     for symbol, data in holdings.items():
         qty = data['qty']
@@ -219,6 +230,7 @@ def calculate_pnl(df, current_prices):
             pos_unrealized = position_value - cost_basis
             
             unrealized_pnl += pos_unrealized
+            exposure += position_value
             
             active_positions.append({
                 'Symbol': symbol,
@@ -229,7 +241,7 @@ def calculate_pnl(df, current_prices):
                 'Value': position_value
             })
             
-    return realized_pnl, unrealized_pnl, active_positions, df
+    return realized_pnl, unrealized_pnl, active_positions, df, exposure, trade_spacing
 
 def load_logs():
     if os.path.exists("bot.log"):
@@ -274,7 +286,7 @@ with col1:
         current_prices = get_latest_prices(session_id, symbols)
         
         # Calculate PnL
-        realized_pnl, unrealized_pnl, active_positions, df = calculate_pnl(df, current_prices)
+        realized_pnl, unrealized_pnl, active_positions, df, exposure, trade_spacing = calculate_pnl(df, current_prices)
         
         gross_pnl_usd = realized_pnl + unrealized_pnl
         
@@ -291,10 +303,13 @@ with col1:
             currency_symbol = 'USD'
 
         # Calculate net PnL after fees and LLM costs
-        net_pnl = gross_pnl - session_stats.get('total_fees', 0) - session_stats.get('total_llm_cost', 0)
+        fees = session_stats.get('total_fees', 0)
+        llm_cost = session_stats.get('total_llm_cost', 0)
+        net_pnl = gross_pnl - fees - llm_cost
         
-        total_costs = session_stats.get('total_fees', 0) + session_stats.get('total_llm_cost', 0)
+        total_costs = fees + llm_cost
         cost_ratio = (total_costs / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
+        fee_ratio = (fees / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
         
         # Profitability status
         status = "✅ Profitable" if net_pnl > 0 else "❌ Unprofitable"
@@ -309,12 +324,23 @@ with col1:
         # Cost summary - Row 2
         st.markdown("---")
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total Fees", f"${session_stats.get('total_fees', 0):.2f}")
-        c2.metric("LLM Costs", f"${session_stats.get('total_llm_cost', 0):.4f}")
-        c3.metric("Total Costs", f"${total_costs:.2f}")
+        c1.metric("Total Fees", f"${fees:.2f}", f"{fee_ratio:.1f}% of Gross" if gross_pnl else None)
+        c2.metric("LLM Costs", f"${llm_cost:.4f}")
+        c3.metric("Total Costs", f"${total_costs:.2f}", f"{cost_ratio:.1f}% of Gross" if gross_pnl else None)
         c4.metric("Total Trades", session_stats.get('total_trades', 0))
         
         st.markdown("---")
+        
+        # Trade spacing and exposure row
+        s1, s2, s3, s4 = st.columns(4)
+        avg_spacing = trade_spacing.get("avg_seconds")
+        last_spacing = trade_spacing.get("last_seconds")
+        spacing_text = f"{avg_spacing:.0f}s avg" if avg_spacing else "n/a"
+        spacing_delta = f"{last_spacing:.0f}s last" if last_spacing else None
+        s1.metric("Trade Spacing", spacing_text, spacing_delta)
+        s2.metric("Exposure", f"${exposure:,.2f}")
+        s3.metric("Positions", len(active_positions))
+        s4.metric("Loop Interval", f"{st.session_state.refresh_rate}s refresh")
         
         # Active Positions Table - Always show heading and table
         st.subheader("📈 Active Positions")

@@ -20,7 +20,7 @@ class GeminiTrader(BaseTrader):
             self.api_key = GEMINI_EXCHANGE_API_KEY
             self.secret = GEMINI_EXCHANGE_SECRET
             self.sandbox = False
-            
+
         self.exchange = None
         self.connected = False
 
@@ -36,7 +36,7 @@ class GeminiTrader(BaseTrader):
                 'secret': self.secret,
                 'enableRateLimit': True,
             })
-            
+
             if self.sandbox:
                 logger.info("Using Gemini Sandbox Environment")
                 self.exchange.set_sandbox_mode(True)
@@ -46,7 +46,7 @@ class GeminiTrader(BaseTrader):
                     'private': 'https://api.sandbox.gemini.com',
                 }
                 logger.info(f"Gemini URLs: {self.exchange.urls}")
-            
+
             # Test connection by loading markets
             logger.info("Loading markets...")
             await self.exchange.load_markets()
@@ -109,10 +109,10 @@ class GeminiTrader(BaseTrader):
         try:
             side = 'buy' if action == 'BUY' else 'sell'
             logger.info(f"Placing Gemini order: {side} {quantity} {symbol}")
-            
+
             # Get current market price to set limit price
             ticker = await self.exchange.fetch_ticker(symbol)
-            
+
             # For immediate execution (like market order):
             # - BUY: use ask price (willing to pay the current ask)
             # - SELL: use bid price (willing to accept the current bid)
@@ -120,19 +120,17 @@ class GeminiTrader(BaseTrader):
                 limit_price = ticker['ask']
             else:
                 limit_price = ticker['bid']
-            
-            # Round to appropriate precision to avoid ccxt errors
-            # Gemini typically requires:
-            # - Price: 2 decimal places for USD pairs
-            # - Quantity: 8 decimal places for BTC
-            limit_price = round(limit_price, 2)
-            quantity = round(quantity, 8)
-            
+
+            # Use ccxt's precision methods to ensure correct formatting
+            # These methods use the exchange's market precision data
+            limit_price = self.exchange.price_to_precision(symbol, limit_price)
+            quantity = self.exchange.amount_to_precision(symbol, quantity)
+
             logger.info(f"Placing limit order: {quantity} at ${limit_price}")
-            
+
             # Create limit order
             order = await self.exchange.create_limit_order(symbol, side, quantity, limit_price)
-            
+
             return {
                 'order_id': order['id'],
                 'status': order['status'],
@@ -152,21 +150,21 @@ class GeminiTrader(BaseTrader):
         try:
             balance = await self.exchange.fetch_balance()
             total_usd = 0.0
-            
+
             # Simple estimation: sum of (balance * current_price)
-            # Note: This is expensive if we have many coins. 
+            # Note: This is expensive if we have many coins.
             # For now, let's just check USD and BTC
-            
+
             if 'USD' in balance['total']:
                 total_usd += balance['total']['USD']
-                
+
             # Check BTC
             btc_price = 0
             if 'BTC' in balance['total'] and balance['total']['BTC'] > 0:
                 ticker = await self.exchange.fetch_ticker('BTC/USD')
                 btc_price = ticker['last']
                 total_usd += balance['total']['BTC'] * btc_price
-            
+
             # In PAPER mode (sandbox), subtract starting balances to show only trading PnL
             # Sandbox starts with: $100,000 USD + 1000 BTC
             # In LIVE mode, show actual total value

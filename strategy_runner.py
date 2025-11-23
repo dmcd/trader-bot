@@ -69,6 +69,7 @@ class StrategyRunner:
         # Simple in-memory holdings tracker for realized PnL
         self.holdings = {}  # symbol -> {'qty': float, 'avg_cost': float}
         self.size_tier = SIZE_TIER if SIZE_TIER in ORDER_SIZE_BY_TIER else 'MODERATE'
+        self._last_reconnect = 0.0
         self.size_tier = SIZE_TIER if SIZE_TIER in ORDER_SIZE_BY_TIER else 'MODERATE'
 
     async def initialize(self):
@@ -284,6 +285,18 @@ class StrategyRunner:
                     logger.error(f"Error flattening {symbol}: {e}")
         except Exception as e:
             logger.error(f"Flatten-all failed: {e}")
+
+    async def _reconnect_bot(self):
+        """Reconnect the broker client with a cooldown to avoid thrash."""
+        now = asyncio.get_event_loop().time()
+        if now - self._last_reconnect < 30:
+            return
+        try:
+            await self.bot.connect_async()
+            self._last_reconnect = now
+            logger.info("Reconnected to broker")
+        except Exception as e:
+            logger.error(f"Reconnect failed: {e}")
 
     def _is_choppy(self, symbol: str, market_data_point, recent_data):
         """
@@ -810,9 +823,18 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                 bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (fee: ${fee:.4f})")
                                 
                                 # Execute trade
-                                order_result = await self.bot.place_order_async(symbol, action, quantity, prefer_maker=True)
+                                try:
+                                    order_result = await asyncio.wait_for(
+                                        self.bot.place_order_async(symbol, action, quantity, prefer_maker=True),
+                                        timeout=15
+                                    )
+                                except asyncio.TimeoutError:
+                                    logger.error("Order placement timed out")
+                                    await self._reconnect_bot()
+                                    order_result = None
+
                                 # Capture reported liquidity if present
-                                if order_result and order_result.get('liquidity'):
+                                if order_result and isinstance(order_result, dict) and order_result.get('liquidity'):
                                     liquidity = order_result.get('liquidity')
                                 self.last_trade_ts = asyncio.get_event_loop().time()
                                 
@@ -839,6 +861,8 @@ Example: {{"action": "BUY", "symbol": "BHP", "quantity": 2, "reason": "Upward tr
                                             logger.warning(f"Could not snapshot open orders: {e}")
                                     except Exception as e:
                                         logger.warning(f"Error logging trade: {e}")
+                                elif self.session_id and not order_result:
+                                    bot_actions_logger.info("⚠️ Order failed or timed out; not logged.")
                             else:
                                 bot_actions_logger.info(f"⛔ Trade Blocked: {risk_result.reason}")
                                 self.last_rejection_reason = risk_result.reason

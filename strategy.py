@@ -48,7 +48,7 @@ class BaseStrategy(ABC):
         pass
 
 class LLMStrategy(BaseStrategy):
-    def __init__(self, db, technical_analysis, cost_tracker, size_tier='MODERATE'):
+    def __init__(self, db, technical_analysis, cost_tracker, size_tier='MODERATE', open_orders_provider=None):
         super().__init__(db, technical_analysis, cost_tracker)
         self.size_tier = size_tier
         self.model = genai.GenerativeModel('gemini-2.5-flash')
@@ -60,6 +60,8 @@ class LLMStrategy(BaseStrategy):
         self.last_trade_ts = None
         self._last_break_glass = 0.0
         self.last_rejection_reason = None
+        # Optional async callable that fetches live open orders from the active exchange
+        self.open_orders_provider = open_orders_provider
 
     def _is_choppy(self, symbol: str, market_data_point, recent_data):
         """
@@ -159,6 +161,20 @@ class LLMStrategy(BaseStrategy):
             return None
 
         # 4. Build Prompt
+        open_orders = []
+        if self.open_orders_provider:
+            try:
+                open_orders = await self.open_orders_provider()
+            except Exception as e:
+                logger.warning(f"Open order fetch failed; falling back to DB: {e}")
+
+        if not open_orders:
+            try:
+                open_orders = self.db.get_open_orders(session_id)
+            except Exception as e:
+                logger.warning(f"DB open order fetch failed: {e}")
+                open_orders = []
+
         last_trade_age = (now_ts - self.last_trade_ts) if self.last_trade_ts else None
         last_trade_age_str = f"{last_trade_age:.0f}s" if last_trade_age is not None else "n/a"
         fee_ratio_flag = "high" if self._fees_too_high(session_id) else "normal"
@@ -171,7 +187,6 @@ class LLMStrategy(BaseStrategy):
         equity_now = current_equity if current_equity is not None else 0.0
         headroom = max(0.0, exposure_cap - exposure_now)
 
-        open_orders = self.db.get_open_orders(session_id) if session_id else []
         open_order_count = len(open_orders)
         open_order_snippets = []
         for order in open_orders[:5]:
@@ -259,7 +274,7 @@ class LLMStrategy(BaseStrategy):
         
         if symbol and trading_context:
             try:
-                context_summary = trading_context.get_context_summary(symbol)
+                context_summary = trading_context.get_context_summary(symbol, open_orders=open_orders)
                 recent_data = self.db.get_recent_market_data(session_id, symbol, limit=50)
                 if recent_data and len(recent_data) >= 20:
                     indicators = self.ta.calculate_indicators(recent_data)

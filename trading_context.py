@@ -17,7 +17,7 @@ class TradingContext:
         self.session_id = session_id
         self.is_sandbox = (TRADING_MODE == 'PAPER')
     
-    def get_context_summary(self, symbol: str) -> str:
+    def get_context_summary(self, symbol: str, open_orders: List[Dict[str, Any]] = None) -> str:
         """Generate comprehensive context summary for LLM."""
         
         # Get session stats
@@ -72,9 +72,10 @@ class TradingContext:
             else:
                 price_trend = f"Sideways ({price_change:+.2f}%)"
         
-        # Get current positions and open orders from database
+        # Get current positions and open orders (prefer provided snapshot)
         positions = self.db.get_positions(self.session_id)
-        open_orders = self.db.get_open_orders(self.session_id)
+        if open_orders is None:
+            open_orders = self.db.get_open_orders(self.session_id)
         
         # Build context summary
         context = f"""

@@ -77,7 +77,8 @@ class StrategyRunner:
             self.db, 
             self.technical_analysis, 
             self.cost_tracker, 
-            self.size_tier
+            self.size_tier,
+            open_orders_provider=self.bot.get_open_orders_async,
         )
         
         # Trade syncing state

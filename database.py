@@ -394,6 +394,19 @@ class TradingDatabase:
         """, (ending_balance, net_pnl, session_id))
         self.conn.commit()
 
+    def update_session_totals(self, session_id: int, total_trades: int = None, total_fees: float = None, total_llm_cost: float = None, net_pnl: float = None):
+        """Update aggregate totals on sessions row."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE sessions
+            SET total_trades = COALESCE(?, total_trades),
+                total_fees = COALESCE(?, total_fees),
+                total_llm_cost = COALESCE(?, total_llm_cost),
+                net_pnl = COALESCE(?, net_pnl)
+            WHERE id = ?
+        """, (total_trades, total_fees, total_llm_cost, net_pnl, session_id))
+        self.conn.commit()
+
     def replace_positions(self, session_id: int, positions: List[Dict[str, Any]]):
         """Replace stored positions snapshot for the session."""
         cursor = self.conn.cursor()

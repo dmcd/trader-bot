@@ -272,6 +272,8 @@ class LLMStrategy(BaseStrategy):
             prompt_context,
             context,
             open_orders=open_orders,
+            headroom=headroom,
+            pending_buy_exposure=pending_buy_exposure,
         )
         
         if decision_json:
@@ -349,7 +351,7 @@ class LLMStrategy(BaseStrategy):
 
         return self.prompt_template.format_map(_SafeDict(**kwargs))
 
-    async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None):
+    async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0):
         """Asks Gemini for a trading decision."""
         if not GEMINI_API_KEY:
             return None

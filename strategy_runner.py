@@ -374,6 +374,17 @@ class StrategyRunner:
         self.session_stats['total_llm_cost'] = db_stats.get('total_llm_cost', 0.0)
         self.db.set_session_stats_cache(self.session_id, self.session_stats)
         logger.info(f"Session stats rebuilt from trades: {self.session_stats}")
+        # Mirror stats into sessions table
+        try:
+            self.db.update_session_totals(
+                self.session_id,
+                total_trades=self.session_stats['total_trades'],
+                total_fees=self.session_stats['total_fees'],
+                total_llm_cost=self.session_stats['total_llm_cost'],
+                net_pnl=self.session_stats['gross_pnl'] - self.session_stats['total_fees'] - self.session_stats['total_llm_cost'],
+            )
+        except Exception as e:
+            logger.warning(f"Could not update session totals: {e}")
 
     async def _close_all_positions_safely(self):
         """Attempt to flatten all positions using market-ish orders."""
@@ -493,6 +504,12 @@ class StrategyRunner:
                 
                 # Get session stats
                 session_stats = self.db.get_session_stats(self.session_id)
+                # Ensure stats reflect latest trades before final report
+                try:
+                    await self._rebuild_session_stats_from_trades()
+                    session_stats = self.db.get_session_stats(self.session_id)
+                except Exception as e:
+                    logger.debug(f"Could not rebuild stats on cleanup: {e}")
                 
                 # Calculate net PnL
                 gross_pnl = final_equity - session_stats['starting_balance']

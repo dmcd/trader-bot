@@ -1,7 +1,24 @@
 import asyncio
+import atexit
+import os
+import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timedelta, timezone
+
+# Ensure tests never write to the production trading.db
+_fd, _db_path = tempfile.mkstemp(prefix="trader-bot-test-", suffix=".db")
+os.close(_fd)
+os.environ.setdefault("TRADING_DB_PATH", _db_path)
+
+
+@atexit.register
+def _cleanup_db_path():
+    if os.path.exists(_db_path):
+        try:
+            os.remove(_db_path)
+        except OSError:
+            pass
 
 from strategy_runner import StrategyRunner
 

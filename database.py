@@ -1,5 +1,6 @@
 import sqlite3
 import logging
+import os
 from datetime import datetime, date
 from typing import Optional, List, Dict, Any
 
@@ -8,8 +9,9 @@ logger = logging.getLogger(__name__)
 class TradingDatabase:
     """Manages SQLite database for persistent trading data."""
     
-    def __init__(self, db_path: str = "trading.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[str] = None):
+        # Allow tests or env overrides to point at an isolated database
+        self.db_path = db_path or os.getenv("TRADING_DB_PATH", "trading.db")
         self.conn = None
         self.initialize_database()
     

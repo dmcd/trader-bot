@@ -38,6 +38,23 @@ class TestActionsSchema(unittest.TestCase):
         decision_obj = json.loads(decision)
         self.assertEqual(decision_obj["action"], "PARTIAL_CLOSE")
 
+    def test_close_position_and_pause_schema_valid(self):
+        close_decision = json.dumps({
+            "action": "CLOSE_POSITION",
+            "symbol": "BTC/USD",
+            "quantity": 0,
+            "reason": "exit"
+        })
+        pause_decision = json.dumps({
+            "action": "PAUSE_TRADING",
+            "symbol": "BTC/USD",
+            "quantity": 0,
+            "reason": "cooldown",
+            "duration_minutes": 10
+        })
+        self.assertEqual(json.loads(close_decision)["action"], "CLOSE_POSITION")
+        self.assertEqual(json.loads(pause_decision)["action"], "PAUSE_TRADING")
+
 
 if __name__ == "__main__":
     unittest.main()

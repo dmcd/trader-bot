@@ -99,6 +99,7 @@ class StrategyRunner:
         self.max_plans_per_symbol = 2
         self.telemetry_logger = telemetry_logger
         self._apply_plan_trailing_pct = 0.01  # move stop to entry after 1% move in favor
+        self._pause_until = None  # timestamp (monotonic seconds) when pause expires
 
     def _emit_telemetry(self, record: dict):
         """Emit structured telemetry as JSON line."""
@@ -234,6 +235,61 @@ class StrategyRunner:
         self._log_execution_trace(trace_id, telemetry_record)
         self._emit_telemetry(telemetry_record)
 
+    async def _handle_close_position(self, signal, telemetry_record, trace_id, market_data):
+        """Handle CLOSE_POSITION intents by flattening current holdings for symbol."""
+        symbol = signal.symbol
+        qty = 0.0
+        price = market_data.get(symbol, {}).get('price') if market_data else None
+        try:
+            positions = self.db.get_positions(self.session_id)
+            for pos in positions:
+                if pos.get('symbol') == symbol:
+                    qty = pos.get('quantity', 0.0) or 0.0
+                    break
+        except Exception:
+            qty = 0.0
+        if qty <= 0:
+            telemetry_record["status"] = "close_position_none"
+            self._emit_telemetry(telemetry_record)
+            return
+        action = 'SELL' if qty > 0 else 'BUY'
+        qty_abs = abs(qty)
+        qty_buffered = self._apply_order_value_buffer(qty_abs, price or 0)
+        if qty_buffered <= 0:
+            telemetry_record["status"] = "close_position_zero_after_buffer"
+            self._emit_telemetry(telemetry_record)
+            return
+        risk_result = self.risk_manager.check_trade_allowed(symbol, action, qty_buffered, price or 0)
+        if not risk_result.allowed:
+            telemetry_record["status"] = "close_position_blocked"
+            telemetry_record["risk_reason"] = risk_result.reason
+            self._emit_telemetry(telemetry_record)
+            return
+        try:
+            order_result = await self.bot.place_order_async(symbol, action, qty_buffered, prefer_maker=True)
+            fee = self.cost_tracker.calculate_trade_fee(symbol, qty_buffered, price or 0, action)
+            realized = self._update_holdings_and_realized(symbol, action, qty_buffered, price or 0, fee)
+            self.db.log_trade(
+                self.session_id,
+                symbol,
+                action,
+                qty_buffered,
+                price or 0,
+                fee,
+                f"Close position request ({qty})",
+                liquidity=order_result.get('liquidity') if order_result else 'taker',
+                realized_pnl=realized,
+            )
+            self._apply_fill_to_session_stats(order_result.get('order_id') if order_result else None, fee, realized)
+            telemetry_record["status"] = "close_position_executed"
+            telemetry_record["order_result"] = order_result
+        except Exception as e:
+            telemetry_record["status"] = "close_position_error"
+            telemetry_record["error"] = str(e)
+            logger.error(f"Close position failed: {e}")
+        self._log_execution_trace(trace_id, telemetry_record)
+        self._emit_telemetry(telemetry_record)
+
     async def _handle_signal(self, signal, market_data, open_orders, current_equity, current_exposure):
         """Helper for tests to exercise action handling paths."""
         # This wraps a subset of the loop logic for specific actions.
@@ -245,12 +301,22 @@ class StrategyRunner:
             "action": signal.action,
             "plan_id": getattr(signal, 'plan_id', None),
             "close_fraction": getattr(signal, 'close_fraction', None),
+            "duration_minutes": getattr(signal, 'duration_minutes', None),
         }
         trace_id = getattr(signal, 'trace_id', None)
         if signal.action == 'UPDATE_PLAN':
             await self._handle_update_plan(signal, telemetry_record, trace_id)
         elif signal.action == 'PARTIAL_CLOSE':
             await self._handle_partial_close(signal, telemetry_record, trace_id, market_data, current_exposure)
+        elif signal.action == 'CLOSE_POSITION':
+            await self._handle_close_position(signal, telemetry_record, trace_id, market_data)
+        elif signal.action == 'PAUSE_TRADING':
+            duration = getattr(signal, 'duration_minutes', None) or 5
+            pause_seconds = max(0, duration * 60)
+            self._pause_until = asyncio.get_event_loop().time() + pause_seconds
+            telemetry_record["status"] = "paused"
+            telemetry_record["pause_seconds"] = pause_seconds
+            self._emit_telemetry(telemetry_record)
 
 
     async def _capture_ohlcv(self, symbol: str):
@@ -914,6 +980,12 @@ class StrategyRunner:
                         break
 
                     # 2. Fetch Market Data
+                    now_monotonic = asyncio.get_event_loop().time()
+                    if self._pause_until and now_monotonic < self._pause_until:
+                        bot_actions_logger.info(f"⏸️ Trading paused for {self._pause_until - now_monotonic:.0f}s")
+                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        continue
+
                     market_data = {}
                     
                     # Determine which symbol to fetch based on exchange
@@ -1134,6 +1206,20 @@ class StrategyRunner:
 
                         elif action == 'PARTIAL_CLOSE':
                             await self._handle_partial_close(signal, telemetry_record, trace_id, market_data, current_exposure)
+                            continue
+
+                        elif action == 'CLOSE_POSITION':
+                            await self._handle_close_position(signal, telemetry_record, trace_id, market_data)
+                            continue
+
+                        elif action == 'PAUSE_TRADING':
+                            duration = getattr(signal, 'duration_minutes', None) or 5
+                            pause_seconds = max(0, duration * 60)
+                            self._pause_until = asyncio.get_event_loop().time() + pause_seconds
+                            telemetry_record["status"] = "paused"
+                            telemetry_record["pause_seconds"] = pause_seconds
+                            self._emit_telemetry(telemetry_record)
+                            bot_actions_logger.info(f"⏸️ Trading paused for {pause_seconds/60:.1f} minutes by LLM request")
                             continue
 
                         elif action in ['BUY', 'SELL'] and quantity > 0:

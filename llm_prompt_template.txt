@@ -35,7 +35,7 @@ REMINDERS:
 
 Return ONLY a JSON object with the following format:
 {{
-    "action": "BUY" | "SELL" | "HOLD" | "CANCEL" | "UPDATE_PLAN" | "PARTIAL_CLOSE",
+    "action": "BUY" | "SELL" | "HOLD" | "CANCEL" | "UPDATE_PLAN" | "PARTIAL_CLOSE" | "CLOSE_POSITION" | "PAUSE_TRADING",
     "symbol": "<symbol from available symbols>",
     "quantity": <number>,
     "reason": "<short explanation>",
@@ -44,6 +44,7 @@ Return ONLY a JSON object with the following format:
     "target_price": <number|null>,
     "plan_id": <number|null>,          // required when action=UPDATE_PLAN or PARTIAL_CLOSE
     "size_factor": <number|null>,      // optional for UPDATE_PLAN (e.g., 0.5 to halve size)
-    "close_fraction": <number|null>    // optional for PARTIAL_CLOSE (0-1 fraction to close)
+    "close_fraction": <number|null>,   // optional for PARTIAL_CLOSE (0-1 fraction to close)
+    "duration_minutes": <number|null>  // optional for PAUSE_TRADING
 }}
 {prompt_context_block}{rules_block}{mode_note}{rejection_note}

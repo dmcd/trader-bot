@@ -74,6 +74,26 @@ class TestActionHandling(unittest.IsolatedAsyncioTestCase):
         await self.runner._handle_signal(signal=signal, market_data={'BTC/USD': {'price': 100}}, open_orders=[], current_equity=1000, current_exposure=0)
         self.runner.db.log_trade.assert_called_once()
 
+    async def test_close_position_handling(self):
+        self.runner.db.get_positions.return_value = [{'symbol': 'BTC/USD', 'quantity': 0.2, 'avg_price': 100}]
+        signal = MagicMock()
+        signal.action = 'CLOSE_POSITION'
+        signal.symbol = 'BTC/USD'
+        signal.trace_id = None
+        signal.regime_flags = {}
+        await self.runner._handle_signal(signal=signal, market_data={'BTC/USD': {'price': 100}}, open_orders=[], current_equity=1000, current_exposure=0)
+        self.runner.db.log_trade.assert_called()
+
+    async def test_pause_trading_sets_pause_until(self):
+        signal = MagicMock()
+        signal.action = 'PAUSE_TRADING'
+        signal.symbol = 'BTC/USD'
+        signal.duration_minutes = 1
+        signal.trace_id = None
+        signal.regime_flags = {}
+        await self.runner._handle_signal(signal=signal, market_data={}, open_orders=[], current_equity=0, current_exposure=0)
+        self.assertIsNotNone(self.runner._pause_until)
+
 
 if __name__ == '__main__':
     unittest.main()

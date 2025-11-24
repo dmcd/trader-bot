@@ -76,7 +76,7 @@ class LLMStrategy(BaseStrategy):
         self._decision_schema = {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["BUY", "SELL", "HOLD", "CANCEL", "UPDATE_PLAN", "PARTIAL_CLOSE"]},
+                "action": {"type": "string", "enum": ["BUY", "SELL", "HOLD", "CANCEL", "UPDATE_PLAN", "PARTIAL_CLOSE", "CLOSE_POSITION", "PAUSE_TRADING"]},
                 "symbol": {"type": "string"},
                 "quantity": {"type": "number", "minimum": 0},
                 "reason": {"type": "string"},
@@ -86,6 +86,7 @@ class LLMStrategy(BaseStrategy):
                 "plan_id": {"type": ["integer", "null"]},
                 "size_factor": {"type": ["number", "null"], "minimum": 0},
                 "close_fraction": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+                "duration_minutes": {"type": ["number", "null"], "minimum": 1}
             },
             "required": ["action", "symbol", "quantity", "reason"],
             "additionalProperties": False
@@ -511,6 +512,13 @@ class LLMStrategy(BaseStrategy):
                     sig = StrategySignal('PARTIAL_CLOSE', symbol, 0, reason or 'Partial close', order_id=plan_id, trace_id=trace_id, regime_flags=regime_flags)
                     sig.plan_id = plan_id
                     sig.close_fraction = close_fraction
+                    return sig
+                elif action == 'CLOSE_POSITION':
+                    sig = StrategySignal('CLOSE_POSITION', symbol, 0, reason or 'Close position', trace_id=trace_id, regime_flags=regime_flags)
+                    return sig
+                elif action == 'PAUSE_TRADING':
+                    sig = StrategySignal('PAUSE_TRADING', symbol, 0, reason or 'Pause trading', trace_id=trace_id, regime_flags=regime_flags)
+                    sig.duration_minutes = decision.get('duration_minutes')
                     return sig
                 elif action == 'HOLD':
                     return StrategySignal('HOLD', symbol, 0, reason, trace_id=trace_id, regime_flags=regime_flags)

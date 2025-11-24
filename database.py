@@ -420,19 +420,47 @@ class TradingDatabase:
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
         session = dict(cursor.fetchone())
-        
-        # Calculate win rate
-        cursor.execute("""
-            SELECT 
-                COUNT(*) as total_trades,
-                SUM(CASE WHEN action = 'BUY' THEN -1 * quantity * price ELSE quantity * price END) as gross_pnl
-            FROM trades
-            WHERE session_id = ?
-        """, (session_id,))
-        
-        stats = dict(cursor.fetchone())
-        session.update(stats)
-        
+
+        # Prefer cached aggregates when present
+        cache = self.get_session_stats_cache(session_id) or {}
+        for key in ["total_trades", "total_fees", "gross_pnl", "total_llm_cost"]:
+            if key in cache and cache[key] is not None:
+                session[key] = cache[key]
+
+        # If gross_pnl is missing, rebuild fee-exclusive realized PnL from trades
+        if session.get('gross_pnl') is None:
+            cursor.execute("""
+                SELECT action, quantity, price, fee
+                FROM trades
+                WHERE session_id = ?
+                ORDER BY timestamp ASC
+            """, (session_id,))
+            trades = cursor.fetchall()
+            holdings = {}  # symbol-agnostic average cost; one-symbol assumption
+            realized = 0.0
+            total_fees = 0.0
+            total_trades = 0
+            avg_cost = 0.0
+            qty_held = 0.0
+            for t in trades:
+                total_trades += 1
+                fee = t['fee'] or 0.0
+                total_fees += fee
+                if t['action'].upper() == 'BUY':
+                    new_qty = qty_held + t['quantity']
+                    avg_cost = ((qty_held * avg_cost) + (t['quantity'] * t['price'])) / new_qty if new_qty > 0 else 0.0
+                    qty_held = new_qty
+                else:
+                    realized += (t['price'] - avg_cost) * t['quantity']
+                    qty_held = max(0.0, qty_held - t['quantity'])
+            session['gross_pnl'] = realized
+            session['total_trades'] = max(session.get('total_trades', 0) or 0, total_trades)
+            session['total_fees'] = session.get('total_fees', 0.0) or total_fees
+
+        # Derive net_pnl if missing
+        if session.get('net_pnl') is None:
+            session['net_pnl'] = (session.get('gross_pnl', 0.0) or 0.0) - (session.get('total_fees', 0.0) or 0.0) - (session.get('total_llm_cost', 0.0) or 0.0)
+
         return session
     
     def update_session_balance(self, session_id: int, ending_balance: float, net_pnl: float):

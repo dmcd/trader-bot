@@ -140,7 +140,7 @@ def calculate_pnl(df, current_prices):
                 
         elif action == 'SELL':
             avg_cost = holdings[symbol]['avg_cost']
-            trade_pnl = (price - avg_cost) * quantity
+            trade_pnl = (price - avg_cost) * quantity  # fee handled separately in totals
             realized_pnl += trade_pnl
             if 'realized_pnl' not in df.columns or pd.isna(df.at[index, 'pnl']):
                 df.at[index, 'pnl'] = trade_pnl

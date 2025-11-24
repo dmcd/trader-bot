@@ -361,7 +361,7 @@ class StrategyRunner:
     def _update_holdings_and_realized(self, symbol: str, action: str, quantity: float, price: float, fee: float) -> float:
         """
         Maintain in-memory holdings to compute realized PnL per trade.
-        Realized PnL subtracts fee; buys record negative fee only.
+        Realized PnL is fee-exclusive so costs are handled exactly once in aggregates.
         """
         pos = self.holdings.get(symbol, {'qty': 0.0, 'avg_cost': 0.0})
         qty = pos['qty']
@@ -370,14 +370,11 @@ class StrategyRunner:
 
         if action == 'BUY':
             new_qty = qty + quantity
-            if new_qty > 0:
-                new_avg = ((qty * avg_cost) + (quantity * price)) / new_qty
-            else:
-                new_avg = 0.0
+            new_avg = ((qty * avg_cost) + (quantity * price)) / new_qty if new_qty > 0 else 0.0
             self.holdings[symbol] = {'qty': new_qty, 'avg_cost': new_avg}
-            realized = -fee
+            realized = 0.0
         else:  # SELL
-            realized = (price - avg_cost) * quantity - fee
+            realized = (price - avg_cost) * quantity
             new_qty = max(0.0, qty - quantity)
             self.holdings[symbol] = {'qty': new_qty, 'avg_cost': avg_cost if new_qty > 0 else 0.0}
 
@@ -617,22 +614,18 @@ class StrategyRunner:
                 # Get final equity snapshot
                 final_equity = await self.bot.get_equity_async()
                 
-                # Get session stats
+                # Get session stats and rebuild to ensure consistency
                 session_stats = self.db.get_session_stats(self.session_id)
-                # Ensure stats reflect latest trades before final report
                 try:
                     await self._rebuild_session_stats_from_trades(final_equity)
                     session_stats = self.db.get_session_stats(self.session_id)
                 except Exception as e:
                     logger.debug(f"Could not rebuild stats on cleanup: {e}")
                 
-                # Calculate net PnL
-                gross_pnl = final_equity - session_stats['starting_balance']
-                net_pnl = self.cost_tracker.calculate_net_pnl(
-                    gross_pnl,
-                    session_stats['total_fees'],
-                    session_stats['total_llm_cost']
-                )
+                # Calculate PnL using fee-exclusive realized and separate fees
+                gross_pnl = session_stats.get('gross_pnl', 0.0) or 0.0
+                net_pnl = gross_pnl - (session_stats.get('total_fees', 0.0) or 0.0) - (session_stats.get('total_llm_cost', 0.0) or 0.0)
+                equity_delta = final_equity - session_stats['starting_balance']
                 
                 # Update database
                 self.db.update_session_balance(self.session_id, final_equity, net_pnl)
@@ -642,10 +635,11 @@ class StrategyRunner:
                 bot_actions_logger.info("📊 SESSION SUMMARY")
                 bot_actions_logger.info("=" * 50)
                 bot_actions_logger.info(f"Total Trades: {session_stats['total_trades']}")
-                bot_actions_logger.info(f"Gross PnL: ${gross_pnl:,.2f}")
+                bot_actions_logger.info(f"Gross PnL (ex-fee): ${gross_pnl:,.2f}")
                 bot_actions_logger.info(f"Trading Fees: ${session_stats['total_fees']:.2f}")
                 bot_actions_logger.info(f"LLM Costs: ${session_stats['total_llm_cost']:.4f}")
                 bot_actions_logger.info(f"Net PnL: ${net_pnl:,.2f}")
+                bot_actions_logger.info(f"Equity Delta (broker): ${equity_delta:,.2f}")
                 
                 if net_pnl > 0:
                     bot_actions_logger.info(f"✅ Profitable session!")

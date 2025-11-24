@@ -86,6 +86,7 @@ class TestLLMStrategy(IsolatedAsyncioTestCase):
             self.assertIsNotNone(signal)
             self.assertEqual(signal.action, "BUY")
             self.assertEqual(signal.quantity, 0.1)
+            self.assertTrue(hasattr(signal, "stop_price"))
 
     @patch('strategy.asyncio.get_event_loop')
     async def test_generate_signal_blocks_on_fee_ratio(self, mock_loop):
@@ -101,6 +102,21 @@ class TestLLMStrategy(IsolatedAsyncioTestCase):
             mock_llm.return_value = '{"action": "BUY", "symbol": "BTC/USD", "quantity": 0.1, "reason": "Test"}'
             signal = await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000, 0, session_stats=high_fee_stats)
             self.assertIsNone(signal)
+
+    @patch('strategy.asyncio.get_event_loop')
+    async def test_clamps_stops_targets(self, mock_loop):
+        mock_loop.return_value.time.return_value = 1000
+        self.strategy.last_trade_ts = 0
+        self.mock_db.get_recent_market_data.return_value = [{'price': 100}]*50
+        self.mock_ta.calculate_indicators.return_value = {'bb_width': 2.0, 'rsi': 50}
+        low_fee_stats = {'gross_pnl': 100, 'total_fees': 10}
+        # Stop above price, target far away should be clamped
+        with patch.object(self.strategy, '_get_llm_decision', new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = '{"action": "BUY", "symbol": "BTC/USD", "quantity": 0.1, "reason": "Test", "stop_price": 150, "target_price": 300}'
+            signal = await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000, 0, session_stats=low_fee_stats)
+            self.assertIsNotNone(signal)
+            self.assertLessEqual(signal.stop_price, 100)
+            self.assertLessEqual(signal.target_price, 102)  # within 2%
 
     def test_prompt_template_loaded_and_rendered(self):
         template_body = "TEMPLATE {asset_class} {available_symbols} {prompt_context_block}"

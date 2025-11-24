@@ -284,6 +284,10 @@ class LLMStrategy(BaseStrategy):
                     jsonschema.validate(decision, self._decision_schema)
                 except Exception as e:
                     logger.error(f"LLM decision failed schema validation: {e}")
+                    try:
+                        self.db.log_llm_call(session_id, 0, 0, 0.0, f"schema_error:{str(e)}")
+                    except Exception:
+                        pass
                     return None
                 action = decision.get('action')
                 quantity = decision.get('quantity', 0)
@@ -320,6 +324,9 @@ class LLMStrategy(BaseStrategy):
                             stop_price = max(min_stop, min(stop_price, price))  # don't allow stop above price for longs
                         if target_price is not None:
                             target_price = min(max_target, max(target_price, price))  # target at/above price
+                        # Telemetry for clamping
+                        if decision.get('stop_price') != stop_price or decision.get('target_price') != target_price:
+                            logger.info(f"LLM stops/targets clamped: stop {decision.get('stop_price')} -> {stop_price}, target {decision.get('target_price')} -> {target_price}")
 
                     # We don't update last_trade_ts here, we let the runner do it upon execution success? 
                     # Actually better to update it here to prevent double signaling if execution takes time, 

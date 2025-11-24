@@ -11,6 +11,7 @@ An autonomous trading loop that talks to Interactive Brokers or Gemini via async
 
 ## Documentation
 -   [**Strategy Architecture**](docs/strategy.md): How the `LLMStrategy` works and how to build your own.
+-   [**Repository Guidelines**](AGENTS.md): Contributor guide, structure, commands, and conventions.
 
 ## Requirements
 - Python 3.10+

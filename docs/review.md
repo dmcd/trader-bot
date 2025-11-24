@@ -22,7 +22,7 @@
 - [x] Implement regime detection (volatility buckets, trend strength, liquidity filters) and feed flags to the strategy.
 - [ ] Build LLM tool layer for controlled data fetches; keep execution authority in Python.
 - [ ] Introduce planner→executor loop (LLM plans, runner gathers data, LLM revises with cap on revisions).
-- [ ] Rework plan management: plan versioning, re-score each loop, trailing/partial exits, and explicit “replan” action.
+- [x] Rework plan management: plan versioning, re-score each loop, trailing/partial exits, and explicit “replan” action.
 - [x] Add deterministic overlays: volatility-normalized sizing, minimum RR filter, slippage check vs decision price.
 - [x] Create dedicated LLM trace log/table capturing full prompt/response + parsed decision + market snapshot + execution result; redact secrets.
 - [x] Emit structured JSON telemetry per loop (inputs, decision, risk verdict, fill outcome) for offline eval.

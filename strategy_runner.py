@@ -98,6 +98,7 @@ class StrategyRunner:
         self.day_end_flatten_hour_utc = None  # optional UTC hour to flatten plans
         self.max_plans_per_symbol = 2
         self.telemetry_logger = telemetry_logger
+        self._apply_plan_trailing_pct = 0.01  # move stop to entry after 1% move in favor
 
     def _emit_telemetry(self, record: dict):
         """Emit structured telemetry as JSON line."""
@@ -224,6 +225,8 @@ class StrategyRunner:
                 stop = plan.get('stop_price')
                 target = plan.get('target_price')
                 size = plan.get('size') or 0.0
+                entry = plan.get('entry_price') or price_now
+                version = plan.get('version') or 1
                 if not price_now or size <= 0:
                     continue
 
@@ -260,6 +263,14 @@ class StrategyRunner:
                         pass
 
                 if side == 'BUY':
+                    # Trail stop to entry after move in favor
+                    if stop and price_now >= entry * (1 + self._apply_plan_trailing_pct) and stop < entry:
+                        try:
+                            self.db.update_trade_plan_prices(plan_id, stop_price=entry, reason="Trailed stop to breakeven")
+                            bot_actions_logger.info(f"↩️ Trailed stop to breakeven for plan {plan_id} (v{version}→v{version+1})")
+                            stop = entry
+                        except Exception as e:
+                            logger.debug(f"Could not trail stop for plan {plan_id}: {e}")
                     if stop and price_now <= stop:
                         should_close = True
                         reason = f"Stop hit at ${price_now:,.2f}"
@@ -267,6 +278,13 @@ class StrategyRunner:
                         should_close = True
                         reason = f"Target hit at ${price_now:,.2f}"
                 else:  # SELL plan (short)
+                    if stop and price_now <= entry * (1 - self._apply_plan_trailing_pct) and stop > entry:
+                        try:
+                            self.db.update_trade_plan_prices(plan_id, stop_price=entry, reason="Trailed stop to breakeven")
+                            bot_actions_logger.info(f"↩️ Trailed stop to breakeven for plan {plan_id} (v{version}→v{version+1})")
+                            stop = entry
+                        except Exception as e:
+                            logger.debug(f"Could not trail stop for plan {plan_id}: {e}")
                     if stop and price_now >= stop:
                         should_close = True
                         reason = f"Stop hit at ${price_now:,.2f}"

@@ -56,6 +56,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '123', 'liquidity': 'taker'})
         self.runner.db.update_trade_plan_status = MagicMock()
         self.runner.db.log_trade = MagicMock()
+        self.runner.db.update_trade_plan_prices = MagicMock()
 
         await self.runner._monitor_trade_plans(price_now=100)
         self.runner.db.update_trade_plan_status.assert_called_once()
@@ -78,11 +79,31 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '123', 'liquidity': 'taker'})
         self.runner.db.update_trade_plan_status = MagicMock()
         self.runner.db.log_trade = MagicMock()
+        self.runner.db.update_trade_plan_prices = MagicMock()
 
         await self.runner._monitor_trade_plans(price_now=100)
         # Ensure we evaluated exposure headroom and attempted closure path
         self.runner.risk_manager.get_total_exposure.assert_called_once()
         self.assertGreaterEqual(self.runner.db.update_trade_plan_status.call_count, 0)
+
+    async def test_trailing_stop_to_breakeven(self):
+        now = datetime.now(timezone.utc)
+        self.runner.db = MagicMock()
+        self.runner.db.get_open_trade_plans.return_value = [{
+            'id': 3,
+            'symbol': 'BTC/USD',
+            'side': 'BUY',
+            'entry_price': 100,
+            'stop_price': 95,
+            'target_price': 110,
+            'size': 0.1,
+            'opened_at': now.isoformat(),
+            'version': 1
+        }]
+        self.runner.db.update_trade_plan_prices = MagicMock()
+        self.runner.bot.place_order_async = AsyncMock()
+        await self.runner._monitor_trade_plans(price_now=102)
+        self.runner.db.update_trade_plan_prices.assert_called_once()
 
 
 if __name__ == '__main__':

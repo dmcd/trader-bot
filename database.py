@@ -745,6 +745,7 @@ class TradingDatabase:
                 stop_price REAL,
                 target_price REAL,
                 size REAL NOT NULL,
+                version INTEGER DEFAULT 1,
                 status TEXT DEFAULT 'open',
                 opened_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 closed_at TEXT,
@@ -752,6 +753,14 @@ class TradingDatabase:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
+        # Backfill additive columns
+        try:
+            cursor.execute("PRAGMA table_info(trade_plans)")
+            cols = {row['name'] for row in cursor.fetchall()}
+            if 'version' not in cols:
+                cursor.execute("ALTER TABLE trade_plans ADD COLUMN version INTEGER DEFAULT 1")
+        except Exception as e:
+            logger.debug(f"Could not ensure trade_plans version column: {e}")
         self.conn.commit()
 
     def create_trade_plan(self, session_id: int, symbol: str, side: str, entry_price: float, stop_price: float, target_price: float, size: float, reason: str = "") -> int:
@@ -763,6 +772,20 @@ class TradingDatabase:
         """, (session_id, symbol, side, entry_price, stop_price, target_price, size, reason))
         self.conn.commit()
         return cursor.lastrowid
+
+    def update_trade_plan_prices(self, plan_id: int, stop_price: float = None, target_price: float = None, reason: str = None):
+        """Update stop/target and bump version."""
+        self.ensure_trade_plans_table()
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE trade_plans
+            SET stop_price = COALESCE(?, stop_price),
+                target_price = COALESCE(?, target_price),
+                version = version + 1,
+                reason = COALESCE(?, reason)
+            WHERE id = ?
+        """, (stop_price, target_price, reason, plan_id))
+        self.conn.commit()
 
     def update_trade_plan_status(self, plan_id: int, status: str, closed_at: str = None, reason: str = None):
         self.ensure_trade_plans_table()

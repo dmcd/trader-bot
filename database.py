@@ -588,6 +588,17 @@ class TradingDatabase:
         """, (session_id,))
         return [dict(row) for row in cursor.fetchall()]
 
+    def count_open_trade_plans_for_symbol(self, session_id: int, symbol: str) -> int:
+        """Return number of open plans for a symbol."""
+        self.ensure_trade_plans_table()
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) as cnt FROM trade_plans
+            WHERE session_id = ? AND symbol = ? AND status = 'open'
+        """, (session_id, symbol))
+        row = cursor.fetchone()
+        return row['cnt'] if row else 0
+
     # Session stats cache helpers
     def get_session_stats_cache(self, session_id: int) -> Optional[Dict[str, Any]]:
         """Return persisted session stats aggregates if present."""

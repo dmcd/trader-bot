@@ -85,6 +85,9 @@ class StrategyRunner:
         self.order_reasons = {}  # order_id -> reason
         self.processed_trade_ids = set()
         self._open_trade_plans = {}  # plan_id -> dict
+        self.max_plan_age_minutes = 60  # TODO: move to config if desired
+        self.day_end_flatten_hour_utc = None  # optional UTC hour to flatten plans
+        self.max_plans_per_symbol = 2
 
     def _apply_order_value_buffer(self, quantity: float, price: float):
         """Trim quantity so the notional sits under the order cap minus buffer."""
@@ -100,14 +103,19 @@ class StrategyRunner:
 
     async def _monitor_trade_plans(self, price_now: float):
         """
-        Monitor open trade plans for stop/target hits and enforce max age flattening.
+        Monitor open trade plans for stop/target hits and enforce max age/day-end flattening.
         Currently supports single-symbol trading; uses latest price passed in.
         """
         if not self.session_id:
             return
         try:
             open_plans = self.db.get_open_trade_plans(self.session_id)
-            now_iso = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(timezone.utc)
+            now_iso = now.isoformat()
+            day_end_cutoff = None
+            if self.day_end_flatten_hour_utc is not None:
+                day_end_cutoff = now.replace(hour=self.day_end_flatten_hour_utc, minute=0, second=0, microsecond=0)
+
             for plan in open_plans:
                 plan_id = plan['id']
                 side = plan['side'].upper()
@@ -119,6 +127,27 @@ class StrategyRunner:
 
                 should_close = False
                 reason = None
+
+                opened_at = plan.get('opened_at')
+                if opened_at and self.max_plan_age_minutes:
+                    try:
+                        opened_dt = datetime.fromisoformat(opened_at)
+                        age_min = (now - opened_dt).total_seconds() / 60.0
+                        if age_min >= self.max_plan_age_minutes:
+                            should_close = True
+                            reason = f"Plan age exceeded {self.max_plan_age_minutes} min"
+                    except Exception:
+                        pass
+
+                if not should_close and day_end_cutoff and opened_at:
+                    try:
+                        opened_dt = datetime.fromisoformat(opened_at)
+                        if opened_dt < day_end_cutoff:
+                            should_close = True
+                            reason = "Day-end flatten"
+                    except Exception:
+                        pass
+
                 if side == 'BUY':
                     if stop and price_now <= stop:
                         should_close = True
@@ -791,19 +820,29 @@ class StrategyRunner:
 
                             risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
 
-                            if risk_result.allowed:
-                                # Calculate fee before execution (estimate)
-                                estimated_fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, action)
-                                liquidity = "maker_intent"
-                                # Capture stop/target if provided by strategy
-                                stop_price = getattr(signal, 'stop_price', None)
-                                target_price = getattr(signal, 'target_price', None)
-                                
-                                bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (est. fee: ${estimated_fee:.4f})")
-                                
-                                # Execute trade
-                                retries = 0
-                                order_result = None
+                        if risk_result.allowed:
+                            # Calculate fee before execution (estimate)
+                            estimated_fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, action)
+                            liquidity = "maker_intent"
+                            # Capture stop/target if provided by strategy
+                            stop_price = getattr(signal, 'stop_price', None)
+                            target_price = getattr(signal, 'target_price', None)
+                            
+                            # Enforce per-symbol plan cap before placing order
+                            try:
+                                open_plan_count = self.db.count_open_trade_plans_for_symbol(self.session_id, symbol)
+                                if open_plan_count >= self.max_plans_per_symbol:
+                                    bot_actions_logger.info(f"⛔ Trade Blocked: plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
+                                    self.strategy.on_trade_rejected("Plan cap reached")
+                                    continue
+                            except Exception as e:
+                                logger.debug(f"Could not check plan cap: {e}")
+
+                            bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (est. fee: ${estimated_fee:.4f})")
+                            
+                            # Execute trade
+                            retries = 0
+                            order_result = None
                                 while retries < 2 and order_result is None:
                                     try:
                                         order_result = await asyncio.wait_for(

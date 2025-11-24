@@ -309,6 +309,18 @@ class LLMStrategy(BaseStrategy):
                         if price:
                             quantity = self._clamp_quantity(quantity, price, order_cap_value)
 
+                    # Clamp stops/targets to reasonable bounds around price
+                    stop_price = decision.get('stop_price')
+                    target_price = decision.get('target_price')
+                    if price:
+                        band = price * 0.02  # 2% band
+                        min_stop = max(0.0, price - band)
+                        max_target = price + band
+                        if stop_price is not None:
+                            stop_price = max(min_stop, min(stop_price, price))  # don't allow stop above price for longs
+                        if target_price is not None:
+                            target_price = min(max_target, max(target_price, price))  # target at/above price
+
                     # We don't update last_trade_ts here, we let the runner do it upon execution success? 
                     # Actually better to update it here to prevent double signaling if execution takes time, 
                     # BUT runner might reject it. 

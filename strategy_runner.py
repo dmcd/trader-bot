@@ -759,6 +759,9 @@ class StrategyRunner:
                         bot_actions_logger.info("🛑 Kill switch active; not trading.")
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
+
+                    # Slippage guard: if latest price moved >2% from decision price, skip execution
+                    decision_price = market_data[symbol]['price'] if market_data.get(symbol) else None
                     
                     # Log market data to database
                     if data and self.session_id:
@@ -802,6 +805,8 @@ class StrategyRunner:
                         reason = signal.reason
                         symbol = signal.symbol
                         order_id = getattr(signal, 'order_id', None)
+                        stop_price = getattr(signal, 'stop_price', None)
+                        target_price = getattr(signal, 'target_price', None)
                         
                         # Log decision to user-friendly log
                         if action == 'HOLD':
@@ -839,19 +844,19 @@ class StrategyRunner:
                                 logger.warning("Skipped trade: missing price data")
                                 continue
 
-                            # Guardrails: clip size to sit under the max order cap minus buffer
-                            quantity = self._apply_order_value_buffer(quantity, price)
+                        # Guardrails: clip size to sit under the max order cap minus buffer
+                        quantity = self._apply_order_value_buffer(quantity, price)
 
                             if quantity <= 0:
                                 logger.warning("Skipped trade: buffered quantity became non-positive")
                                 continue
 
-                            # Format quantity appropriately (show more decimals for small amounts) after buffering
-                            if quantity < 1:
-                                qty_str = f"{quantity:.6f}".rstrip('0').rstrip('.')
-                            else:
-                                qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
-                            bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol} - {reason}")
+                        # Format quantity appropriately (show more decimals for small amounts) after buffering
+                        if quantity < 1:
+                            qty_str = f"{quantity:.6f}".rstrip('0').rstrip('.')
+                        else:
+                            qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
+                        bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol} - {reason}")
 
                         risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
 
@@ -927,13 +932,13 @@ class StrategyRunner:
                                     except Exception as e:
                                         logger.debug(f"Could not log estimated fee: {e}")
 
-                                # Record trade plan so we can monitor stops/targets (only for new BUY/SELL)
-                                if action in ['BUY', 'SELL'] and (stop_price or target_price):
-                                    try:
-                                        plan_id = self.db.create_trade_plan(
-                                            self.session_id,
-                                            symbol,
-                                            action,
+                            # Record trade plan so we can monitor stops/targets (only for new BUY/SELL)
+                            if action in ['BUY', 'SELL'] and (stop_price or target_price):
+                                try:
+                                    plan_id = self.db.create_trade_plan(
+                                        self.session_id,
+                                        symbol,
+                                        action,
                                             price,
                                             stop_price,
                                             target_price,

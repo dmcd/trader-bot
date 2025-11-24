@@ -462,6 +462,13 @@ class TradingDatabase:
         """, (session_id,))
         rows = cursor.fetchall()
         return {row['symbol']: row['net_qty'] for row in rows}
+
+    def get_trade_count(self, session_id: int) -> int:
+        """Return count of trades for a session."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) as cnt FROM trades WHERE session_id = ?", (session_id,))
+        row = cursor.fetchone()
+        return row['cnt'] if row else 0
     
     def create_command(self, command: str):
         """Create a new command for the bot to execute."""

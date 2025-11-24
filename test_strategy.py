@@ -20,13 +20,13 @@ class TestLLMStrategy(IsolatedAsyncioTestCase):
 
     def test_fees_too_high(self):
         # Mock session stats
-        self.mock_db.get_session_stats.return_value = {'gross_pnl': 100, 'total_fees': 60}
+        stats_high = {'gross_pnl': 100, 'total_fees': 60}
         # 60/100 = 60% > 50% (default cooldown)
-        self.assertTrue(self.strategy._fees_too_high(1))
+        self.assertTrue(self.strategy._fees_too_high(stats_high))
         
-        self.mock_db.get_session_stats.return_value = {'gross_pnl': 100, 'total_fees': 10}
+        stats_low = {'gross_pnl': 100, 'total_fees': 10}
         # 10/100 = 10% < 50%
-        self.assertFalse(self.strategy._fees_too_high(1))
+        self.assertFalse(self.strategy._fees_too_high(stats_low))
 
     def test_chop_filter(self):
         # Mock TA indicators

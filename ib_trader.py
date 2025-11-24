@@ -225,6 +225,16 @@ class IBTrader(BaseTrader):
             logger.error(f"Error cancelling IB order {order_id}: {e}")
             return False
 
+    async def get_trades_from_timestamp(self, symbol: str, timestamp: int) -> list:
+        """Stub for interface compatibility."""
+        logger.warning("get_trades_from_timestamp not implemented for IBTrader")
+        return []
+
+    async def fetch_ohlcv(self, symbol: str, timeframe: str = '1m', limit: int = 100) -> list:
+        """Stub for interface compatibility."""
+        logger.warning("fetch_ohlcv not implemented for IBTrader")
+        return []
+
 if __name__ == "__main__":
     # Simple test
     bot = IBTrader()

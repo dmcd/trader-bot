@@ -3,6 +3,7 @@ import logging
 import os
 import signal
 import sys
+from datetime import datetime, timezone
 import google.generativeai as genai
 from ib_trader import IBTrader
 from gemini_trader import GeminiTrader
@@ -75,6 +76,7 @@ class StrategyRunner:
             self.technical_analysis, 
             self.cost_tracker,
             open_orders_provider=self.bot.get_open_orders_async,
+            ohlcv_provider=self.bot.fetch_ohlcv,
         )
         
         # Trade syncing state
@@ -113,7 +115,7 @@ class StrategyRunner:
         initial_equity = await self.bot.get_equity_async()
         logger.info(f"{self.exchange_name} Equity: {initial_equity}")
         
-        # Create or load today's trading session
+        # Create or load today's trading session (DB still used for logging/IDs)
         self.session_id = self.db.get_or_create_session(starting_balance=initial_equity)
         self.session = self.db.get_session(self.session_id)
         
@@ -123,10 +125,50 @@ class StrategyRunner:
         # Initialize trading context
         self.context = TradingContext(self.db, self.session_id)
         
-        # Sync trades from exchange to ensure local state is up to date before risk/holdings init
-        logger.info("Syncing trades from exchange before initialization...")
-        await self.sync_trades_from_exchange()
+        # Initialize session stats from Exchange Data (Source of Truth)
+        logger.info("Initializing session stats from exchange data...")
         
+        # 1. Determine start of day (UTC) for "Daily" stats
+        now = datetime.now(timezone.utc)
+        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_ts_ms = int(start_of_day.timestamp() * 1000)
+        
+        # 2. Fetch trades for the day
+        # Assuming BTC/USD for now as per original code
+        symbol = 'BTC/USD' if ACTIVE_EXCHANGE == 'GEMINI' else 'BHP' 
+        trades = await self.bot.get_trades_from_timestamp(symbol, start_ts_ms)
+        
+        # 3. Rebuild Holdings and Stats
+        self.holdings = {}
+        self.session_stats = {
+            'total_trades': 0,
+            'gross_pnl': 0.0,
+            'total_fees': 0.0,
+            'total_llm_cost': 0.0 # Will fetch from DB
+        }
+        
+        for t in trades:
+             # Rebuild holdings
+             symbol = t['symbol']
+             side = t['side'].upper()
+             quantity = t['amount']
+             price = t['price']
+             fee = t.get('fee', {}).get('cost', 0.0)
+             
+             # Update holdings and calculate realized PnL for this trade
+             realized = self._update_holdings_and_realized(symbol, side, quantity, price, fee)
+             
+             # Update session stats
+             self.session_stats['total_trades'] += 1
+             self.session_stats['total_fees'] += fee
+             self.session_stats['gross_pnl'] += realized
+
+        # Load LLM costs from DB (since exchange doesn't track this)
+        db_stats = self.db.get_session_stats(self.session_id)
+        self.session_stats['total_llm_cost'] = db_stats.get('total_llm_cost', 0.0)
+        
+        logger.info(f"Session Stats Rebuilt: {self.session_stats}")
+
         # Seed risk manager with persisted start-of-day equity to survive restarts
         start_equity = None
         if self.session and self.session.get('starting_balance') is not None:
@@ -137,78 +179,17 @@ class StrategyRunner:
             start_equity = latest_equity if latest_equity is not None else initial_equity
         self.risk_manager.seed_start_of_day(start_equity)
         
-        # Reconcile with exchange state
-        await self.reconcile_exchange_state()
-
-        # Rebuild holdings from historical trades to keep realized PnL continuity after restarts
-        try:
-            self._load_holdings_from_db()
-            logger.info(f"Holdings rebuilt from trade history: {self.holdings}")
-        except Exception as e:
-            logger.warning(f"Could not rebuild holdings: {e}")
-
+        # No need to reconcile_exchange_state in the old way; we just trust the exchange now.
+        # But we might want to log initial positions to DB for debugging.
+        live_positions = await self.bot.get_positions_async()
+        self.db.replace_positions(self.session_id, live_positions)
+        
         self.daily_loss_pct = MAX_DAILY_LOSS_PERCENT
 
         self.risk_manager.update_equity(initial_equity)
         bot_actions_logger.info(f"💰 Starting Equity: ${initial_equity:,.2f}")
 
-    async def reconcile_exchange_state(self):
-        """Pull positions/open orders from exchange and compare to local session."""
-        try:
-            exchange_positions = await self.bot.get_positions_async()
-            exchange_orders = await self.bot.get_open_orders_async()
-        except Exception as e:
-            logger.error(f"Reconciliation failed: unable to fetch exchange state: {e}")
-            return
-
-        stored_positions = self.db.get_positions(self.session_id)
-        stored_orders = self.db.get_open_orders(self.session_id)
-
-        # If no stored positions yet, treat exchange as source of truth and seed DB without warnings.
-        if not stored_positions:
-            logger.info("No stored position snapshot for today; seeding from exchange.")
-            self.db.replace_positions(self.session_id, exchange_positions)
-            self.db.replace_open_orders(self.session_id, exchange_orders)
-            if exchange_positions:
-                logger.info(f"Seeded positions: {len(exchange_positions)} symbols")
-            if exchange_orders:
-                logger.info(f"Seeded open orders: {len(exchange_orders)}")
-            return
-
-        # Compare positions by symbol and quantity
-        def to_map(items):
-            return {i['symbol']: i for i in items if i.get('symbol')}
-
-        exchange_pos_map = to_map(exchange_positions)
-        stored_pos_map = to_map(stored_positions)
-
-        mismatches = []
-        if stored_positions:
-            for sym, pos in exchange_pos_map.items():
-                qty = pos.get('quantity', 0)
-                stored_qty = stored_pos_map.get(sym, {}).get('quantity', 0)
-                if abs(qty - stored_qty) > 1e-8:
-                    mismatches.append((sym, stored_qty, qty))
-            for sym, pos in stored_pos_map.items():
-                if sym not in exchange_pos_map:
-                    mismatches.append((sym, pos.get('quantity', 0), 0))
-
-        if mismatches:
-            for sym, local_qty, exch_qty in mismatches:
-                logger.warning(f"Position mismatch for {sym}: DB={local_qty} Exchange={exch_qty}")
-        elif stored_positions:
-            logger.info("Positions match exchange snapshot.")
-        else:
-            logger.info("No prior position snapshot; seeding from exchange.")
-
-        # Persist latest snapshots
-        self.db.replace_positions(self.session_id, exchange_positions)
-        self.db.replace_open_orders(self.session_id, exchange_orders)
-
-        if exchange_orders:
-            logger.info(f"Open orders on exchange: {len(exchange_orders)}")
-        else:
-            logger.info("No open orders on exchange.")
+    # reconcile_exchange_state removed as we trust exchange data directly now
 
     def _update_holdings_and_realized(self, symbol: str, action: str, quantity: float, price: float, fee: float) -> float:
         """
@@ -549,16 +530,18 @@ class StrategyRunner:
                         except Exception as e:
                             logger.warning(f"Error logging market data: {e}")
 
-                    # 2.5 Sync Trades from Exchange
+                    # 2.5 Sync Trades from Exchange (for logging only)
                     await self.sync_trades_from_exchange()
 
                     # 3. Generate Signal via Strategy
+                    # Pass session_stats explicitly
                     signal = await self.strategy.generate_signal(
                         self.session_id,
                         market_data,
                         current_equity,
                         current_exposure,
-                        self.context
+                        self.context,
+                        session_stats=self.session_stats
                     )
 
                     # 4. Execute Signal
@@ -658,6 +641,12 @@ class StrategyRunner:
                                 if order_result and order_result.get('order_id'):
                                     self.order_reasons[str(order_result['order_id'])] = reason
                                     
+                                # Update session stats locally
+                                self.session_stats['total_trades'] += 1
+                                self.session_stats['total_fees'] += estimated_fee # Use estimate until sync confirms
+                                # Realized PnL is updated in sync_trades_from_exchange or we can estimate here?
+                                # Better to let sync handle accurate PnL from filling.
+                                
                                 # Snapshot open orders if any remain
                                 try:
                                     open_orders = await self.bot.get_open_orders_async()

@@ -49,7 +49,7 @@ class BaseStrategy(ABC):
         pass
 
 class LLMStrategy(BaseStrategy):
-    def __init__(self, db, technical_analysis, cost_tracker, open_orders_provider=None):
+    def __init__(self, db, technical_analysis, cost_tracker, open_orders_provider=None, ohlcv_provider=None):
         super().__init__(db, technical_analysis, cost_tracker)
         self.model = genai.GenerativeModel('gemini-2.5-flash')
         if GEMINI_API_KEY:
@@ -62,6 +62,8 @@ class LLMStrategy(BaseStrategy):
         self.last_rejection_reason = None
         # Optional async callable that fetches live open orders from the active exchange
         self.open_orders_provider = open_orders_provider
+        # Optional async callable that fetches OHLCV data
+        self.ohlcv_provider = ohlcv_provider
         self.prompt_template = self._load_prompt_template()
 
     def _is_choppy(self, symbol: str, market_data_point, recent_data):
@@ -107,14 +109,17 @@ class LLMStrategy(BaseStrategy):
             logger.warning(f"Priority signal error: {e}")
         return False
 
-    def _fees_too_high(self, session_id: int):
+    def _fees_too_high(self, session_stats: Dict[str, Any]):
         """
         Check fee ratio vs gross PnL; returns True to pause when fees dominate.
         """
         try:
-            stats = self.db.get_session_stats(session_id)
-            gross = stats.get('gross_pnl', 0) or 0
-            fees = stats.get('total_fees', 0) or 0
+            if not isinstance(session_stats, dict):
+                logger.warning(f"Invalid session_stats type: {type(session_stats)}")
+                return False
+                
+            gross = session_stats.get('gross_pnl', 0) or 0
+            fees = session_stats.get('total_fees', 0) or 0
             if gross == 0:
                 return False
             ratio = (fees / abs(gross)) * 100
@@ -123,7 +128,7 @@ class LLMStrategy(BaseStrategy):
             logger.warning(f"Fee ratio check failed: {e}")
             return False
 
-    async def generate_signal(self, session_id: int, market_data: Dict[str, Any], current_equity: float, current_exposure: float, context: Any = None) -> Optional[StrategySignal]:
+    async def generate_signal(self, session_id: int, market_data: Dict[str, Any], current_equity: float, current_exposure: float, context: Any = None, session_stats: Dict[str, Any] = None) -> Optional[StrategySignal]:
         if not market_data:
             return None
 
@@ -132,17 +137,28 @@ class LLMStrategy(BaseStrategy):
         data = market_data[symbol]
 
         # 1. Fee Check
-        if self._fees_too_high(session_id):
+        if session_stats and self._fees_too_high(session_stats):
             logger.info("Skipping trading due to high fee ratio")
             return None
 
         # 2. Chop Check
-        # Use context-provided time for DB lookups if available
-        before_ts = None
-        if context and hasattr(context, 'current_iso_time'):
-            before_ts = context.current_iso_time
-            
-        recent_data = self.db.get_recent_market_data(session_id, symbol, limit=50, before_timestamp=before_ts)
+        # Use ohlcv_provider if available, else fallback to DB (or skip)
+        recent_data = []
+        if self.ohlcv_provider:
+            try:
+                # Fetch 1m candles for chop check
+                recent_data = await self.ohlcv_provider(symbol, timeframe='1m', limit=50)
+            except Exception as e:
+                logger.warning(f"OHLCV fetch failed: {e}")
+        
+        if not recent_data:
+             # Fallback to DB if provider fails or not set
+             # Use context-provided time for DB lookups if available
+            before_ts = None
+            if context and hasattr(context, 'current_iso_time'):
+                before_ts = context.current_iso_time
+            recent_data = self.db.get_recent_market_data(session_id, symbol, limit=50, before_timestamp=before_ts)
+
         if self._is_choppy(symbol, data, recent_data):
             logger.info("Skipping trade: market in chop")
             return None
@@ -178,7 +194,7 @@ class LLMStrategy(BaseStrategy):
 
         last_trade_age = (now_ts - self.last_trade_ts) if self.last_trade_ts else None
         last_trade_age_str = f"{last_trade_age:.0f}s" if last_trade_age is not None else "n/a"
-        fee_ratio_flag = "high" if self._fees_too_high(session_id) else "normal"
+        fee_ratio_flag = "high" if (session_stats and self._fees_too_high(session_stats)) else "normal"
         priority_flag = "true" if priority and allow_break_glass else "false"
         spacing_flag = "clear" if can_trade else f"cooldown {MIN_TRADE_INTERVAL_SECONDS - (now_ts - self.last_trade_ts):.0f}s"
         

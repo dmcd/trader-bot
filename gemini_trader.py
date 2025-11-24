@@ -348,3 +348,44 @@ class GeminiTrader(BaseTrader):
         except Exception as e:
             logger.error(f"Error fetching Gemini trades for {symbol}: {e}")
             return []
+
+    async def get_trades_from_timestamp(self, symbol: str, timestamp: int) -> list:
+        """
+        Fetch trades since a specific timestamp (ms).
+        Handles pagination if necessary (though fetch_my_trades usually returns enough for daily).
+        """
+        if not self.connected:
+            return []
+        
+        try:
+            # Gemini/CCXT fetch_my_trades 'since' is in milliseconds
+            trades = await self.exchange.fetch_my_trades(symbol, since=timestamp)
+            return trades
+        except Exception as e:
+            logger.error(f"Error fetching trades since {timestamp}: {e}")
+            return []
+
+    async def fetch_ohlcv(self, symbol: str, timeframe: str = '1m', limit: int = 100) -> list:
+        """Fetch OHLCV data for technical analysis."""
+        if not self.connected:
+            return []
+
+        try:
+            ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            # Convert to list of dicts for easier consumption
+            # CCXT structure: [timestamp, open, high, low, close, volume]
+            formatted_data = []
+            for candle in ohlcv:
+                formatted_data.append({
+                    'timestamp': candle[0],
+                    'open': candle[1],
+                    'high': candle[2],
+                    'low': candle[3],
+                    'close': candle[4],
+                    'price': candle[4], # TA expects 'price'
+                    'volume': candle[5]
+                })
+            return formatted_data
+        except Exception as e:
+            logger.error(f"Error fetching OHLCV for {symbol}: {e}")
+            return []

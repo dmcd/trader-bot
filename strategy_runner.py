@@ -34,6 +34,10 @@ from config import (
     BREAK_GLASS_SIZE_FACTOR,
     MAX_SPREAD_PCT,
     MIN_TOP_OF_BOOK_NOTIONAL,
+    MIN_RR,
+    MAX_SLIPPAGE_PCT,
+    HIGH_VOL_SIZE_FACTOR,
+    MED_VOL_SIZE_FACTOR,
 )
 
 from logger_config import setup_logging
@@ -110,6 +114,32 @@ class StrategyRunner:
             self.db.update_llm_trace_execution(trace_id, execution_result)
         except Exception as e:
             logger.debug(f"Could not update LLM trace {trace_id}: {e}")
+
+    def _apply_volatility_sizing(self, quantity: float, regime_flags: dict) -> float:
+        """Scale quantity based on volatility regime."""
+        if not regime_flags or quantity <= 0:
+            return quantity
+        vol_flag = regime_flags.get('volatility', '')
+        if 'high' in vol_flag:
+            return quantity * HIGH_VOL_SIZE_FACTOR
+        if 'medium' in vol_flag:
+            return quantity * MED_VOL_SIZE_FACTOR
+        return quantity
+
+    def _passes_rr_filter(self, action: str, price: float, stop_price: float, target_price: float) -> bool:
+        """Require minimum risk/reward when both stop and target are provided."""
+        if not price or stop_price is None or target_price is None:
+            return True
+        if action == 'BUY':
+            risk = price - stop_price
+            reward = target_price - price
+        else:
+            risk = stop_price - price
+            reward = price - target_price
+        if risk <= 0:
+            return True
+        rr = reward / risk
+        return rr >= MIN_RR
 
     async def _capture_ohlcv(self, symbol: str):
         """Fetch multi-timeframe OHLCV for the active symbol and persist."""
@@ -907,6 +937,7 @@ class StrategyRunner:
                         stop_price = getattr(signal, 'stop_price', None)
                         target_price = getattr(signal, 'target_price', None)
                         trace_id = getattr(signal, 'trace_id', None)
+                        regime_flags = getattr(signal, 'regime_flags', {}) or {}
                         telemetry_record = {
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                             "session_id": self.session_id,
@@ -921,6 +952,7 @@ class StrategyRunner:
                             "exposure": current_exposure,
                             "open_orders": len(open_orders) if open_orders is not None else None,
                             "trace_id": trace_id,
+                            "regime_flags": regime_flags,
                         }
                         
                         # Log decision to user-friendly log
@@ -973,8 +1005,12 @@ class StrategyRunner:
                                 logger.warning("Skipped trade: missing price data")
                                 continue
 
+                        # Volatility sizing adjustment
+                        adjusted_quantity = self._apply_volatility_sizing(quantity, regime_flags)
+                        telemetry_record["vol_scaled_qty"] = adjusted_quantity
+
                         # Guardrails: clip size to sit under the max order cap minus buffer
-                        quantity = self._apply_order_value_buffer(quantity, price)
+                        quantity = self._apply_order_value_buffer(adjusted_quantity, price)
 
                         if quantity <= 0:
                             logger.warning("Skipped trade: buffered quantity became non-positive")
@@ -992,6 +1028,15 @@ class StrategyRunner:
                         telemetry_record["risk_reason"] = risk_result.reason
 
                         if risk_result.allowed:
+                            # RR filter when stop/target provided
+                            if not self._passes_rr_filter(action, price, stop_price, target_price):
+                                bot_actions_logger.info(f"⛔ Trade Blocked: RR below {MIN_RR}")
+                                telemetry_record["status"] = "rr_blocked"
+                                self._log_execution_trace(trace_id, telemetry_record)
+                                self._emit_telemetry(telemetry_record)
+                                self.strategy.on_trade_rejected("RR below threshold")
+                                continue
+
                             # Calculate fee before execution (estimate)
                             estimated_fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, action)
                             liquidity = "maker_intent"
@@ -1033,6 +1078,25 @@ class StrategyRunner:
                                     continue
                             except Exception as e:
                                 logger.debug(f"Pending exposure check failed: {e}")
+
+                            # Slippage guard: refresh price and compare vs decision snapshot
+                            try:
+                                latest_md = await self.bot.get_market_data_async(symbol)
+                                latest_price = latest_md.get('price') if latest_md else price
+                            except Exception:
+                                latest_price = price
+
+                            if price and latest_price:
+                                move_pct = abs(latest_price - price) / price * 100
+                                if move_pct > MAX_SLIPPAGE_PCT:
+                                    bot_actions_logger.info(f"⏸️ Skipping trade: slippage {move_pct:.2f}% > {MAX_SLIPPAGE_PCT:.2f}%")
+                                    telemetry_record["status"] = "slippage_blocked"
+                                    telemetry_record["slippage_pct"] = move_pct
+                                    self._log_execution_trace(trace_id, telemetry_record)
+                                    self._emit_telemetry(telemetry_record)
+                                    self.strategy.on_trade_rejected("Slippage over limit")
+                                    continue
+                                telemetry_record["slippage_pct"] = move_pct
 
                             bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (est. fee: ${estimated_fee:.4f})")
 

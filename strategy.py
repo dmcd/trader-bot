@@ -30,13 +30,14 @@ from config import (
 logger = logging.getLogger(__name__)
 
 class StrategySignal:
-    def __init__(self, action: str, symbol: str, quantity: float, reason: str, order_id=None, trace_id: int = None):
+    def __init__(self, action: str, symbol: str, quantity: float, reason: str, order_id=None, trace_id: int = None, regime_flags: Dict[str, str] = None):
         self.action = action.upper()
         self.symbol = symbol
         self.quantity = quantity
         self.reason = reason
         self.order_id = order_id
         self.trace_id = trace_id
+        self.regime_flags = regime_flags or {}
 
     def __str__(self):
         return f"{self.action} {self.quantity} {self.symbol} ({self.reason})"
@@ -278,6 +279,8 @@ class LLMStrategy(BaseStrategy):
         symbol = list(market_data.keys())[0]
         data = market_data[symbol]
 
+        regime_flags = {}
+
         # 1. Fee Check
         if session_stats and self._fees_too_high(session_stats):
             logger.info("Skipping trading due to high fee ratio")
@@ -483,15 +486,15 @@ class LLMStrategy(BaseStrategy):
                     # For now, we'll leave state update to the caller or handle it optimistically?
                     # The original code checked `can_trade` in the loop.
                     
-                    signal = StrategySignal(action, symbol, quantity, reason, trace_id=trace_id)
+                    signal = StrategySignal(action, symbol, quantity, reason, trace_id=trace_id, regime_flags=regime_flags)
                     # Carry stop/target forward to runner via attributes
                     signal.stop_price = stop_price
                     signal.target_price = target_price
                     return signal
                 elif action == 'CANCEL' and order_id:
-                    return StrategySignal('CANCEL', symbol or '', 0, reason or 'Cancel open order', order_id=order_id, trace_id=trace_id)
+                    return StrategySignal('CANCEL', symbol or '', 0, reason or 'Cancel open order', order_id=order_id, trace_id=trace_id, regime_flags=regime_flags)
                 elif action == 'HOLD':
-                    return StrategySignal('HOLD', symbol, 0, reason, trace_id=trace_id)
+                    return StrategySignal('HOLD', symbol, 0, reason, trace_id=trace_id, regime_flags=regime_flags)
             except json.JSONDecodeError:
                 logger.error(f"Failed to parse LLM response: {decision_json}")
         

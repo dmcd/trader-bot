@@ -20,11 +20,10 @@
 ## Task Checklist
 - [x] Add multi-timeframe OHLCV storage (1m/5m/1h/4h/daily) and derived features (ATR, vol, VWAP, spread/imbalance) into DB and prompt.
 - [x] Implement regime detection (volatility buckets, trend strength, liquidity filters) and feed flags to the strategy.
-- [ ] Add cross-asset/macro context fetchers (BTC.D/ETHBTC/SPY/QQQ/VIX/DXY or venue-appropriate) with caching.
 - [ ] Build LLM tool layer for controlled data fetches; keep execution authority in Python.
 - [ ] Introduce planner→executor loop (LLM plans, runner gathers data, LLM revises with cap on revisions).
 - [ ] Rework plan management: plan versioning, re-score each loop, trailing/partial exits, and explicit “replan” action.
-- [ ] Add deterministic overlays: volatility-normalized sizing, minimum RR filter, slippage check vs decision price.
+- [x] Add deterministic overlays: volatility-normalized sizing, minimum RR filter, slippage check vs decision price.
 - [x] Create dedicated LLM trace log/table capturing full prompt/response + parsed decision + market snapshot + execution result; redact secrets.
 - [x] Emit structured JSON telemetry per loop (inputs, decision, risk verdict, fill outcome) for offline eval.
 - [ ] Implement IB trade history and OHLCV support; remove hardcoded `BTC/USD` in sync paths.

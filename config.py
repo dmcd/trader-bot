@@ -19,6 +19,10 @@ ORDER_VALUE_BUFFER = float(os.getenv('ORDER_VALUE_BUFFER', '5.0')) # trim near-c
 MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '3'))
 MAX_TOTAL_EXPOSURE = float(os.getenv('MAX_TOTAL_EXPOSURE', '10000.0')) # Total portfolio exposure limit
 MIN_TRADE_SIZE = float(os.getenv('MIN_TRADE_SIZE', '500.0')) # Minimum trade size in currency
+MIN_RR = float(os.getenv('MIN_RR', '1.2'))  # Minimum risk/reward ratio when stop/target are present
+MAX_SLIPPAGE_PCT = float(os.getenv('MAX_SLIPPAGE_PCT', '0.5'))  # Max price move % allowed between decision and execution
+HIGH_VOL_SIZE_FACTOR = float(os.getenv('HIGH_VOL_SIZE_FACTOR', '0.6'))  # Scale size in high vol regimes
+MED_VOL_SIZE_FACTOR = float(os.getenv('MED_VOL_SIZE_FACTOR', '0.8'))  # Scale size in medium vol regimes
 
 # Cadence & spacing
 LOOP_INTERVAL_SECONDS = int(os.getenv('LOOP_INTERVAL_SECONDS', '10'))  # main loop sleep (default 5 min)

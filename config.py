@@ -15,14 +15,14 @@ IB_CLIENT_ID = int(os.getenv('IB_CLIENT_ID', '1'))
 MAX_DAILY_LOSS = float(os.getenv('MAX_DAILY_LOSS', '500.0')) # absolute currency stop
 MAX_DAILY_LOSS_PERCENT = float(os.getenv('MAX_DAILY_LOSS_PERCENT', '3.0')) # percent of equity stop
 MAX_ORDER_VALUE = float(os.getenv('MAX_ORDER_VALUE', '500.0')) # currency depends on venue
-ORDER_VALUE_BUFFER = float(os.getenv('ORDER_VALUE_BUFFER', '1.0')) # trim near-cap trades by this buffer
+ORDER_VALUE_BUFFER = float(os.getenv('ORDER_VALUE_BUFFER', '5.0')) # trim near-cap trades by this buffer
 MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '3'))
 MAX_TOTAL_EXPOSURE = float(os.getenv('MAX_TOTAL_EXPOSURE', '10000.0')) # Total portfolio exposure limit
-MIN_TRADE_SIZE = float(os.getenv('MIN_TRADE_SIZE', '200.0')) # Minimum trade size in currency
+MIN_TRADE_SIZE = float(os.getenv('MIN_TRADE_SIZE', '500.0')) # Minimum trade size in currency
 
 # Cadence & spacing
-LOOP_INTERVAL_SECONDS = int(os.getenv('LOOP_INTERVAL_SECONDS', '300'))  # main loop sleep (default 5 min)
-MIN_TRADE_INTERVAL_SECONDS = int(os.getenv('MIN_TRADE_INTERVAL_SECONDS', '300'))  # min spacing between trades
+LOOP_INTERVAL_SECONDS = int(os.getenv('LOOP_INTERVAL_SECONDS', '10'))  # main loop sleep (default 5 min)
+MIN_TRADE_INTERVAL_SECONDS = int(os.getenv('MIN_TRADE_INTERVAL_SECONDS', '120'))  # min spacing between trades
 FEE_RATIO_COOLDOWN = float(os.getenv('FEE_RATIO_COOLDOWN', '50.0'))  # if fees > X% of gross PnL, pause trading
 PRIORITY_MOVE_PCT = float(os.getenv('PRIORITY_MOVE_PCT', '1.5'))  # % move over short window to break cooldown
 PRIORITY_LOOKBACK_MIN = int(os.getenv('PRIORITY_LOOKBACK_MIN', '5'))  # minutes to measure move

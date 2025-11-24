@@ -137,7 +137,7 @@ class LLMStrategy(BaseStrategy):
             return None
 
         # 2. Chop Check
-        # Use simulated time for DB lookups if in backtest
+        # Use context-provided time for DB lookups if available
         before_ts = None
         if context and hasattr(context, 'current_iso_time'):
             before_ts = context.current_iso_time
@@ -148,7 +148,7 @@ class LLMStrategy(BaseStrategy):
             return None
 
         # 3. Timing / Priority Check
-        # Use simulated time from context if available (for backtesting)
+        # Use context-provided time override when available
         if context and hasattr(context, 'current_time'):
             now_ts = context.current_time
         else:

@@ -3,13 +3,7 @@ import pandas as pd
 import time
 import os
 import subprocess
-import asyncio
-import plotly.express as px
 from database import TradingDatabase
-from backtester import BacktestEngine
-from strategy import LLMStrategy
-from cost_tracker import CostTracker
-from technical_analysis import TechnicalAnalysis
 
 # --- Helper Functions ---
 
@@ -206,26 +200,6 @@ def load_session_stats():
         st.error(f"Error loading session stats: {e}")
         return None, None
 
-def get_all_sessions():
-    try:
-        db = TradingDatabase()
-        cursor = db.conn.cursor()
-        cursor.execute("SELECT id, date, total_trades FROM sessions ORDER BY id DESC")
-        sessions = [dict(row) for row in cursor.fetchall()]
-        db.close()
-        return sessions
-    except Exception as e:
-        st.error(f"Error loading sessions: {e}")
-        return []
-
-async def run_backtest_async(session_id):
-    db = TradingDatabase()
-    cost_tracker = CostTracker('GEMINI')
-    ta = TechnicalAnalysis()
-    strategy = LLMStrategy(db, ta, cost_tracker)
-    engine = BacktestEngine(db, strategy, cost_tracker)
-    return await engine.run(session_id)
-
 # --- Page Config ---
 st.set_page_config(
     page_title="Trader Bot Dashboard",
@@ -280,167 +254,120 @@ db.close()
 
 
 # --- Main Content ---
-tab1, tab2 = st.tabs(["🔴 Live Trading", "🧪 Backtesting"])
+col1, col2 = st.columns([2, 1])
 
-with tab1:
-    col1, col2 = st.columns([2, 1])
+with col1:
+    st.subheader("📊 Session Performance")
+    df = load_history()
+    session_stats, session_id = load_session_stats()
     
-    with col1:
-        st.subheader("📊 Session Performance")
-        df = load_history()
-        session_stats, session_id = load_session_stats()
+    if session_stats and not df.empty:
+        symbols = df['symbol'].unique()
+        current_prices = get_latest_prices(session_id, symbols)
+        realized_pnl, unrealized_pnl, active_positions, df, exposure, trade_spacing = calculate_pnl(df, current_prices)
         
-        if session_stats and not df.empty:
-            symbols = df['symbol'].unique()
-            current_prices = get_latest_prices(session_id, symbols)
-            realized_pnl, unrealized_pnl, active_positions, df, exposure, trade_spacing = calculate_pnl(df, current_prices)
-            
-            gross_pnl_usd = realized_pnl + unrealized_pnl
-            
-            gross_pnl = gross_pnl_usd
-            realized_disp = realized_pnl
-            unrealized_disp = unrealized_pnl
-            currency_symbol = 'USD'
-
-            fees = session_stats.get('total_fees', 0)
-            llm_cost = session_stats.get('total_llm_cost', 0)
-            net_pnl = gross_pnl - fees - llm_cost
-            total_costs = fees + llm_cost
-            
-            cost_ratio = (total_costs / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
-            fee_ratio = (fees / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
-            fee_badge = format_ratio_badge(fee_ratio if gross_pnl else None)
-            cost_badge = format_ratio_badge(cost_ratio if gross_pnl else None)
-
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric(f"Net PnL ({currency_symbol})", f"${net_pnl:,.2f}")
-            m2.metric(f"Gross PnL ({currency_symbol})", f"${gross_pnl:,.2f}")
-            m3.metric(f"Realized PnL", f"${realized_disp:,.2f}")
-            m4.metric(f"Unrealized PnL", f"${unrealized_disp:,.2f}")
-
-            st.markdown("---")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Total Fees", f"${fees:.2f}")
-            c2.metric("LLM Costs", f"${llm_cost:.4f}")
-            c3.metric("Total Costs", f"${total_costs:.2f}")
-            c4.metric("Total Trades", session_stats.get('total_trades', 0))
-            if fee_badge:
-                c1.markdown(f"<div style='margin-top:-8px;'>{fee_badge}</div>", unsafe_allow_html=True)
-            if cost_badge:
-                c3.markdown(f"<div style='margin-top:-8px;'>{cost_badge}</div>", unsafe_allow_html=True)
-            
-            st.markdown("---")
-            s1, s2, s3, s4 = st.columns(4)
-            avg_spacing = trade_spacing.get("avg_seconds")
-            last_spacing = trade_spacing.get("last_seconds")
-            spacing_text = f"{avg_spacing:.0f}s avg" if avg_spacing else "n/a"
-            spacing_delta = f"{last_spacing:.0f}s last" if last_spacing else None
-            s1.metric("Trade Spacing", spacing_text, spacing_delta)
-            s2.metric("Exposure", f"${exposure:,.2f}")
-            s3.metric("Positions", len(active_positions))
-            try:
-                from config import LOOP_INTERVAL_SECONDS
-                loop_interval_display = f"{LOOP_INTERVAL_SECONDS}s loop"
-            except Exception:
-                loop_interval_display = f"{st.session_state.refresh_rate}s refresh"
-            s4.metric("Loop Interval", loop_interval_display)
-            
-            st.subheader("📈 Active Positions")
-            if active_positions:
-                pos_df = pd.DataFrame(active_positions)
-            else:
-                pos_df = pd.DataFrame(columns=['Symbol', 'Quantity', 'Avg Price', 'Current Price', 'Unrealized PnL', 'Value'])
-            
-            st.dataframe(
-                pos_df,
-                column_config={
-                    "Symbol": "Symbol",
-                    "Quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
-                    "Avg Price": st.column_config.NumberColumn("Avg Price", format="$%.2f"),
-                    "Current Price": st.column_config.NumberColumn("Current Price", format="$%.2f"),
-                    "Unrealized PnL": st.column_config.NumberColumn("Unrealized PnL", format="$%.2f"),
-                    "Value": st.column_config.NumberColumn("Value", format="$%.2f"),
-                },
-                hide_index=True,
-                width="stretch"
-            )
-
-        elif session_stats:
-            st.info("Session started, waiting for trades...")
-            st.metric("Starting Balance", f"${session_stats.get('starting_balance', 0):,.2f}")
-        else:
-            st.warning("No session stats available.")
+        gross_pnl_usd = realized_pnl + unrealized_pnl
         
-        st.subheader("🧾 Trade History")
-        if not df.empty:
-            df = df.sort_values('timestamp', ascending=False)
-            st.dataframe(
-                df[['timestamp', 'symbol', 'action', 'price', 'quantity', 'pnl', 'fee', 'liquidity', 'reason']],
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "timestamp": st.column_config.DatetimeColumn("Time", format="HH:mm:ss"),
-                    "symbol": "Symbol",
-                    "action": "Action",
-                    "price": st.column_config.NumberColumn("Price", format="$%.2f"),
-                    "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
-                    "pnl": st.column_config.NumberColumn("Realized PnL", format="$%.2f"),
-                    "fee": st.column_config.NumberColumn("Fee", format="$%.4f"),
-                    "liquidity": "Liq",
-                    "reason": st.column_config.TextColumn("Reason", width="large"),
-                }
-            )
+        gross_pnl = gross_pnl_usd
+        realized_disp = realized_pnl
+        unrealized_disp = unrealized_pnl
+        currency_symbol = 'USD'
+
+        fees = session_stats.get('total_fees', 0)
+        llm_cost = session_stats.get('total_llm_cost', 0)
+        net_pnl = gross_pnl - fees - llm_cost
+        total_costs = fees + llm_cost
+        
+        cost_ratio = (total_costs / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
+        fee_ratio = (fees / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
+        fee_badge = format_ratio_badge(fee_ratio if gross_pnl else None)
+        cost_badge = format_ratio_badge(cost_ratio if gross_pnl else None)
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric(f"Net PnL ({currency_symbol})", f"${net_pnl:,.2f}")
+        m2.metric(f"Gross PnL ({currency_symbol})", f"${gross_pnl:,.2f}")
+        m3.metric(f"Realized PnL", f"${realized_disp:,.2f}")
+        m4.metric(f"Unrealized PnL", f"${unrealized_disp:,.2f}")
+
+        st.markdown("---")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Fees", f"${fees:.2f}")
+        c2.metric("LLM Costs", f"${llm_cost:.4f}")
+        c3.metric("Total Costs", f"${total_costs:.2f}")
+        c4.metric("Total Trades", session_stats.get('total_trades', 0))
+        if fee_badge:
+            c1.markdown(f"<div style='margin-top:-8px;'>{fee_badge}</div>", unsafe_allow_html=True)
+        if cost_badge:
+            c3.markdown(f"<div style='margin-top:-8px;'>{cost_badge}</div>", unsafe_allow_html=True)
+        
+        st.markdown("---")
+        s1, s2, s3, s4 = st.columns(4)
+        avg_spacing = trade_spacing.get("avg_seconds")
+        last_spacing = trade_spacing.get("last_seconds")
+        spacing_text = f"{avg_spacing:.0f}s avg" if avg_spacing else "n/a"
+        spacing_delta = f"{last_spacing:.0f}s last" if last_spacing else None
+        s1.metric("Trade Spacing", spacing_text, spacing_delta)
+        s2.metric("Exposure", f"${exposure:,.2f}")
+        s3.metric("Positions", len(active_positions))
+        try:
+            from config import LOOP_INTERVAL_SECONDS
+            loop_interval_display = f"{LOOP_INTERVAL_SECONDS}s loop"
+        except Exception:
+            loop_interval_display = f"{st.session_state.refresh_rate}s refresh"
+        s4.metric("Loop Interval", loop_interval_display)
+        
+        st.subheader("📈 Active Positions")
+        if active_positions:
+            pos_df = pd.DataFrame(active_positions)
         else:
-            st.info("No trade history found yet. Start the bot!")
+            pos_df = pd.DataFrame(columns=['Symbol', 'Quantity', 'Avg Price', 'Current Price', 'Unrealized PnL', 'Value'])
+        
+        st.dataframe(
+            pos_df,
+            column_config={
+                "Symbol": "Symbol",
+                "Quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
+                "Avg Price": st.column_config.NumberColumn("Avg Price", format="$%.2f"),
+                "Current Price": st.column_config.NumberColumn("Current Price", format="$%.2f"),
+                "Unrealized PnL": st.column_config.NumberColumn("Unrealized PnL", format="$%.2f"),
+                "Value": st.column_config.NumberColumn("Value", format="$%.2f"),
+            },
+            hide_index=True,
+            width="stretch"
+        )
 
-    with col2:
-        st.subheader("📜 Logs")
-        logs = load_logs()
-        log_text = "".join(logs)
-        st.text_area("Log Output", log_text, height=900, disabled=True)
-        # Auto refresh only on Live tab
-        time.sleep(refresh_rate)
-        st.rerun()
-
-with tab2:
-    st.header("🧪 Strategy Backtesting")
-    
-    sessions = get_all_sessions()
-    if not sessions:
-        st.warning("No historical sessions found.")
+    elif session_stats:
+        st.info("Session started, waiting for trades...")
+        st.metric("Starting Balance", f"${session_stats.get('starting_balance', 0):,.2f}")
     else:
-        session_options = {f"Session {s['id']} ({s['date']}) - {s['total_trades']} trades": s['id'] for s in sessions}
-        selected_session_label = st.selectbox("Select Session to Replay", list(session_options.keys()))
-        selected_session_id = session_options[selected_session_label]
-        
-        if st.button("▶️ Run Backtest", type="primary"):
-            with st.spinner("Running backtest simulation..."):
-                # Run async backtest
-                try:
-                    report = asyncio.run(run_backtest_async(selected_session_id))
-                    
-                    if report:
-                        st.success("Backtest Complete!")
-                        
-                        # Metrics
-                        b1, b2, b3, b4 = st.columns(4)
-                        b1.metric("Initial Balance", f"${report['initial_balance']:,.2f}")
-                        b2.metric("Final Balance", f"${report['final_balance']:,.2f}")
-                        b3.metric("Total Return", f"{report['total_return_pct']:.2f}%")
-                        b4.metric("Total Trades", report['total_trades'])
-                        
-                        # Equity Curve
-                        if report['equity_curve']:
-                            equity_df = pd.DataFrame(report['equity_curve'])
-                            fig = px.line(equity_df, x='timestamp', y='equity', title='Equity Curve')
-                            st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Trades
-                        if report['trades']:
-                            st.subheader("Trade Log")
-                            trades_df = pd.DataFrame(report['trades'])
-                            st.dataframe(trades_df, use_container_width=True)
-                    else:
-                        st.error("Backtest returned no results (possibly no market data for this session).")
-                except Exception as e:
-                    st.error(f"Backtest failed: {e}")
+        st.warning("No session stats available.")
+    
+    st.subheader("🧾 Trade History")
+    if not df.empty:
+        df = df.sort_values('timestamp', ascending=False)
+        st.dataframe(
+            df[['timestamp', 'symbol', 'action', 'price', 'quantity', 'pnl', 'fee', 'liquidity', 'reason']],
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "timestamp": st.column_config.DatetimeColumn("Time", format="HH:mm:ss"),
+                "symbol": "Symbol",
+                "action": "Action",
+                "price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
+                "pnl": st.column_config.NumberColumn("Realized PnL", format="$%.2f"),
+                "fee": st.column_config.NumberColumn("Fee", format="$%.4f"),
+                "liquidity": "Liq",
+                "reason": st.column_config.TextColumn("Reason", width="large"),
+            }
+        )
+    else:
+        st.info("No trade history found yet. Start the bot!")
+
+with col2:
+    st.subheader("📜 Logs")
+    logs = load_logs()
+    log_text = "".join(logs)
+    st.text_area("Log Output", log_text, height=900, disabled=True)
+    time.sleep(refresh_rate)
+    st.rerun()

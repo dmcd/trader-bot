@@ -212,6 +212,64 @@ class LLMStrategy(BaseStrategy):
             return ""
         return "Multi-timeframe: " + " | ".join(lines)
 
+    def _compute_regime_flags(self, session_id: int, symbol: str, market_data_point: Dict[str, Any], recent_bars: Dict[str, list]) -> Dict[str, str]:
+        """Derive simple regime flags: volatility bucket, trend slope, liquidity."""
+        flags = {}
+
+        # Volatility bucket using 1h bars
+        one_h = recent_bars.get('1h') or []
+        if len(one_h) >= 10:
+            closes = [b.get('close') for b in one_h if b.get('close') is not None]
+            returns = []
+            for i in range(1, len(closes)):
+                if closes[i]:
+                    returns.append((closes[i] - closes[i-1]) / closes[i-1])
+            if len(returns) >= 5:
+                vol_pct = pstdev(returns) * 100
+                if vol_pct < 0.5:
+                    flags['volatility'] = f"low ({vol_pct:.2f}%)"
+                elif vol_pct < 1.5:
+                    flags['volatility'] = f"medium ({vol_pct:.2f}%)"
+                else:
+                    flags['volatility'] = f"high ({vol_pct:.2f}%)"
+
+        # Trend slope using 1h closes over ~12 bars
+        if len(one_h) >= 6:
+            closes = [b.get('close') for b in one_h if b.get('close') is not None][:12]
+            if len(closes) >= 2:
+                x = list(range(len(closes)))
+                avg_x = sum(x) / len(x)
+                avg_y = sum(closes) / len(closes)
+                num = sum((xi - avg_x) * (yi - avg_y) for xi, yi in zip(x, closes))
+                den = sum((xi - avg_x) ** 2 for xi in x) or 1
+                slope = num / den
+                last = closes[0]
+                slope_pct = (slope / last * 100) if last else 0
+                if slope_pct > 0.05:
+                    flags['trend'] = f"up ({slope_pct:.2f}%/bar)"
+                elif slope_pct < -0.05:
+                    flags['trend'] = f"down ({slope_pct:.2f}%/bar)"
+                else:
+                    flags['trend'] = "flat"
+
+        # Liquidity flag from top-of-book and spread
+        spread_pct = market_data_point.get('spread_pct')
+        bid_size = market_data_point.get('bid_size')
+        ask_size = market_data_point.get('ask_size')
+        if spread_pct is not None:
+            if spread_pct > MAX_SPREAD_PCT:
+                flags['liquidity'] = f"wide_spread ({spread_pct:.3f}%)"
+            else:
+                flags['liquidity'] = f"ok_spread ({spread_pct:.3f}%)"
+        if bid_size and ask_size:
+            min_notional = min(
+                (market_data_point.get('bid') or 0) * bid_size,
+                (market_data_point.get('ask') or 0) * ask_size
+            )
+            flags['depth'] = f"top_notional ${min_notional:,.2f}"
+
+        return flags
+
     async def generate_signal(self, session_id: int, market_data: Dict[str, Any], current_equity: float, current_exposure: float, context: Any = None, session_stats: Dict[str, Any] = None) -> Optional[StrategySignal]:
         if not market_data:
             return None
@@ -493,6 +551,7 @@ class LLMStrategy(BaseStrategy):
         indicator_summary = ""
         
         timeframe_summary = ""
+        regime_flags = {}
         try:
             timeframe_summary = self._build_timeframe_summary(session_id, symbol)
         except Exception as e:
@@ -507,6 +566,12 @@ class LLMStrategy(BaseStrategy):
                     if indicators:
                         current_price = market_data[symbol]['price']
                         indicator_summary = self.ta.format_indicators_for_llm(indicators, current_price)
+                recent_bars = {
+                    tf: self.db.get_recent_ohlcv(session_id, symbol, tf, limit=50)
+                    for tf in ['1m', '5m', '1h', '1d']
+                    if hasattr(self.db, "get_recent_ohlcv")
+                }
+                regime_flags = self._compute_regime_flags(session_id, symbol, market_data.get(symbol, {}), recent_bars)
             except Exception as e:
                 logger.warning(f"Error getting context/indicators: {e}")
         
@@ -562,6 +627,7 @@ class LLMStrategy(BaseStrategy):
             context_block=f"{context_summary}\n\n" if context_summary else "",
             indicator_block=f"{indicator_summary}\n\n" if indicator_summary else "",
             multi_tf_block=f"{timeframe_summary}\n\n" if timeframe_summary else "",
+            regime_flags=(", ".join(f"{k}={v}" for k, v in regime_flags.items()) if regime_flags else "none"),
             prompt_context_block=prompt_context_block,
             rules_block=f"{rules_block}\n" if rules_block else "",
             mode_note=mode_note,

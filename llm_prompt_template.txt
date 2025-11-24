@@ -22,6 +22,7 @@ Risk Constraints:
 Available Symbols: {available_symbols}
 
 {quantity_guidance}
+Regime flags: {regime_flags}
 {context_block}{indicator_block}{multi_tf_block}Decide on an action for one of the available symbols.
 You may also cancel an open order if it is stale or unsafe.
 REMINDERS:

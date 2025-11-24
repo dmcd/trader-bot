@@ -19,7 +19,7 @@
 
 ## Task Checklist
 - [x] Add multi-timeframe OHLCV storage (1m/5m/1h/4h/daily) and derived features (ATR, vol, VWAP, spread/imbalance) into DB and prompt.
-- [ ] Implement regime detection (volatility buckets, trend strength, liquidity filters) and feed flags to the strategy.
+- [x] Implement regime detection (volatility buckets, trend strength, liquidity filters) and feed flags to the strategy.
 - [ ] Add cross-asset/macro context fetchers (BTC.D/ETHBTC/SPY/QQQ/VIX/DXY or venue-appropriate) with caching.
 - [ ] Build LLM tool layer for controlled data fetches; keep execution authority in Python.
 - [ ] Introduce planner→executor loop (LLM plans, runner gathers data, LLM revises with cap on revisions).

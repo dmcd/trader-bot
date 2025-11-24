@@ -243,6 +243,30 @@ class TradingDatabase:
         
         self.conn.commit()
         logger.debug(f"Logged trade: {action} {quantity} {symbol} @ ${price}")
+
+    def log_estimated_fee(self, session_id: int, order_id: str, estimated_fee: float, symbol: str, action: str):
+        """Optional audit trail for estimated fees to compare with actuals."""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS estimated_fees (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER NOT NULL,
+                    order_id TEXT,
+                    symbol TEXT,
+                    action TEXT,
+                    estimated_fee REAL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES sessions(id)
+                )
+            """)
+            cursor.execute("""
+                INSERT INTO estimated_fees (session_id, order_id, symbol, action, estimated_fee)
+                VALUES (?, ?, ?, ?, ?)
+            """, (session_id, str(order_id), symbol, action, estimated_fee))
+            self.conn.commit()
+        except Exception as e:
+            logger.debug(f"Failed to log estimated fee: {e}")
     
     def log_llm_call(self, session_id: int, input_tokens: int, output_tokens: int, 
                      cost: float, decision: str = ""):

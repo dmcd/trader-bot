@@ -701,6 +701,11 @@ class StrategyRunner:
                                 if order_result and order_result.get('order_id'):
                                     self.order_reasons[str(order_result['order_id'])] = reason
                                     self._estimated_fees[str(order_result['order_id'])] = estimated_fee
+                                    # Also persist estimated fee to DB for optional auditing
+                                    try:
+                                        self.db.log_estimated_fee(self.session_id, order_result['order_id'], estimated_fee, symbol, action)
+                                    except Exception as e:
+                                        logger.debug(f"Could not log estimated fee: {e}")
                                     
                                 # Snapshot open orders if any remain
                                 try:

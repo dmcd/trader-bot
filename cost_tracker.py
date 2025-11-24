@@ -1,5 +1,13 @@
 import logging
 from typing import Dict, Any
+from config import (
+    GEMINI_MAKER_FEE,
+    GEMINI_TAKER_FEE,
+    IB_STOCK_FEE_PER_SHARE,
+    IB_MIN_FEE,
+    GEMINI_INPUT_COST_PER_TOKEN,
+    GEMINI_OUTPUT_COST_PER_TOKEN,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -12,19 +20,19 @@ class CostTracker:
         # Fee rates per exchange
         self.fee_rates = {
             'GEMINI': {
-                'maker': 0.0020,  # 0.20%
-                'taker': 0.0040,  # 0.40%
+                'maker': GEMINI_MAKER_FEE,
+                'taker': GEMINI_TAKER_FEE,
             },
             'IB': {
-                'stock_per_share': 0.005,  # $0.005 per share
-                'min_fee': 1.00,  # $1 minimum
+                'stock_per_share': IB_STOCK_FEE_PER_SHARE,
+                'min_fee': IB_MIN_FEE,
             }
         }
         
         # LLM costs (Gemini 2.5 Flash pricing)
         self.llm_costs = {
-            'input_per_token': 0.000000075,   # $0.075 per 1M tokens
-            'output_per_token': 0.00000030,   # $0.30 per 1M tokens
+            'input_per_token': GEMINI_INPUT_COST_PER_TOKEN,
+            'output_per_token': GEMINI_OUTPUT_COST_PER_TOKEN,
         }
     
     def calculate_trade_fee(self, symbol: str, quantity: float, price: float, 

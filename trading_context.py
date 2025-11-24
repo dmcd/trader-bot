@@ -19,37 +19,47 @@ class TradingContext:
         session = self.db.get_session_stats(self.session_id)
         
         # Get recent trades
-        recent_trades = self.db.get_recent_trades(self.session_id, limit=10)
+        recent_trades = list(reversed(self.db.get_recent_trades(self.session_id, limit=50)))  # chronological
         
         # Calculate session duration
         session_start = datetime.fromisoformat(session['created_at'])
         duration = datetime.now() - session_start
         hours = duration.total_seconds() / 3600
         
-        # Calculate win rate
-        if recent_trades:
-            # Simple win calculation: compare consecutive buy/sell pairs
-            wins = 0
-            losses = 0
-            for i in range(len(recent_trades) - 1):
-                if recent_trades[i]['action'] == 'SELL' and i + 1 < len(recent_trades):
-                    sell_price = recent_trades[i]['price']
-                    # Find corresponding buy
-                    for j in range(i + 1, len(recent_trades)):
-                        if recent_trades[j]['action'] == 'BUY':
-                            buy_price = recent_trades[j]['price']
-                            if sell_price > buy_price:
-                                wins += 1
-                            else:
-                                losses += 1
-                            break
-            
-            total_closed = wins + losses
-            win_rate = (wins / total_closed * 100) if total_closed > 0 else 0
-        else:
-            win_rate = 0
-            wins = 0
-            losses = 0
+        # Calculate win rate using chronological buy->sell pairing
+        wins = losses = 0
+        open_position = None
+        for trade in recent_trades:
+            action = trade['action'].upper()
+            qty = trade['quantity']
+            price = trade['price']
+            fee = trade.get('fee', 0.0) or 0.0
+            if action == 'BUY':
+                # Start/aggregate position
+                if open_position is None:
+                    open_position = {'qty': qty, 'cost': qty * price, 'fees': fee}
+                else:
+                    open_position['qty'] += qty
+                    open_position['cost'] += qty * price
+                    open_position['fees'] += fee
+            elif action == 'SELL' and open_position:
+                sell_proceeds = qty * price
+                # Assume FIFO: close against existing open qty
+                closed_qty = min(open_position['qty'], qty)
+                avg_cost = open_position['cost'] / open_position['qty'] if open_position['qty'] else 0.0
+                cost_closed = closed_qty * avg_cost
+                pnl = sell_proceeds - cost_closed - fee - open_position.get('fees', 0.0)
+                if pnl > 0:
+                    wins += 1
+                else:
+                    losses += 1
+                open_position['qty'] -= closed_qty
+                open_position['cost'] -= cost_closed
+                if open_position['qty'] <= 1e-9:
+                    open_position = None
+
+        total_closed = wins + losses
+        win_rate = (wins / total_closed * 100) if total_closed > 0 else 0
         
         # Get recent market data for trend analysis
         market_data = self.db.get_recent_market_data(self.session_id, symbol, limit=20)
@@ -144,7 +154,7 @@ Recent Activity:
         # Add recent trades
         if recent_trades:
             context += "Last 5 Trades:\n"
-            for trade in recent_trades[:5]:
+            for trade in list(reversed(recent_trades))[:5]:  # show most recent
                 timestamp = datetime.fromisoformat(trade['timestamp']).strftime('%H:%M:%S')
                 context += f"  {timestamp} - {trade['action']} {trade['quantity']:.6f} {trade['symbol']} @ ${trade['price']:,.2f}\n"
         else:
@@ -169,7 +179,7 @@ Recent Activity:
     
     def get_recent_performance(self) -> Dict[str, Any]:
         """Get recent performance metrics."""
-        recent_trades = self.db.get_recent_trades(self.session_id, limit=10)
+        recent_trades = list(reversed(self.db.get_recent_trades(self.session_id, limit=50)))  # chronological
         
         if not recent_trades:
             return {
@@ -179,24 +189,34 @@ Recent Activity:
                 'last_trade_profitable': None
             }
         
-        # Calculate metrics
         profits = []
-        for i in range(len(recent_trades) - 1):
-            if recent_trades[i]['action'] == 'SELL':
-                sell_value = recent_trades[i]['quantity'] * recent_trades[i]['price']
-                # Find corresponding buy
-                for j in range(i + 1, len(recent_trades)):
-                    if recent_trades[j]['action'] == 'BUY':
-                        buy_value = recent_trades[j]['quantity'] * recent_trades[j]['price']
-                        profit = sell_value - buy_value - recent_trades[i]['fee'] - recent_trades[j]['fee']
-                        profits.append(profit)
-                        break
-        
+        open_position = None
+        for trade in recent_trades:
+            action = trade['action'].upper()
+            qty = trade['quantity']
+            price = trade['price']
+            fee = trade.get('fee', 0.0) or 0.0
+            if action == 'BUY':
+                if open_position is None:
+                    open_position = {'qty': qty, 'cost': qty * price, 'fees': fee}
+                else:
+                    open_position['qty'] += qty
+                    open_position['cost'] += qty * price
+                    open_position['fees'] += fee
+            elif action == 'SELL' and open_position:
+                closed_qty = min(open_position['qty'], qty)
+                avg_cost = open_position['cost'] / open_position['qty'] if open_position['qty'] else 0.0
+                pnl = (closed_qty * price) - (closed_qty * avg_cost) - fee - open_position.get('fees', 0.0)
+                profits.append(pnl)
+                open_position['qty'] -= closed_qty
+                open_position['cost'] -= closed_qty * avg_cost
+                if open_position['qty'] <= 1e-9:
+                    open_position = None
+
         wins = sum(1 for p in profits if p > 0)
-        
         return {
             'total_trades': len(recent_trades),
             'avg_profit': sum(profits) / len(profits) if profits else 0,
             'win_rate': (wins / len(profits) * 100) if profits else 0,
-            'last_trade_profitable': profits[0] > 0 if profits else None
+            'last_trade_profitable': profits[-1] > 0 if profits else None
         }

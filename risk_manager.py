@@ -25,6 +25,7 @@ class RiskManager:
         self.start_of_day_equity = None
         self.positions = {} # Symbol -> Quantity
         self.pending_buy_exposure = 0.0  # Notional of outstanding buy orders
+        self.pending_orders_by_symbol = {}  # symbol -> {'buy': notional, 'count': int}
 
     def seed_start_of_day(self, start_equity: float):
         """Persist start-of-day equity so restarts keep loss limits consistent."""
@@ -54,6 +55,7 @@ class RiskManager:
         Only BUY sides are counted toward exposure headroom; sells are ignored here.
         """
         total = 0.0
+        counts = {}
         price_lookup = price_lookup or {}
         for order in pending_orders or []:
             side = (order.get('side') or '').upper()
@@ -66,7 +68,11 @@ class RiskManager:
                 qty = order.get('amount', 0.0)
             if price and qty:
                 total += price * qty
+                sym_entry = counts.setdefault(symbol, {'buy': 0.0, 'count': 0})
+                sym_entry['buy'] += price * qty
+                sym_entry['count'] += 1
         self.pending_buy_exposure = total
+        self.pending_orders_by_symbol = counts
 
     def apply_order_value_buffer(self, quantity: float, price: float):
         """Trim quantity so notional stays under the order cap minus buffer."""

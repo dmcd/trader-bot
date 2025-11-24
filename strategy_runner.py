@@ -863,26 +863,31 @@ class StrategyRunner:
                             stop_price = getattr(signal, 'stop_price', None)
                             target_price = getattr(signal, 'target_price', None)
 
-                            # Enforce per-symbol plan cap before placing order
-                            try:
-                                open_plan_count = self.db.count_open_trade_plans_for_symbol(self.session_id, symbol)
-                                if open_plan_count >= self.max_plans_per_symbol:
-                                    bot_actions_logger.info(f"⛔ Trade Blocked: plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
-                                    self.strategy.on_trade_rejected("Plan cap reached")
-                                    continue
-                            except Exception as e:
-                                logger.debug(f"Could not check plan cap: {e}")
+                        # Enforce per-symbol plan cap before placing order
+                        try:
+                            open_plan_count = self.db.count_open_trade_plans_for_symbol(self.session_id, symbol)
+                            if open_plan_count >= self.max_plans_per_symbol:
+                                bot_actions_logger.info(f"⛔ Trade Blocked: plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
+                                self.strategy.on_trade_rejected("Plan cap reached")
+                                continue
+                        except Exception as e:
+                            logger.debug(f"Could not check plan cap: {e}")
 
-                            # Enforce pending exposure headroom including open orders
-                            try:
-                                pending_exposure = self.risk_manager.pending_buy_exposure if action == 'BUY' else 0.0
-                                order_value = quantity * price
-                                if action == 'BUY' and (pending_exposure + order_value + current_exposure) > MAX_TOTAL_EXPOSURE:
-                                    bot_actions_logger.info("⛔ Trade Blocked: pending/open exposure would exceed cap")
-                                    self.strategy.on_trade_rejected("Pending exposure over cap")
-                                    continue
-                            except Exception as e:
-                                logger.debug(f"Pending exposure check failed: {e}")
+                        # Enforce pending exposure headroom including open orders
+                        try:
+                            pending_exposure = self.risk_manager.pending_orders_by_symbol.get(symbol, {}).get('buy', 0.0) if action == 'BUY' else 0.0
+                            pending_count = self.risk_manager.pending_orders_by_symbol.get(symbol, {}).get('count', 0) if action == 'BUY' else 0
+                            if action == 'BUY' and pending_count >= self.max_plans_per_symbol:
+                                bot_actions_logger.info(f"⛔ Trade Blocked: open order count reached for {symbol} ({pending_count}/{self.max_plans_per_symbol})")
+                                self.strategy.on_trade_rejected("Open order cap reached")
+                                continue
+                            order_value = quantity * price
+                            if action == 'BUY' and (pending_exposure + order_value + current_exposure) > MAX_TOTAL_EXPOSURE:
+                                bot_actions_logger.info("⛔ Trade Blocked: pending/open exposure would exceed cap")
+                                self.strategy.on_trade_rejected("Pending exposure over cap")
+                                continue
+                        except Exception as e:
+                            logger.debug(f"Pending exposure check failed: {e}")
 
                             bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (est. fee: ${estimated_fee:.4f})")
                             

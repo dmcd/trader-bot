@@ -142,12 +142,49 @@ class GeminiTrader(BaseTrader):
 
         try:
             ticker = await self.exchange.fetch_ticker(symbol)
+            order_book = None
+            try:
+                order_book = await self.exchange.fetch_order_book(symbol, limit=5)
+            except Exception as e:
+                logger.warning(f"Order book fetch failed for {symbol}: {e}")
+
+            bid = ticker.get('bid')
+            ask = ticker.get('ask')
+            price = ticker.get('last')
+            volume = ticker.get('baseVolume') or ticker.get('quoteVolume')
+
+            top_bid_size = top_ask_size = None
+            spread_pct = None
+            ob_imbalance = None
+            if order_book:
+                if order_book.get('bids'):
+                    top_bid = order_book['bids'][0]
+                    bid = bid or (top_bid[0] if top_bid else None)
+                    top_bid_size = top_bid[1] if top_bid else None
+                if order_book.get('asks'):
+                    top_ask = order_book['asks'][0]
+                    ask = ask or (top_ask[0] if top_ask else None)
+                    top_ask_size = top_ask[1] if top_ask else None
+                if bid and ask:
+                    mid = (bid + ask) / 2
+                    if mid:
+                        spread_pct = ((ask - bid) / mid) * 100
+                if top_bid_size and top_ask_size:
+                    denom = top_bid_size + top_ask_size
+                    if denom > 0:
+                        ob_imbalance = (top_bid_size - top_ask_size) / denom
+
             return {
                 'symbol': symbol,
-                'price': ticker['last'],
-                'bid': ticker['bid'],
-                'ask': ticker['ask'],
-                'close': ticker['close']
+                'price': price,
+                'bid': bid,
+                'ask': ask,
+                'close': ticker.get('close'),
+                'volume': volume,
+                'bid_size': top_bid_size,
+                'ask_size': top_ask_size,
+                'spread_pct': spread_pct,
+                'ob_imbalance': ob_imbalance,
             }
         except Exception as e:
             logger.error(f"Error fetching Gemini ticker for {symbol}: {e}")

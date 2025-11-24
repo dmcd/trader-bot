@@ -31,6 +31,8 @@ from config import (
     PRIORITY_LOOKBACK_MIN,
     BREAK_GLASS_COOLDOWN_MIN,
     BREAK_GLASS_SIZE_FACTOR,
+    MAX_SPREAD_PCT,
+    MIN_TOP_OF_BOOK_NOTIONAL,
 )
 
 from logger_config import setup_logging
@@ -44,7 +46,7 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 class StrategyRunner:
-    def __init__(self):
+    def __init__(self, execute_orders: bool = True):
         # Only instantiate the bot for the active exchange
         if ACTIVE_EXCHANGE == 'IB':
             self.bot = IBTrader()
@@ -57,6 +59,7 @@ class StrategyRunner:
         
         self.risk_manager = RiskManager(self.bot)
         self.running = False
+        self.execute_orders = execute_orders
         
         # Professional trading infrastructure
         self.db = TradingDatabase()
@@ -100,6 +103,37 @@ class StrategyRunner:
                 f"to stay under ${MAX_ORDER_VALUE - ORDER_VALUE_BUFFER:.2f} cap"
             )
         return adjusted_qty
+
+    def _liquidity_ok(self, market_data_point: dict) -> bool:
+        """Simple microstructure filters using spread and top-of-book depth."""
+        if not market_data_point:
+            return True
+
+        spread_pct = market_data_point.get('spread_pct')
+        bid = market_data_point.get('bid')
+        ask = market_data_point.get('ask')
+        bid_size = market_data_point.get('bid_size')
+        ask_size = market_data_point.get('ask_size')
+
+        if spread_pct is None and bid and ask:
+            mid = (bid + ask) / 2
+            if mid:
+                spread_pct = ((ask - bid) / mid) * 100
+
+        if spread_pct is not None and spread_pct > MAX_SPREAD_PCT:
+            bot_actions_logger.info(f"⏸️ Skipping trade: spread {spread_pct:.3f}% > cap {MAX_SPREAD_PCT:.3f}%")
+            return False
+
+        if bid and ask and bid_size and ask_size:
+            # Use the weaker side as liquidity floor
+            min_notional = min(bid * bid_size, ask * ask_size)
+            if min_notional < MIN_TOP_OF_BOOK_NOTIONAL:
+                bot_actions_logger.info(
+                    f"⏸️ Skipping trade: top-of-book notional ${min_notional:.2f} < ${MIN_TOP_OF_BOOK_NOTIONAL:.2f} floor"
+                )
+                return False
+
+        return True
 
     async def _monitor_trade_plans(self, price_now: float):
         """
@@ -708,6 +742,29 @@ class StrategyRunner:
                     market_data[symbol] = data
                     price_now = data.get('price') if data else None
 
+                    # Log market data to database
+                    if data and self.session_id:
+                        try:
+                            self.db.log_market_data(
+                                self.session_id,
+                                symbol,
+                                data.get('price'),
+                                data.get('bid'),
+                                data.get('ask'),
+                                data.get('volume') or 0.0,
+                                spread_pct=data.get('spread_pct'),
+                                bid_size=data.get('bid_size'),
+                                ask_size=data.get('ask_size'),
+                                ob_imbalance=data.get('ob_imbalance'),
+                            )
+                        except Exception as e:
+                            logger.warning(f"Could not log market data: {e}")
+
+                    # Microstructure filter: skip trading when spread/liquidity are poor
+                    if data and not self._liquidity_ok(data):
+                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        continue
+
                     # Refresh live positions each loop for accurate exposure snapshots
                     try:
                         live_positions = await self.bot.get_positions_async()
@@ -921,6 +978,10 @@ class StrategyRunner:
                                 logger.debug(f"Pending exposure check failed: {e}")
 
                             bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (est. fee: ${estimated_fee:.4f})")
+
+                            if not self.execute_orders:
+                                bot_actions_logger.info("👁️ Shadow mode: skipping live order placement")
+                                continue
                             
                             # Execute trade
                             retries = 0

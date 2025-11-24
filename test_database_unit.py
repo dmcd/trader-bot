@@ -35,6 +35,12 @@ class TestTradingDatabase(unittest.TestCase):
         positions = self.db.get_net_positions_from_trades(self.session_id)
         self.assertAlmostEqual(positions["BTC/USD"], 0.1)
 
+    def test_start_of_day_equity_persistence(self):
+        baseline = 1234.5
+        self.db.set_start_of_day_equity(self.session_id, baseline)
+        stored = self.db.get_start_of_day_equity(self.session_id)
+        self.assertEqual(stored, baseline)
+
 
 if __name__ == "__main__":
     unittest.main()

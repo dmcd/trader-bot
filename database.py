@@ -176,7 +176,26 @@ class TradingDatabase:
                 total_fees REAL DEFAULT 0.0,
                 gross_pnl REAL DEFAULT 0.0,
                 total_llm_cost REAL DEFAULT 0.0,
+                start_of_day_equity REAL,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        """)
+        # Add missing columns for existing databases
+        try:
+            cursor.execute("PRAGMA table_info(session_stats_cache)")
+            cols = {row['name'] for row in cursor.fetchall()}
+            if 'start_of_day_equity' not in cols:
+                cursor.execute("ALTER TABLE session_stats_cache ADD COLUMN start_of_day_equity REAL")
+        except Exception as e:
+            logger.warning(f"Could not ensure session_stats_cache schema: {e}")
+
+        # Risk state table to persist daily loss baselines across restarts
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS risk_state (
+                session_id INTEGER PRIMARY KEY,
+                start_of_day_equity REAL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
@@ -622,7 +641,7 @@ class TradingDatabase:
         """Return persisted session stats aggregates if present."""
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT session_id, total_trades, total_fees, gross_pnl, total_llm_cost
+            SELECT session_id, total_trades, total_fees, gross_pnl, total_llm_cost, start_of_day_equity
             FROM session_stats_cache
             WHERE session_id = ?
         """, (session_id,))
@@ -631,21 +650,57 @@ class TradingDatabase:
 
     def set_session_stats_cache(self, session_id: int, stats: Dict[str, Any]):
         """Upsert session stats aggregates for restart resilience."""
+        existing = self.get_session_stats_cache(session_id) or {}
+        merged = {**existing, **(stats or {})}
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO session_stats_cache (session_id, total_trades, total_fees, gross_pnl, total_llm_cost, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO session_stats_cache (session_id, total_trades, total_fees, gross_pnl, total_llm_cost, start_of_day_equity, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(session_id) DO UPDATE SET
                 total_trades=excluded.total_trades,
                 total_fees=excluded.total_fees,
                 gross_pnl=excluded.gross_pnl,
                 total_llm_cost=excluded.total_llm_cost,
+                start_of_day_equity=excluded.start_of_day_equity,
                 updated_at=CURRENT_TIMESTAMP
         """, (
             session_id,
-            stats.get('total_trades', 0) or 0,
-            stats.get('total_fees', 0.0) or 0.0,
-            stats.get('gross_pnl', 0.0) or 0.0,
-            stats.get('total_llm_cost', 0.0) or 0.0,
+            merged.get('total_trades', 0) or 0,
+            merged.get('total_fees', 0.0) or 0.0,
+            merged.get('gross_pnl', 0.0) or 0.0,
+            merged.get('total_llm_cost', 0.0) or 0.0,
+            merged.get('start_of_day_equity', None),
         ))
         self.conn.commit()
+
+    def get_start_of_day_equity(self, session_id: int) -> Optional[float]:
+        """Return persisted start-of-day equity for loss checks."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT start_of_day_equity FROM risk_state
+            WHERE session_id = ?
+        """, (session_id,))
+        row = cursor.fetchone()
+        if row and row['start_of_day_equity'] is not None:
+            return row['start_of_day_equity']
+
+        # Fallback to cache column if present
+        stats = self.get_session_stats_cache(session_id)
+        if stats and stats.get('start_of_day_equity') is not None:
+            return stats['start_of_day_equity']
+        return None
+
+    def set_start_of_day_equity(self, session_id: int, equity: float):
+        """Persist start-of-day equity, keeping cache in sync."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO risk_state (session_id, start_of_day_equity)
+            VALUES (?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                start_of_day_equity=excluded.start_of_day_equity
+        """, (session_id, equity))
+        self.conn.commit()
+        try:
+            self.set_session_stats_cache(session_id, {'start_of_day_equity': equity})
+        except Exception as e:
+            logger.debug(f"Could not sync start_of_day_equity to cache: {e}")

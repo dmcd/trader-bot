@@ -138,9 +138,28 @@ class RiskManager:
             if new_exposure > (MAX_TOTAL_EXPOSURE * 0.9):
                 logger.warning(f"Risk Warning: Total exposure ${new_exposure:.2f} is close to limit of ${MAX_TOTAL_EXPOSURE:.2f}")
 
-            # This requires the bot to have a way to count positions
-            # For now, we'll skip or implement a simple check if we can access positions
-            pass
+            # Enforce max distinct positions (including pending buys on new symbols)
+            active_positions = {
+                sym for sym, data in (self.positions or {}).items()
+                if abs(data.get('quantity', 0) or 0.0) > 1e-9
+            }
+            pending_symbols = {
+                sym for sym, data in (self.pending_orders_by_symbol or {}).items()
+                if data.get('count', 0) > 0
+            }
+            distinct_symbols = active_positions.union(pending_symbols)
+            has_position = symbol in active_positions
+            if not has_position and symbol not in pending_symbols and len(distinct_symbols) >= MAX_POSITIONS:
+                msg = f"Max positions limit reached ({len(distinct_symbols)}/{MAX_POSITIONS})"
+                logger.warning(f"Risk Reject: {msg}")
+                return RiskCheckResult(False, msg)
+
+            # Cap stacking multiple pending buys on the same symbol
+            pending_for_symbol = self.pending_orders_by_symbol.get(symbol, {}) if self.pending_orders_by_symbol else {}
+            if pending_for_symbol.get('count', 0) >= MAX_POSITIONS:
+                msg = f"Open order cap reached for {symbol} ({pending_for_symbol.get('count')}/{MAX_POSITIONS})"
+                logger.warning(f"Risk Reject: {msg}")
+                return RiskCheckResult(False, msg)
 
         return RiskCheckResult(True, "Trade allowed")
 

@@ -318,12 +318,20 @@ class LLMStrategy(BaseStrategy):
                     target_price = decision.get('target_price')
                     if price:
                         band = price * 0.02  # 2% band
-                        min_stop = max(0.0, price - band)
-                        max_target = price + band
-                        if stop_price is not None:
-                            stop_price = max(min_stop, min(stop_price, price))  # don't allow stop above price for longs
-                        if target_price is not None:
-                            target_price = min(max_target, max(target_price, price))  # target at/above price
+                        if action == 'BUY':
+                            min_stop = max(0.0, price - band)
+                            max_target = price + band
+                            if stop_price is not None:
+                                stop_price = max(min_stop, min(stop_price, price))  # stop stays below/at entry
+                            if target_price is not None:
+                                target_price = min(max_target, max(target_price, price))  # target at/above entry
+                        else:  # SELL (short)
+                            max_stop = price + band
+                            min_target = max(0.0, price - band)
+                            if stop_price is not None:
+                                stop_price = min(max_stop, max(stop_price, price))  # stop stays above/at entry
+                            if target_price is not None:
+                                target_price = max(min_target, min(target_price, price))  # target at/below entry
                         # Telemetry for clamping
                         if decision.get('stop_price') != stop_price or decision.get('target_price') != target_price:
                             clamp_msg = f"clamped: stop {decision.get('stop_price')} -> {stop_price}, target {decision.get('target_price')} -> {target_price}"

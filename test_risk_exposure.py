@@ -13,6 +13,7 @@ class TestRiskManager(unittest.TestCase):
         self.orig_daily_loss_abs = rm_module.MAX_DAILY_LOSS
         self.orig_min_trade_size = rm_module.MIN_TRADE_SIZE
         self.orig_order_value_buffer = rm_module.ORDER_VALUE_BUFFER
+        self.orig_max_positions = rm_module.MAX_POSITIONS
 
         rm_module.MAX_ORDER_VALUE = 500.0
         rm_module.MAX_TOTAL_EXPOSURE = 1000.0
@@ -20,6 +21,7 @@ class TestRiskManager(unittest.TestCase):
         rm_module.MAX_DAILY_LOSS = 50.0
         rm_module.MIN_TRADE_SIZE = 1.0
         rm_module.ORDER_VALUE_BUFFER = 1.0
+        rm_module.MAX_POSITIONS = 3
 
         self.rm = RiskManager()
         # Seed start of day equity so percent checks work
@@ -32,6 +34,7 @@ class TestRiskManager(unittest.TestCase):
         rm_module.MAX_DAILY_LOSS = self.orig_daily_loss_abs
         rm_module.MIN_TRADE_SIZE = self.orig_min_trade_size
         rm_module.ORDER_VALUE_BUFFER = self.orig_order_value_buffer
+        rm_module.MAX_POSITIONS = self.orig_max_positions
 
     def test_invalid_price_or_quantity_rejected(self):
         result = self.rm.check_trade_allowed("BHP", "BUY", 0, 100.0)
@@ -147,6 +150,29 @@ class TestRiskManager(unittest.TestCase):
         self.assertIn("ETH/USD", sym)
         self.assertEqual(sym["ETH/USD"]["count"], 1)  # sell ignored
         self.assertAlmostEqual(sym["ETH/USD"]["buy"], 2000.0)  # 1 * 2000
+
+    def test_max_positions_blocks_new_symbol_when_full(self):
+        rm_module.MAX_POSITIONS = 1
+        self.rm.update_positions({"AAA": {"quantity": 1.0, "current_price": 10.0}})
+
+        result = self.rm.check_trade_allowed("BBB", "BUY", 1, price=10.0)
+        self.assertFalse(result.allowed)
+        self.assertIn("Max positions", result.reason)
+
+    def test_pending_order_cap_per_symbol(self):
+        rm_module.MAX_POSITIONS = 1
+        pending = [{
+            "symbol": "AAA",
+            "side": "buy",
+            "price": 10.0,
+            "amount": 1.0,
+            "remaining": 1.0
+        }]
+        self.rm.update_pending_orders(pending)
+
+        result = self.rm.check_trade_allowed("AAA", "BUY", 1, price=10.0)
+        self.assertFalse(result.allowed)
+        self.assertIn("Open order cap", result.reason)
 
 
 if __name__ == "__main__":

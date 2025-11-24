@@ -288,12 +288,28 @@ class StrategyRunner:
 
         # Seed risk manager with persisted start-of-day equity to survive restarts
         start_equity = None
-        if self.session and self.session.get('starting_balance') is not None:
+        try:
+            persisted_baseline = self.db.get_start_of_day_equity(self.session_id)
+        except Exception as e:
+            logger.warning(f"Could not fetch persisted start-of-day equity: {e}")
+            persisted_baseline = None
+
+        if persisted_baseline is not None:
+            start_equity = persisted_baseline
+        elif self.session and self.session.get('starting_balance') is not None:
             start_equity = self.session.get('starting_balance')
         else:
             # Prefer latest broker equity snapshot if available
             latest_equity = self.db.get_latest_equity(self.session_id)
             start_equity = latest_equity if latest_equity is not None else initial_equity
+
+        # Persist baseline if it's new so restarts retain loss guard
+        try:
+            if start_equity is not None and persisted_baseline is None:
+                self.db.set_start_of_day_equity(self.session_id, start_equity)
+        except Exception as e:
+            logger.warning(f"Could not persist start-of-day equity: {e}")
+
         self.risk_manager.seed_start_of_day(start_equity)
         
         # No need to reconcile_exchange_state in the old way; we just trust the exchange now.
@@ -820,6 +836,7 @@ class StrategyRunner:
                         # Log decision to user-friendly log
                         if action == 'HOLD':
                             bot_actions_logger.info(f"📊 Decision: HOLD - {reason}")
+                            continue
                         
                         elif action == 'CANCEL':
                             if not order_id:

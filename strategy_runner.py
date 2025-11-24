@@ -221,24 +221,24 @@ class StrategyRunner:
         # Initialize session stats with persistence awareness
         logger.info("Initializing session stats...")
         cached_stats = self.db.get_session_stats_cache(self.session_id)
-        if cached_stats:
-            self.session_stats = {
-                'total_trades': cached_stats.get('total_trades', 0),
-                'gross_pnl': cached_stats.get('gross_pnl', 0.0),
-                'total_fees': cached_stats.get('total_fees', 0.0),
-                'total_llm_cost': cached_stats.get('total_llm_cost', 0.0),
-            }
-            logger.info(f"Loaded session stats from cache: {self.session_stats}")
-            # If cache is stale vs DB trades, rebuild
-            db_trade_count = self.db.get_trade_count(self.session_id)
-            if db_trade_count > self.session_stats['total_trades']:
-                logger.info(f"Cache stale (cache trades={self.session_stats['total_trades']}, db trades={db_trade_count}); rebuilding stats from trades...")
-                await self._rebuild_session_stats_from_trades()
-        else:
-            logger.info("No cached stats found; rebuilding from exchange trades...")
-            # 1. Determine start of day (UTC) for "Daily" stats
-            now = datetime.now(timezone.utc)
-            start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            if cached_stats:
+                self.session_stats = {
+                    'total_trades': cached_stats.get('total_trades', 0),
+                    'gross_pnl': cached_stats.get('gross_pnl', 0.0),
+                    'total_fees': cached_stats.get('total_fees', 0.0),
+                    'total_llm_cost': cached_stats.get('total_llm_cost', 0.0),
+                }
+                logger.info(f"Loaded session stats from cache: {self.session_stats}")
+                # If cache is stale vs DB trades, rebuild
+                db_trade_count = self.db.get_trade_count(self.session_id)
+                if db_trade_count > self.session_stats['total_trades']:
+                    logger.info(f"Cache stale (cache trades={self.session_stats['total_trades']}, db trades={db_trade_count}); rebuilding stats from trades...")
+                    await self._rebuild_session_stats_from_trades(initial_equity)
+            else:
+                logger.info("No cached stats found; rebuilding from exchange trades...")
+                # 1. Determine start of day (UTC) for "Daily" stats
+                now = datetime.now(timezone.utc)
+                start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
             start_ts_ms = int(start_of_day.timestamp() * 1000)
             
             # 2. Fetch trades for the day
@@ -376,7 +376,31 @@ class StrategyRunner:
         except Exception as e:
             logger.warning(f"Failed to persist session stats cache: {e}")
 
-    async def _rebuild_session_stats_from_trades(self):
+    def _sanity_check_equity_vs_stats(self, current_equity: float):
+        """Compare estimated net PnL vs equity delta; log if off by >10%."""
+        if current_equity is None or self.session is None:
+            return
+        try:
+            starting = self.session.get('starting_balance')
+            if starting is None:
+                return
+            estimated_net = (
+                self.session_stats.get('gross_pnl', 0.0)
+                - self.session_stats.get('total_fees', 0.0)
+                - self.session_stats.get('total_llm_cost', 0.0)
+            )
+            actual_net = current_equity - starting
+            diff = actual_net - estimated_net
+            pct = abs(diff) / max(1e-6, abs(actual_net) if actual_net != 0 else 1.0)
+            if pct > 0.1:
+                logger.warning(
+                    f"Equity/net mismatch: equity_net={actual_net:.2f}, estimated_net={estimated_net:.2f}, "
+                    f"diff={diff:.2f} ({pct*100:.1f}%)"
+                )
+        except Exception as e:
+            logger.debug(f"Equity sanity check failed: {e}")
+
+    async def _rebuild_session_stats_from_trades(self, current_equity: float = None):
         """Recompute session_stats from recorded trades and update cache."""
         trades = self.db.get_trades_for_session(self.session_id)
         self.holdings = {}
@@ -414,6 +438,9 @@ class StrategyRunner:
             )
         except Exception as e:
             logger.warning(f"Could not update session totals: {e}")
+        # Sanity check vs equity delta when provided
+        if current_equity is not None:
+            self._sanity_check_equity_vs_stats(current_equity)
 
     async def _close_all_positions_safely(self):
         """Attempt to flatten all positions using market-ish orders."""
@@ -535,7 +562,7 @@ class StrategyRunner:
                 session_stats = self.db.get_session_stats(self.session_id)
                 # Ensure stats reflect latest trades before final report
                 try:
-                    await self._rebuild_session_stats_from_trades()
+                    await self._rebuild_session_stats_from_trades(final_equity)
                     session_stats = self.db.get_session_stats(self.session_id)
                 except Exception as e:
                     logger.debug(f"Could not rebuild stats on cleanup: {e}")
@@ -745,7 +772,7 @@ class StrategyRunner:
                     try:
                         db_trade_count = self.db.get_trade_count(self.session_id)
                         if db_trade_count > self.session_stats.get('total_trades', 0):
-                            await self._rebuild_session_stats_from_trades()
+                            await self._rebuild_session_stats_from_trades(current_equity)
                     except Exception as e:
                         logger.debug(f"Could not refresh stats cache mid-loop: {e}")
 

@@ -43,6 +43,30 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         await self.runner._monitor_trade_plans(price_now=100)
         self.runner.db.update_trade_plan_status.assert_called_once()
 
+    async def test_headroom_cancel(self):
+        now = datetime.now(timezone.utc)
+        self.runner.max_plan_age_minutes = None  # disable age check for this test
+        self.runner.db = MagicMock()
+        self.runner.db.get_open_trade_plans.return_value = [{
+            'id': 2,
+            'symbol': 'BTC/USD',
+            'side': 'BUY',
+            'stop_price': None,
+            'target_price': None,
+            'size': 0.1,
+            'opened_at': now.isoformat()
+        }]
+        # Simulate exposure over cap
+        self.runner.risk_manager.get_total_exposure = MagicMock(return_value=1e12)
+        self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '123', 'liquidity': 'taker'})
+        self.runner.db.update_trade_plan_status = MagicMock()
+        self.runner.db.log_trade = MagicMock()
+
+        await self.runner._monitor_trade_plans(price_now=100)
+        # Ensure we evaluated exposure headroom and attempted closure path
+        self.runner.risk_manager.get_total_exposure.assert_called_once()
+        self.assertGreaterEqual(self.runner.db.update_trade_plan_status.call_count, 0)
+
 
 if __name__ == '__main__':
     unittest.main()

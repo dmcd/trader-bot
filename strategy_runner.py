@@ -128,6 +128,15 @@ class StrategyRunner:
                 should_close = False
                 reason = None
 
+                # Cancel if exposure headroom exhausted
+                try:
+                    exposure_now = self.risk_manager.get_total_exposure()
+                    if exposure_now >= MAX_TOTAL_EXPOSURE * 0.98:
+                        should_close = True
+                        reason = "Cancelled plan: exposure headroom exhausted"
+                except Exception:
+                    pass
+
                 opened_at = plan.get('opened_at')
                 if opened_at and self.max_plan_age_minutes:
                     try:

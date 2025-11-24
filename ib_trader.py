@@ -225,6 +225,11 @@ class IBTrader(BaseTrader):
             logger.error(f"Error cancelling IB order {order_id}: {e}")
             return False
 
+    async def get_my_trades_async(self, symbol: str, since: int = None, limit: int = None):
+        """Stub to keep strategy runner happy until IB trade history is wired up."""
+        logger.warning("get_my_trades_async not implemented for IBTrader")
+        return []
+
     async def get_trades_from_timestamp(self, symbol: str, timestamp: int) -> list:
         """Stub for interface compatibility."""
         logger.warning("get_trades_from_timestamp not implemented for IBTrader")

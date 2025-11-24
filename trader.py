@@ -43,3 +43,18 @@ class BaseTrader(ABC):
     async def cancel_open_order_async(self, order_id):
         """Cancel a single open order by ID."""
         raise NotImplementedError
+
+    @abstractmethod
+    async def get_my_trades_async(self, symbol: str, since: int = None, limit: int = None):
+        """Fetch recent trades."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_trades_from_timestamp(self, symbol: str, timestamp: int) -> list:
+        """Fetch trades since a timestamp (ms)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def fetch_ohlcv(self, symbol: str, timeframe: str = '1m', limit: int = 100) -> list:
+        """Fetch historical candles."""
+        raise NotImplementedError

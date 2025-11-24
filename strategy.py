@@ -250,6 +250,8 @@ class LLMStrategy(BaseStrategy):
                 quantity = decision.get('quantity', 0)
                 reason = decision.get('reason')
                 order_id = decision.get('order_id')
+                stop_price = decision.get('stop_price')
+                target_price = decision.get('target_price')
 
                 if action in ['BUY', 'SELL'] and quantity > 0:
                     # Update state if we are signaling a trade
@@ -274,7 +276,11 @@ class LLMStrategy(BaseStrategy):
                     # For now, we'll leave state update to the caller or handle it optimistically?
                     # The original code checked `can_trade` in the loop.
                     
-                    return StrategySignal(action, symbol, quantity, reason)
+                    signal = StrategySignal(action, symbol, quantity, reason)
+                    # Carry stop/target forward to runner via attributes
+                    signal.stop_price = stop_price
+                    signal.target_price = target_price
+                    return signal
                 elif action == 'CANCEL' and order_id:
                     return StrategySignal('CANCEL', symbol or '', 0, reason or 'Cancel open order', order_id=order_id)
                 elif action == 'HOLD':

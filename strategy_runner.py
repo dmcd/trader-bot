@@ -84,6 +84,7 @@ class StrategyRunner:
         # Trade syncing state
         self.order_reasons = {}  # order_id -> reason
         self.processed_trade_ids = set()
+        self._open_trade_plans = {}  # plan_id -> dict
 
     def _apply_order_value_buffer(self, quantity: float, price: float):
         """Trim quantity so the notional sits under the order cap minus buffer."""
@@ -96,6 +97,65 @@ class StrategyRunner:
                 f"to stay under ${MAX_ORDER_VALUE - ORDER_VALUE_BUFFER:.2f} cap"
             )
         return adjusted_qty
+
+    async def _monitor_trade_plans(self, price_now: float):
+        """
+        Monitor open trade plans for stop/target hits and enforce max age flattening.
+        Currently supports single-symbol trading; uses latest price passed in.
+        """
+        if not self.session_id:
+            return
+        try:
+            open_plans = self.db.get_open_trade_plans(self.session_id)
+            now_iso = datetime.now(timezone.utc).isoformat()
+            for plan in open_plans:
+                plan_id = plan['id']
+                side = plan['side'].upper()
+                stop = plan.get('stop_price')
+                target = plan.get('target_price')
+                size = plan.get('size') or 0.0
+                if not price_now or size <= 0:
+                    continue
+
+                should_close = False
+                reason = None
+                if side == 'BUY':
+                    if stop and price_now <= stop:
+                        should_close = True
+                        reason = f"Stop hit at ${price_now:,.2f}"
+                    elif target and price_now >= target:
+                        should_close = True
+                        reason = f"Target hit at ${price_now:,.2f}"
+                else:  # SELL plan (short)
+                    if stop and price_now >= stop:
+                        should_close = True
+                        reason = f"Stop hit at ${price_now:,.2f}"
+                    elif target and price_now <= target:
+                        should_close = True
+                        reason = f"Target hit at ${price_now:,.2f}"
+
+                if should_close:
+                    try:
+                        action = 'SELL' if side == 'BUY' else 'BUY'
+                        bot_actions_logger.info(f"🏁 Closing plan {plan_id}: {reason}")
+                        order_result = await self.bot.place_order_async(plan['symbol'], action, size, prefer_maker=False)
+                        fee = self.cost_tracker.calculate_trade_fee(plan['symbol'], size, price_now, action)
+                        realized = self._update_holdings_and_realized(plan['symbol'], action, size, price_now, fee)
+                        self.db.log_trade(
+                            self.session_id,
+                            plan['symbol'],
+                            action,
+                            size,
+                            price_now,
+                            fee,
+                            reason,
+                            liquidity=order_result.get('liquidity') if order_result else 'taker',
+                            realized_pnl=realized,
+                        )
+                        self._apply_fill_to_session_stats(order_result.get('order_id') if order_result else None, fee, realized)
+                        self.db.update_trade_plan_status(plan_id, status='closed', closed_at=now_iso, reason=reason)
+                    except Exception as e:
+                        logger.error(f"Failed to close plan {plan_id}: {e}")
 
     async def initialize(self):
         """Connects and initializes the bot."""
@@ -381,6 +441,7 @@ class StrategyRunner:
                 self._apply_fill_to_session_stats(order_id, fee, realized_pnl)
                 self.processed_trade_ids.add(trade_id)
                 bot_actions_logger.info(f"✅ Synced trade: {side} {quantity} {symbol} @ ${price:,.2f} (Fee: ${fee:.4f})")
+                # Mark any trade plan closed if target/stop hit (handled in monitor)
                 
         except Exception as e:
             logger.error(f"Error syncing trades: {e}")
@@ -512,6 +573,7 @@ class StrategyRunner:
                     
                     data = await self.bot.get_market_data_async(symbol)
                     market_data[symbol] = data
+                    price_now = data.get('price') if data else None
 
                     # Refresh live positions each loop for accurate exposure snapshots
                     try:
@@ -569,6 +631,12 @@ class StrategyRunner:
                         current_exposure = self.risk_manager.get_total_exposure(price_overrides=price_overrides)
                     except Exception as e:
                         logger.warning(f"Could not build positions for exposure: {e}")
+
+                    # 2.8 Monitor trade plans for stops/targets and max age
+                    try:
+                        await self._monitor_trade_plans(price_now)
+                    except Exception as e:
+                        logger.warning(f"Trade plan monitor error: {e}")
 
                     # Kill switch check
                     if self._kill_switch:
@@ -639,10 +707,10 @@ class StrategyRunner:
                                 logger.error(f"Cancel order error: {e}")
                             continue
 
-                        elif action in ['BUY', 'SELL'] and quantity > 0:
-                            # Get price for risk checks and execution
-                            md = market_data.get(symbol)
-                            price = md.get('price') if md else (data['price'] if data else 0)
+                    elif action in ['BUY', 'SELL'] and quantity > 0:
+                        # Get price for risk checks and execution
+                        md = market_data.get(symbol)
+                        price = md.get('price') if md else (data['price'] if data else 0)
                             
                             if not price:
                                 logger.warning("Skipped trade: missing price data")
@@ -668,6 +736,9 @@ class StrategyRunner:
                                 # Calculate fee before execution (estimate)
                                 estimated_fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, action)
                                 liquidity = "maker_intent"
+                                # Capture stop/target if provided by strategy
+                                stop_price = getattr(signal, 'stop_price', None)
+                                target_price = getattr(signal, 'target_price', None)
                                 
                                 bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (est. fee: ${estimated_fee:.4f})")
                                 
@@ -706,6 +777,30 @@ class StrategyRunner:
                                         self.db.log_estimated_fee(self.session_id, order_result['order_id'], estimated_fee, symbol, action)
                                     except Exception as e:
                                         logger.debug(f"Could not log estimated fee: {e}")
+
+                                # Record trade plan so we can monitor stops/targets (only for new BUY/SELL)
+                                if action in ['BUY', 'SELL'] and stop_price or target_price:
+                                    try:
+                                        plan_id = self.db.create_trade_plan(
+                                            self.session_id,
+                                            symbol,
+                                            action,
+                                            price,
+                                            stop_price,
+                                            target_price,
+                                            quantity,
+                                            reason
+                                        )
+                                        self._open_trade_plans[plan_id] = {
+                                            'symbol': symbol,
+                                            'side': action,
+                                            'stop_price': stop_price,
+                                            'target_price': target_price,
+                                            'size': quantity
+                                        }
+                                        bot_actions_logger.info(f"📝 Plan #{plan_id}: stop={stop_price}, target={target_price}")
+                                    except Exception as e:
+                                        logger.debug(f"Could not create trade plan: {e}")
                                     
                                 # Snapshot open orders if any remain
                                 try:

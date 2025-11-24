@@ -514,6 +514,60 @@ class TradingDatabase:
             self.conn.close()
             logger.info("Database connection closed")
 
+    # Trade plans for stops/targets
+    def ensure_trade_plans_table(self):
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS trade_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                stop_price REAL,
+                target_price REAL,
+                size REAL NOT NULL,
+                status TEXT DEFAULT 'open',
+                opened_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                closed_at TEXT,
+                reason TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        """)
+        self.conn.commit()
+
+    def create_trade_plan(self, session_id: int, symbol: str, side: str, entry_price: float, stop_price: float, target_price: float, size: float, reason: str = "") -> int:
+        self.ensure_trade_plans_table()
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO trade_plans (session_id, symbol, side, entry_price, stop_price, target_price, size, reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, symbol, side, entry_price, stop_price, target_price, size, reason))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def update_trade_plan_status(self, plan_id: int, status: str, closed_at: str = None, reason: str = None):
+        self.ensure_trade_plans_table()
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE trade_plans
+            SET status = ?,
+                closed_at = COALESCE(?, closed_at),
+                reason = COALESCE(?, reason)
+            WHERE id = ?
+        """, (status, closed_at, reason, plan_id))
+        self.conn.commit()
+
+    def get_open_trade_plans(self, session_id: int) -> List[Dict[str, Any]]:
+        self.ensure_trade_plans_table()
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM trade_plans
+            WHERE session_id = ? AND status = 'open'
+            ORDER BY opened_at DESC
+        """, (session_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
     # Session stats cache helpers
     def get_session_stats_cache(self, session_id: int) -> Optional[Dict[str, Any]]:
         """Return persisted session stats aggregates if present."""

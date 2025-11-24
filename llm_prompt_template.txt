@@ -21,6 +21,8 @@ Return ONLY a JSON object with the following format:
     "symbol": "<symbol from available symbols>",
     "quantity": <number>,
     "reason": "<short explanation>",
-    "order_id": "<order id to cancel when action=CANCEL>"
+    "order_id": "<order id to cancel when action=CANCEL>",
+    "stop_price": <number|null>,
+    "target_price": <number|null>
 }}
 {prompt_context_block}{rules_block}{mode_note}{rejection_note}

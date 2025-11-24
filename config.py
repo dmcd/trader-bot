@@ -42,7 +42,7 @@ GEMINI_SANDBOX_SECRET = os.getenv('GEMINI_SANDBOX_SECRET', '') # Sandbox Secret
 
 # Exchange Selection
 # Options: 'IB' or 'GEMINI'
-ACTIVE_EXCHANGE = os.getenv('ACTIVE_EXCHANGE', 'IB').upper()
+ACTIVE_EXCHANGE = os.getenv('ACTIVE_EXCHANGE', 'GEMINI').upper()
 
 # Exchange Fees
 GEMINI_MAKER_FEE = float(os.getenv('GEMINI_MAKER_FEE', '0.0020'))  # 0.20%

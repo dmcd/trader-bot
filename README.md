@@ -47,7 +47,6 @@ MAX_DAILY_LOSS_PERCENT=3.0
 MAX_ORDER_VALUE=500.0
 ORDER_VALUE_BUFFER=1.0        # trim sizes to stay just under the cap (helps avoid rejections)
 MAX_TOTAL_EXPOSURE=1000.0
-SIZE_TIER=MODERATE            # CONSERVATIVE | MODERATE | AGGRESSIVE
 
 # Loop cadence & safety
 LOOP_INTERVAL_SECONDS=300
@@ -58,7 +57,7 @@ PRIORITY_LOOKBACK_MIN=5
 BREAK_GLASS_COOLDOWN_MIN=60
 BREAK_GLASS_SIZE_FACTOR=0.6
 ```
-See `config.py` for every configurable option (fee overrides, tier caps, etc.).
+See `config.py` for every configurable option (fee overrides, sizing caps, etc.).
 
 ## Running
 - **Quick start (loop + dashboard)**: `chmod +x run.sh && ./run.sh`

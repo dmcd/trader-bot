@@ -22,9 +22,6 @@ from config import (
     LOOP_INTERVAL_SECONDS,
     MIN_TRADE_INTERVAL_SECONDS,
     FEE_RATIO_COOLDOWN,
-    SIZE_TIER,
-    ORDER_SIZE_BY_TIER,
-    DAILY_LOSS_PCT_BY_TIER,
     MAX_TOTAL_EXPOSURE,
     ORDER_VALUE_BUFFER,
     PRIORITY_MOVE_PCT,
@@ -68,7 +65,6 @@ class StrategyRunner:
         self.sandbox_seed_symbols = {'USD', 'BTC/USD', 'BTC', 'ETH/USD', 'LTC/USD', 'ZEC/USD', 'BCH/USD'}
         # Simple in-memory holdings tracker for realized PnL
         self.holdings = {}  # symbol -> {'qty': float, 'avg_cost': float}
-        self.size_tier = SIZE_TIER if SIZE_TIER in ORDER_SIZE_BY_TIER else 'MODERATE'
         self._last_reconnect = 0.0
         self._kill_switch = False
         
@@ -76,8 +72,7 @@ class StrategyRunner:
         self.strategy = LLMStrategy(
             self.db, 
             self.technical_analysis, 
-            self.cost_tracker, 
-            self.size_tier,
+            self.cost_tracker,
             open_orders_provider=self.bot.get_open_orders_async,
         )
         
@@ -143,11 +138,7 @@ class StrategyRunner:
         except Exception as e:
             logger.warning(f"Could not rebuild holdings: {e}")
 
-        # Apply tier-specific daily loss %
-        tier_loss_pct = DAILY_LOSS_PCT_BY_TIER.get(self.size_tier, MAX_DAILY_LOSS_PERCENT)
-        if tier_loss_pct != MAX_DAILY_LOSS_PERCENT:
-            logger.info(f"Overriding daily loss percent to {tier_loss_pct}% for tier {self.size_tier}")
-        self.daily_loss_pct = tier_loss_pct
+        self.daily_loss_pct = MAX_DAILY_LOSS_PERCENT
 
         self.risk_manager.update_equity(initial_equity)
         bot_actions_logger.info(f"💰 Starting Equity: ${initial_equity:,.2f}")

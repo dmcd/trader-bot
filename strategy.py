@@ -10,7 +10,6 @@ from config import (
     MAX_ORDER_VALUE,
     MAX_DAILY_LOSS_PERCENT,
     MAX_DAILY_LOSS,
-    ORDER_SIZE_BY_TIER,
     MAX_TOTAL_EXPOSURE,
     MIN_TRADE_INTERVAL_SECONDS,
     FEE_RATIO_COOLDOWN,
@@ -50,9 +49,8 @@ class BaseStrategy(ABC):
         pass
 
 class LLMStrategy(BaseStrategy):
-    def __init__(self, db, technical_analysis, cost_tracker, size_tier='MODERATE', open_orders_provider=None):
+    def __init__(self, db, technical_analysis, cost_tracker, open_orders_provider=None):
         super().__init__(db, technical_analysis, cost_tracker)
-        self.size_tier = size_tier
         self.model = genai.GenerativeModel('gemini-2.5-flash')
         if GEMINI_API_KEY:
             genai.configure(api_key=GEMINI_API_KEY)
@@ -184,7 +182,7 @@ class LLMStrategy(BaseStrategy):
         priority_flag = "true" if priority and allow_break_glass else "false"
         spacing_flag = "clear" if can_trade else f"cooldown {MIN_TRADE_INTERVAL_SECONDS - (now_ts - self.last_trade_ts):.0f}s"
         
-        order_cap_value = min(MAX_ORDER_VALUE, ORDER_SIZE_BY_TIER.get(self.size_tier, MAX_ORDER_VALUE))
+        order_cap_value = MAX_ORDER_VALUE
         exposure_cap = MAX_TOTAL_EXPOSURE
         exposure_now = current_exposure if current_exposure is not None else 0.0
         equity_now = current_equity if current_equity is not None else 0.0

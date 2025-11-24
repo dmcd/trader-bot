@@ -56,20 +56,18 @@ class TestRiskManager(unittest.TestCase):
         result = self.rm.check_trade_allowed("BHP", "BUY", 1, 10.0)
         self.assertFalse(result.allowed)
 
-    def test_exposure_limit_and_sandbox_adjustment(self):
-        # Existing BTC sandbox seed should be ignored in PAPER mode when avg_price missing
-        self.rm.is_sandbox = True
+    def test_exposure_limit_with_existing_positions(self):
+        # Existing exposure counts fully toward cap
         self.rm.update_positions({
-            "BTC/USD": {"quantity": 1000.0, "current_price": 30000.0},  # discounted to 0 exposure
-            "ETH/USD": {"quantity": 90.0, "current_price": 90.0},  # $900 exposure using trade price override
+            "ETH/USD": {"quantity": 80.0, "current_price": 10.0},  # $800 exposure
         })
 
         # Small order under exposure cap passes
-        result = self.rm.check_trade_allowed("ETH/USD", "BUY", 1, price=10.0)  # +$10 => $910
+        result = self.rm.check_trade_allowed("ETH/USD", "BUY", 10, price=10.0)  # +$100 => $900
         self.assertTrue(result.allowed)
 
         # Order that pushes exposure above cap while still under order cap
-        qty_to_exceed = 15  # 15 * $10 = $150; exposure becomes 900 + 150 = 1050 > cap
+        qty_to_exceed = 25  # 25 * $10 = $250; exposure becomes 800 + 250 = 1050 > cap
         result = self.rm.check_trade_allowed("ETH/USD", "BUY", qty_to_exceed, price=10.0)
         self.assertFalse(result.allowed)
         self.assertIn("Total exposure", result.reason)
@@ -99,12 +97,10 @@ class TestRiskManager(unittest.TestCase):
         self.assertEqual(kept_qty, 1.0)
         self.assertEqual(kept_overage, 0.0)
 
-    def test_get_total_exposure_respects_overrides_and_sandbox(self):
-        self.rm.is_sandbox = True
-        self.rm.update_positions({"BTC/USD": {"quantity": 1005.0, "current_price": 30000.0}})
+    def test_get_total_exposure_respects_overrides(self):
+        self.rm.update_positions({"BTC/USD": {"quantity": 5.0, "current_price": 30000.0}})
 
         exposure = self.rm.get_total_exposure(price_overrides={"BTC/USD": 20000.0})
-        # Sandbox should discount 1000 BTC, leaving 5 * 20000
         self.assertAlmostEqual(100000.0, exposure)
 
 

@@ -2,20 +2,15 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Any
 from database import TradingDatabase
-from config import TRADING_MODE
 
 logger = logging.getLogger(__name__)
 
 class TradingContext:
     """Provides rich trading context for LLM decision-making."""
-    
-    # Sandbox starting balances (must match GeminiTrader constants)
-    SANDBOX_STARTING_BTC = 1000.0
-    
+
     def __init__(self, db: TradingDatabase, session_id: int):
         self.db = db
         self.session_id = session_id
-        self.is_sandbox = (TRADING_MODE == 'PAPER')
     
     def get_context_summary(self, symbol: str, open_orders: List[Dict[str, Any]] = None) -> str:
         """Generate comprehensive context summary for LLM."""
@@ -116,14 +111,8 @@ Current Positions:
                 cost_basis = qty * avg_price
                 current_value = qty * current_price
                 unrealized_pnl = current_value - cost_basis
-                
-                # Adjust BTC quantity for exposure calculation in sandbox mode
-                display_qty = qty
-                exposure_qty = qty
-                if self.is_sandbox and sym in ['BTC/USD', 'BTC']:
-                    exposure_qty = max(0.0, qty - self.SANDBOX_STARTING_BTC)
-                
-                total_exposure += exposure_qty * current_price
+
+                total_exposure += qty * current_price
                 
                 context += f"  - {sym}: {qty:.6f} units @ ${avg_price:,.2f} avg (Current: ${current_price:,.2f}, Unrealized PnL: ${unrealized_pnl:+,.2f})\n"
             

@@ -6,7 +6,6 @@ from config import (
     MAX_POSITIONS,
     MAX_TOTAL_EXPOSURE,
     ORDER_VALUE_BUFFER,
-    TRADING_MODE,
     MIN_TRADE_SIZE,
 )
 
@@ -20,15 +19,11 @@ class RiskCheckResult:
     reason: str = ""
 
 class RiskManager:
-    # Sandbox starting balances (must match GeminiTrader constants)
-    SANDBOX_STARTING_BTC = 1000.0
-    
     def __init__(self, bot=None):
         self.bot = bot # Optional, mostly for position checks if needed
         self.daily_loss = 0.0
         self.start_of_day_equity = None
         self.positions = {} # Symbol -> Quantity
-        self.is_sandbox = (TRADING_MODE == 'PAPER')
 
     def seed_start_of_day(self, start_equity: float):
         """Persist start-of-day equity so restarts keep loss limits consistent."""
@@ -123,7 +118,7 @@ class RiskManager:
         return RiskCheckResult(True, "Trade allowed")
 
     def get_total_exposure(self, price_overrides: dict = None) -> float:
-        """Return total notional exposure using marked prices (sandbox-adjusted)."""
+        """Return total notional exposure using marked prices."""
         exposure = 0.0
         for sym, data in self.positions.items():
             qty = data.get('quantity', 0) or 0.0
@@ -133,9 +128,6 @@ class RiskManager:
                 curr_price = price_overrides[sym]
             else:
                 curr_price = data.get('current_price', 0) or 0.0
-
-            if self.is_sandbox and sym in ['BTC/USD', 'BTC']:
-                qty = max(0.0, qty - self.SANDBOX_STARTING_BTC)
 
             exposure += qty * curr_price
 

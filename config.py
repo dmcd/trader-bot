@@ -17,7 +17,7 @@ MAX_DAILY_LOSS_PERCENT = float(os.getenv('MAX_DAILY_LOSS_PERCENT', '3.0')) # per
 MAX_ORDER_VALUE = float(os.getenv('MAX_ORDER_VALUE', '500.0')) # currency depends on venue
 ORDER_VALUE_BUFFER = float(os.getenv('ORDER_VALUE_BUFFER', '1.0')) # trim near-cap trades by this buffer
 MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '3'))
-MAX_TOTAL_EXPOSURE = float(os.getenv('MAX_TOTAL_EXPOSURE', '1000.0')) # Total portfolio exposure limit
+MAX_TOTAL_EXPOSURE = float(os.getenv('MAX_TOTAL_EXPOSURE', '10000.0')) # Total portfolio exposure limit
 MIN_TRADE_SIZE = float(os.getenv('MIN_TRADE_SIZE', '200.0')) # Minimum trade size in currency
 
 # Cadence & spacing

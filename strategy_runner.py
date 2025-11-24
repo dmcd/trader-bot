@@ -62,7 +62,6 @@ class StrategyRunner:
         self.session_id = None
         self.context = None
         self.session = None
-        self.sandbox_seed_symbols = {'USD', 'BTC/USD', 'BTC', 'ETH/USD', 'LTC/USD', 'ZEC/USD', 'BCH/USD'}
         # Simple in-memory holdings tracker for realized PnL
         self.holdings = {}  # symbol -> {'qty': float, 'avg_cost': float}
         self._last_reconnect = 0.0
@@ -125,7 +124,7 @@ class StrategyRunner:
         else:
             # Prefer latest broker equity snapshot if available
             latest_equity = self.db.get_latest_equity(self.session_id)
-            start_equity = latest_equity if latest_equity is not None else initial_pnl
+            start_equity = latest_equity if latest_equity is not None else initial_equity
         self.risk_manager.seed_start_of_day(start_equity)
         
         # Reconcile with exchange state
@@ -151,7 +150,6 @@ class StrategyRunner:
         except Exception as e:
             logger.error(f"Reconciliation failed: unable to fetch exchange state: {e}")
             return
-        exchange_positions = self._sanitize_positions(exchange_positions)
 
         stored_positions = self.db.get_positions(self.session_id)
         stored_orders = self.db.get_open_orders(self.session_id)
@@ -201,24 +199,6 @@ class StrategyRunner:
             logger.info(f"Open orders on exchange: {len(exchange_orders)}")
         else:
             logger.info("No open orders on exchange.")
-
-    def _sanitize_positions(self, positions):
-        """Remove sandbox seed balances so exposure/risk isn't polluted."""
-        if not positions or TRADING_MODE != 'PAPER':
-            return positions
-
-        cleaned = []
-        for pos in positions:
-            sym = pos.get('symbol')
-            qty = pos.get('quantity', 0) or 0
-            avg_price = pos.get('avg_price')
-
-            # Heuristic: ignore known sandbox seeds that come with null avg_price
-            if sym in self.sandbox_seed_symbols and avg_price in (None, 0) and qty >= 100:
-                logger.debug(f"Dropping sandbox seed position {sym} qty {qty}")
-                continue
-            cleaned.append(pos)
-        return cleaned
 
     def _update_holdings_and_realized(self, symbol: str, action: str, quantity: float, price: float, fee: float) -> float:
         """
@@ -382,14 +362,14 @@ class StrategyRunner:
         # Save final session statistics
         if self.session_id:
             try:
-                # Get final PnL
-                final_pnl = await self.bot.get_pnl_async()
+                # Get final equity snapshot
+                final_equity = await self.bot.get_equity_async()
                 
                 # Get session stats
                 session_stats = self.db.get_session_stats(self.session_id)
                 
                 # Calculate net PnL
-                gross_pnl = final_pnl - session_stats['starting_balance']
+                gross_pnl = final_equity - session_stats['starting_balance']
                 net_pnl = self.cost_tracker.calculate_net_pnl(
                     gross_pnl,
                     session_stats['total_fees'],
@@ -397,7 +377,7 @@ class StrategyRunner:
                 )
                 
                 # Update database
-                self.db.update_session_balance(self.session_id, final_pnl, net_pnl)
+                self.db.update_session_balance(self.session_id, final_equity, net_pnl)
                 
                 # Log summary to bot.log
                 bot_actions_logger.info("=" * 50)
@@ -503,10 +483,9 @@ class StrategyRunner:
                     data = await self.bot.get_market_data_async(symbol)
                     market_data[symbol] = data
 
-                    # Refresh live positions each loop for accurate exposure (sanitized for sandbox seeds)
+                    # Refresh live positions each loop for accurate exposure snapshots
                     try:
                         live_positions = await self.bot.get_positions_async()
-                        live_positions = self._sanitize_positions(live_positions)
                         self.db.replace_positions(self.session_id, live_positions)
                     except Exception as e:
                         logger.warning(f"Could not refresh positions: {e}")

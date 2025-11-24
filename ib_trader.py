@@ -135,12 +135,12 @@ class IBTrader(BaseTrader):
             'remaining': remaining,
             'avg_fill_price': avg_price
         }
-    
-    async def get_pnl_async(self):
-        """Calculates the current PnL (Net Liquidation Value)."""
+
+    async def get_equity_async(self):
+        """Return IB Net Liquidation Value as total equity."""
         if not self.connected:
             return 0.0
-            
+
         summary = self.ib.accountValues()
         net_liq = None
         cash = None
@@ -156,10 +156,6 @@ class IBTrader(BaseTrader):
                 except ValueError:
                     cash = None
         return net_liq if net_liq is not None else (cash or 0.0)
-
-    async def get_equity_async(self):
-        """IB NetLiq already reflects total equity."""
-        return await self.get_pnl_async()
 
     def run(self):
         """Keeps the script running to maintain connection (for standalone testing)."""

@@ -132,6 +132,22 @@ class TestRiskManager(unittest.TestCase):
         result_ok = self.rm.check_trade_allowed("ETH/USD", "BUY", 10, price=20.0)  # $200 -> exposure 600 < 1000
         self.assertTrue(result_ok.allowed)
 
+    def test_pending_orders_by_symbol_tracks_count_and_notional(self):
+        pending = [
+            {"symbol": "BTC/USD", "side": "buy", "price": 30000.0, "amount": 0.1, "remaining": 0.05},
+            {"symbol": "BTC/USD", "side": "buy", "price": 31000.0, "amount": 0.2, "remaining": 0.1},
+            {"symbol": "ETH/USD", "side": "buy", "price": 2000.0, "amount": 1.0, "remaining": 1.0},
+            {"symbol": "ETH/USD", "side": "sell", "price": 2100.0, "amount": 0.5, "remaining": 0.5},  # ignored
+        ]
+        self.rm.update_pending_orders(pending)
+        sym = self.rm.pending_orders_by_symbol
+        self.assertIn("BTC/USD", sym)
+        self.assertEqual(sym["BTC/USD"]["count"], 2)
+        self.assertGreater(sym["BTC/USD"]["buy"], 0)
+        self.assertIn("ETH/USD", sym)
+        self.assertEqual(sym["ETH/USD"]["count"], 1)  # sell ignored
+        self.assertAlmostEqual(sym["ETH/USD"]["buy"], 2000.0)  # 1 * 2000
+
 
 if __name__ == "__main__":
     unittest.main()

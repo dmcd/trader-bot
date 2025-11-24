@@ -221,24 +221,24 @@ class StrategyRunner:
         # Initialize session stats with persistence awareness
         logger.info("Initializing session stats...")
         cached_stats = self.db.get_session_stats_cache(self.session_id)
-            if cached_stats:
-                self.session_stats = {
-                    'total_trades': cached_stats.get('total_trades', 0),
-                    'gross_pnl': cached_stats.get('gross_pnl', 0.0),
-                    'total_fees': cached_stats.get('total_fees', 0.0),
-                    'total_llm_cost': cached_stats.get('total_llm_cost', 0.0),
-                }
-                logger.info(f"Loaded session stats from cache: {self.session_stats}")
-                # If cache is stale vs DB trades, rebuild
-                db_trade_count = self.db.get_trade_count(self.session_id)
-                if db_trade_count > self.session_stats['total_trades']:
-                    logger.info(f"Cache stale (cache trades={self.session_stats['total_trades']}, db trades={db_trade_count}); rebuilding stats from trades...")
-                    await self._rebuild_session_stats_from_trades(initial_equity)
-            else:
-                logger.info("No cached stats found; rebuilding from exchange trades...")
-                # 1. Determine start of day (UTC) for "Daily" stats
-                now = datetime.now(timezone.utc)
-                start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if cached_stats:
+            self.session_stats = {
+                'total_trades': cached_stats.get('total_trades', 0),
+                'gross_pnl': cached_stats.get('gross_pnl', 0.0),
+                'total_fees': cached_stats.get('total_fees', 0.0),
+                'total_llm_cost': cached_stats.get('total_llm_cost', 0.0),
+            }
+            logger.info(f"Loaded session stats from cache: {self.session_stats}")
+            # If cache is stale vs DB trades, rebuild
+            db_trade_count = self.db.get_trade_count(self.session_id)
+            if db_trade_count > self.session_stats['total_trades']:
+                logger.info(f"Cache stale (cache trades={self.session_stats['total_trades']}, db trades={db_trade_count}); rebuilding stats from trades...")
+                await self._rebuild_session_stats_from_trades(initial_equity)
+        else:
+            logger.info("No cached stats found; rebuilding from exchange trades...")
+            # 1. Determine start of day (UTC) for "Daily" stats
+            now = datetime.now(timezone.utc)
+            start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
             start_ts_ms = int(start_of_day.timestamp() * 1000)
             
             # 2. Fetch trades for the day
@@ -847,9 +847,9 @@ class StrategyRunner:
                         # Guardrails: clip size to sit under the max order cap minus buffer
                         quantity = self._apply_order_value_buffer(quantity, price)
 
-                            if quantity <= 0:
-                                logger.warning("Skipped trade: buffered quantity became non-positive")
-                                continue
+                        if quantity <= 0:
+                            logger.warning("Skipped trade: buffered quantity became non-positive")
+                            continue
 
                         # Format quantity appropriately (show more decimals for small amounts) after buffering
                         if quantity < 1:
@@ -868,55 +868,55 @@ class StrategyRunner:
                             stop_price = getattr(signal, 'stop_price', None)
                             target_price = getattr(signal, 'target_price', None)
 
-                        # Enforce per-symbol plan cap before placing order
-                        try:
-                            open_plan_count = self.db.count_open_trade_plans_for_symbol(self.session_id, symbol)
-                            if open_plan_count >= self.max_plans_per_symbol:
-                                bot_actions_logger.info(f"⛔ Trade Blocked: plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
-                                self.strategy.on_trade_rejected("Plan cap reached")
-                                continue
-                        except Exception as e:
-                            logger.debug(f"Could not check plan cap: {e}")
+                            # Enforce per-symbol plan cap before placing order
+                            try:
+                                open_plan_count = self.db.count_open_trade_plans_for_symbol(self.session_id, symbol)
+                                if open_plan_count >= self.max_plans_per_symbol:
+                                    bot_actions_logger.info(f"⛔ Trade Blocked: plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
+                                    self.strategy.on_trade_rejected("Plan cap reached")
+                                    continue
+                            except Exception as e:
+                                logger.debug(f"Could not check plan cap: {e}")
 
-                        # Enforce pending exposure headroom including open orders
-                        try:
-                            pending_exposure = self.risk_manager.pending_orders_by_symbol.get(symbol, {}).get('buy', 0.0) if action == 'BUY' else 0.0
-                            pending_count = self.risk_manager.pending_orders_by_symbol.get(symbol, {}).get('count', 0) if action == 'BUY' else 0
-                            if action == 'BUY' and pending_count >= self.max_plans_per_symbol:
-                                bot_actions_logger.info(f"⛔ Trade Blocked: open order count reached for {symbol} ({pending_count}/{self.max_plans_per_symbol})")
-                                self.strategy.on_trade_rejected("Open order cap reached")
-                                continue
-                            order_value = quantity * price
-                            if action == 'BUY' and (pending_exposure + order_value + current_exposure) > MAX_TOTAL_EXPOSURE:
-                                bot_actions_logger.info("⛔ Trade Blocked: pending/open exposure would exceed cap")
-                                self.strategy.on_trade_rejected("Pending exposure over cap")
-                                continue
-                        except Exception as e:
-                            logger.debug(f"Pending exposure check failed: {e}")
+                            # Enforce pending exposure headroom including open orders
+                            try:
+                                pending_exposure = self.risk_manager.pending_orders_by_symbol.get(symbol, {}).get('buy', 0.0) if action == 'BUY' else 0.0
+                                pending_count = self.risk_manager.pending_orders_by_symbol.get(symbol, {}).get('count', 0) if action == 'BUY' else 0
+                                if action == 'BUY' and pending_count >= self.max_plans_per_symbol:
+                                    bot_actions_logger.info(f"⛔ Trade Blocked: open order count reached for {symbol} ({pending_count}/{self.max_plans_per_symbol})")
+                                    self.strategy.on_trade_rejected("Open order cap reached")
+                                    continue
+                                order_value = quantity * price
+                                if action == 'BUY' and (pending_exposure + order_value + current_exposure) > MAX_TOTAL_EXPOSURE:
+                                    bot_actions_logger.info("⛔ Trade Blocked: pending/open exposure would exceed cap")
+                                    self.strategy.on_trade_rejected("Pending exposure over cap")
+                                    continue
+                            except Exception as e:
+                                logger.debug(f"Pending exposure check failed: {e}")
 
                             bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (est. fee: ${estimated_fee:.4f})")
                             
                             # Execute trade
                             retries = 0
                             order_result = None
-                                while retries < 2 and order_result is None:
-                                    try:
-                                        order_result = await asyncio.wait_for(
-                                            self.bot.place_order_async(symbol, action, quantity, prefer_maker=True),
-                                            timeout=15
-                                        )
-                                    except asyncio.TimeoutError:
-                                        logger.error("Order placement timed out")
-                                        await self._reconnect_bot()
-                                        retries += 1
-                                    except Exception as e:
-                                        logger.error(f"Order placement error: {e}")
-                                        await self._reconnect_bot()
-                                        retries += 1
+                            while retries < 2 and order_result is None:
+                                try:
+                                    order_result = await asyncio.wait_for(
+                                        self.bot.place_order_async(symbol, action, quantity, prefer_maker=True),
+                                        timeout=15
+                                    )
+                                except asyncio.TimeoutError:
+                                    logger.error("Order placement timed out")
+                                    await self._reconnect_bot()
+                                    retries += 1
+                                except Exception as e:
+                                    logger.error(f"Order placement error: {e}")
+                                    await self._reconnect_bot()
+                                    retries += 1
 
-                                # Capture reported liquidity if present
-                                if order_result and isinstance(order_result, dict) and order_result.get('liquidity'):
-                                    liquidity = order_result.get('liquidity')
+                            # Capture reported liquidity if present
+                            if order_result and isinstance(order_result, dict) and order_result.get('liquidity'):
+                                liquidity = order_result.get('liquidity')
                                 
                                 # Notify strategy of execution
                                 now_ts = asyncio.get_event_loop().time()
@@ -939,22 +939,22 @@ class StrategyRunner:
                                         self.session_id,
                                         symbol,
                                         action,
-                                            price,
-                                            stop_price,
-                                            target_price,
-                                            quantity,
-                                            reason
-                                        )
-                                        self._open_trade_plans[plan_id] = {
-                                            'symbol': symbol,
-                                            'side': action,
-                                            'stop_price': stop_price,
-                                            'target_price': target_price,
-                                            'size': quantity
-                                        }
-                                        bot_actions_logger.info(f"📝 Plan #{plan_id}: stop={stop_price}, target={target_price}")
-                                    except Exception as e:
-                                        logger.debug(f"Could not create trade plan: {e}")
+                                        price,
+                                        stop_price,
+                                        target_price,
+                                        quantity,
+                                        reason
+                                    )
+                                    self._open_trade_plans[plan_id] = {
+                                        'symbol': symbol,
+                                        'side': action,
+                                        'stop_price': stop_price,
+                                        'target_price': target_price,
+                                        'size': quantity
+                                    }
+                                    bot_actions_logger.info(f"📝 Plan #{plan_id}: stop={stop_price}, target={target_price}")
+                                except Exception as e:
+                                    logger.debug(f"Could not create trade plan: {e}")
                                     
                                 # Snapshot open orders if any remain
                                 try:

@@ -76,13 +76,16 @@ class LLMStrategy(BaseStrategy):
         self._decision_schema = {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["BUY", "SELL", "HOLD", "CANCEL"]},
+                "action": {"type": "string", "enum": ["BUY", "SELL", "HOLD", "CANCEL", "UPDATE_PLAN", "PARTIAL_CLOSE"]},
                 "symbol": {"type": "string"},
                 "quantity": {"type": "number", "minimum": 0},
                 "reason": {"type": "string"},
                 "order_id": {"type": ["string", "number", "null"]},
                 "stop_price": {"type": ["number", "null"], "minimum": 0},
-                "target_price": {"type": ["number", "null"], "minimum": 0}
+                "target_price": {"type": ["number", "null"], "minimum": 0},
+                "plan_id": {"type": ["integer", "null"]},
+                "size_factor": {"type": ["number", "null"], "minimum": 0},
+                "close_fraction": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
             },
             "required": ["action", "symbol", "quantity", "reason"],
             "additionalProperties": False
@@ -494,6 +497,21 @@ class LLMStrategy(BaseStrategy):
                     return signal
                 elif action == 'CANCEL' and order_id:
                     return StrategySignal('CANCEL', symbol or '', 0, reason or 'Cancel open order', order_id=order_id, trace_id=trace_id, regime_flags=regime_flags)
+                elif action == 'UPDATE_PLAN':
+                    plan_id = decision.get('plan_id')
+                    sig = StrategySignal('UPDATE_PLAN', symbol, 0, reason or 'Update plan', order_id=plan_id, trace_id=trace_id, regime_flags=regime_flags)
+                    sig.plan_id = plan_id
+                    sig.size_factor = decision.get('size_factor')
+                    sig.stop_price = stop_price
+                    sig.target_price = target_price
+                    return sig
+                elif action == 'PARTIAL_CLOSE':
+                    plan_id = decision.get('plan_id')
+                    close_fraction = decision.get('close_fraction', 0.0)
+                    sig = StrategySignal('PARTIAL_CLOSE', symbol, 0, reason or 'Partial close', order_id=plan_id, trace_id=trace_id, regime_flags=regime_flags)
+                    sig.plan_id = plan_id
+                    sig.close_fraction = close_fraction
+                    return sig
                 elif action == 'HOLD':
                     return StrategySignal('HOLD', symbol, 0, reason, trace_id=trace_id, regime_flags=regime_flags)
             except json.JSONDecodeError:

@@ -149,6 +149,110 @@ class StrategyRunner:
         move_pct = abs(latest_price - decision_price) / decision_price * 100
         return move_pct <= MAX_SLIPPAGE_PCT, move_pct
 
+    async def _handle_update_plan(self, signal, telemetry_record, trace_id):
+        """Handle UPDATE_PLAN intents."""
+        plan_id = getattr(signal, 'plan_id', None)
+        stop_price = getattr(signal, 'stop_price', None)
+        target_price = getattr(signal, 'target_price', None)
+        reason = getattr(signal, 'reason', '') or 'Update plan'
+        if not plan_id:
+            telemetry_record["status"] = "update_plan_missing_id"
+            self._emit_telemetry(telemetry_record)
+            return
+        try:
+            self.db.update_trade_plan_prices(plan_id, stop_price=stop_price, target_price=target_price, reason=reason)
+            telemetry_record["status"] = "plan_updated"
+            self._log_execution_trace(trace_id, telemetry_record)
+            self._emit_telemetry(telemetry_record)
+            bot_actions_logger.info(f"✏️ Plan {plan_id} updated: stop={stop_price}, target={target_price}")
+        except Exception as e:
+            telemetry_record["status"] = "plan_update_error"
+            telemetry_record["error"] = str(e)
+            self._log_execution_trace(trace_id, telemetry_record)
+            self._emit_telemetry(telemetry_record)
+            logger.error(f"Plan update failed: {e}")
+
+    async def _handle_partial_close(self, signal, telemetry_record, trace_id, market_data, current_exposure):
+        """Handle PARTIAL_CLOSE intents."""
+        plan_id = getattr(signal, 'plan_id', None)
+        close_fraction = getattr(signal, 'close_fraction', None) or 0.0
+        symbol = signal.symbol
+        if not plan_id or close_fraction <= 0 or close_fraction > 1:
+            telemetry_record["status"] = "partial_close_invalid"
+            telemetry_record["error"] = "invalid plan_id or fraction"
+            self._emit_telemetry(telemetry_record)
+            return
+        try:
+            open_plans = self.db.get_open_trade_plans(self.session_id)
+            plan = next((p for p in open_plans if p.get('id') == plan_id), None)
+        except Exception:
+            plan = None
+        if not plan:
+            telemetry_record["status"] = "partial_close_missing_plan"
+            self._emit_telemetry(telemetry_record)
+            return
+        plan_side = plan.get('side', 'BUY').upper()
+        plan_size = plan.get('size', 0.0) or 0.0
+        close_qty = max(0.0, plan_size * close_fraction)
+        if close_qty <= 0:
+            telemetry_record["status"] = "partial_close_zero_qty"
+            self._emit_telemetry(telemetry_record)
+            return
+        flatten_action = 'SELL' if plan_side == 'BUY' else 'BUY'
+        price = market_data.get(symbol, {}).get('price') if market_data else None
+        qty_for_risk = self._apply_order_value_buffer(close_qty, price or 0)
+        risk_result = self.risk_manager.check_trade_allowed(symbol, flatten_action, qty_for_risk, price or 0)
+        if not risk_result.allowed:
+            telemetry_record["status"] = "partial_close_blocked"
+            telemetry_record["risk_reason"] = risk_result.reason
+            self.strategy.on_trade_rejected(risk_result.reason)
+            self._emit_telemetry(telemetry_record)
+            return
+        bot_actions_logger.info(f"🔻 Partial close {close_fraction*100:.0f}% of plan {plan_id}: {flatten_action} {qty_for_risk} {symbol}")
+        try:
+            order_result = await self.bot.place_order_async(symbol, flatten_action, qty_for_risk, prefer_maker=True)
+            fee = self.cost_tracker.calculate_trade_fee(symbol, qty_for_risk, price or 0, flatten_action)
+            realized = self._update_holdings_and_realized(symbol, flatten_action, qty_for_risk, price or 0, fee)
+            self.db.log_trade(
+                self.session_id,
+                symbol,
+                flatten_action,
+                qty_for_risk,
+                price or 0,
+                fee,
+                f"Partial close plan {plan_id} ({close_fraction*100:.0f}%)",
+                liquidity=order_result.get('liquidity') if order_result else 'taker',
+                realized_pnl=realized,
+            )
+            self._apply_fill_to_session_stats(order_result.get('order_id') if order_result else None, fee, realized)
+            telemetry_record["status"] = "partial_close_executed"
+            telemetry_record["order_result"] = order_result
+        except Exception as e:
+            telemetry_record["status"] = "partial_close_error"
+            telemetry_record["error"] = str(e)
+            logger.error(f"Partial close failed: {e}")
+        self._log_execution_trace(trace_id, telemetry_record)
+        self._emit_telemetry(telemetry_record)
+
+    async def _handle_signal(self, signal, market_data, open_orders, current_equity, current_exposure):
+        """Helper for tests to exercise action handling paths."""
+        # This wraps a subset of the loop logic for specific actions.
+        # Build a minimal telemetry record
+        telemetry_record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "session_id": self.session_id,
+            "symbol": signal.symbol,
+            "action": signal.action,
+            "plan_id": getattr(signal, 'plan_id', None),
+            "close_fraction": getattr(signal, 'close_fraction', None),
+        }
+        trace_id = getattr(signal, 'trace_id', None)
+        if signal.action == 'UPDATE_PLAN':
+            await self._handle_update_plan(signal, telemetry_record, trace_id)
+        elif signal.action == 'PARTIAL_CLOSE':
+            await self._handle_partial_close(signal, telemetry_record, trace_id, market_data, current_exposure)
+
+
     async def _capture_ohlcv(self, symbol: str):
         """Fetch multi-timeframe OHLCV for the active symbol and persist."""
         if not hasattr(self.bot, "fetch_ohlcv"):
@@ -973,6 +1077,9 @@ class StrategyRunner:
                             "reason": reason,
                             "stop_price": stop_price,
                             "target_price": target_price,
+                            "plan_id": getattr(signal, 'plan_id', None),
+                            "size_factor": getattr(signal, 'size_factor', None),
+                            "close_fraction": getattr(signal, 'close_fraction', None),
                             "equity": current_equity,
                             "exposure": current_exposure,
                             "open_orders": len(open_orders) if open_orders is not None else None,
@@ -1019,6 +1126,14 @@ class StrategyRunner:
                                 telemetry_record["error"] = str(e)
                             self._log_execution_trace(trace_id, telemetry_record)
                             self._emit_telemetry(telemetry_record)
+                            continue
+
+                        elif action == 'UPDATE_PLAN':
+                            await self._handle_update_plan(signal, telemetry_record, trace_id)
+                            continue
+
+                        elif action == 'PARTIAL_CLOSE':
+                            await self._handle_partial_close(signal, telemetry_record, trace_id, market_data, current_exposure)
                             continue
 
                         elif action in ['BUY', 'SELL'] and quantity > 0:

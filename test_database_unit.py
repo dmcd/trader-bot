@@ -41,6 +41,17 @@ class TestTradingDatabase(unittest.TestCase):
         stored = self.db.get_start_of_day_equity(self.session_id)
         self.assertEqual(stored, baseline)
 
+    def test_log_and_fetch_ohlcv(self):
+        bars = [
+            {"timestamp": 1_000_000, "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 10},
+            {"timestamp": 1_000_060, "open": 1.5, "high": 2.5, "low": 1.0, "close": 2.0, "volume": 20},
+        ]
+        self.db.log_ohlcv_batch(self.session_id, "BTC/USD", "1m", bars)
+        fetched = self.db.get_recent_ohlcv(self.session_id, "BTC/USD", "1m", limit=5)
+        self.assertEqual(len(fetched), 2)
+        # Should return most recent first
+        self.assertAlmostEqual(fetched[0]["close"], 2.0)
+
 
 if __name__ == "__main__":
     unittest.main()

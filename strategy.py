@@ -25,6 +25,7 @@ from config import (
     TRADING_MODE,
     MIN_TRADE_SIZE,
     MAX_POSITIONS,
+    MAX_SPREAD_PCT,
 )
 
 logger = logging.getLogger(__name__)

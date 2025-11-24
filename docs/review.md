@@ -18,7 +18,7 @@
 - Broader next steps for a profitable path: build a small backtest/simulation harness using your DB schema and ccxt historical data to sanity-check any strategy change before live. Separate deterministic signal layer from the LLM: let the LLM propose narratives/edge cases, but gate entries by tested rules (vol-adjusted breakout/pullback logic) and fixed stop/target logic. Expand IB support: implement trade history/ohlcv for IB so reconciliation and context work on stocks, and remove the `BTC/USD` hardcode.
 
 ## Task Checklist
-- [ ] Add multi-timeframe OHLCV storage (1m/5m/1h/4h/daily) and derived features (ATR, vol, VWAP, spread/imbalance) into DB and prompt.
+- [x] Add multi-timeframe OHLCV storage (1m/5m/1h/4h/daily) and derived features (ATR, vol, VWAP, spread/imbalance) into DB and prompt.
 - [ ] Implement regime detection (volatility buckets, trend strength, liquidity filters) and feed flags to the strategy.
 - [ ] Add cross-asset/macro context fetchers (BTC.D/ETHBTC/SPY/QQQ/VIX/DXY or venue-appropriate) with caching.
 - [ ] Build LLM tool layer for controlled data fetches; keep execution authority in Python.

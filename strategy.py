@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 import asyncio
 import json
+import math
+from statistics import pstdev
 import re
 from pathlib import Path
 import google.generativeai as genai
@@ -171,6 +173,44 @@ class LLMStrategy(BaseStrategy):
         except Exception as e:
             logger.warning(f"Fee ratio check failed: {e}")
             return False
+
+    def _build_timeframe_summary(self, session_id: int, symbol: str) -> str:
+        """Summarize multi-timeframe OHLCV into a concise string for the prompt."""
+        if not hasattr(self.db, "get_recent_ohlcv"):
+            return ""
+        timeframes = ['1m', '5m', '1h', '1d']
+        lines = []
+        for tf in timeframes:
+            try:
+                bars = self.db.get_recent_ohlcv(session_id, symbol, tf, limit=50)
+                if not bars or len(bars) < 2:
+                    continue
+                closes = [b.get('close') for b in bars if b.get('close') is not None]
+                vols = [b.get('volume') for b in bars if b.get('volume') is not None]
+                if not closes:
+                    continue
+                last = closes[0]
+                first = closes[-1]
+                change_pct = ((last - first) / first * 100) if first else None
+                returns = []
+                for i in range(1, len(closes)):
+                    if closes[i]:
+                        returns.append((closes[i-1] - closes[i]) / closes[i])
+                vol_pct = (pstdev(returns) * 100) if len(returns) >= 2 else None
+                avg_vol = sum(vols) / len(vols) if vols else None
+                parts = [f"{tf}: last ${last:,.2f}"]
+                if change_pct is not None:
+                    parts.append(f"Δ{change_pct:+.2f}%")
+                if vol_pct is not None:
+                    parts.append(f"vol {vol_pct:.2f}%σ")
+                if avg_vol is not None:
+                    parts.append(f"avg vol {avg_vol:.2f}")
+                lines.append(", ".join(parts))
+            except Exception as e:
+                logger.debug(f"TF summary failed for {symbol} {tf}: {e}")
+        if not lines:
+            return ""
+        return "Multi-timeframe: " + " | ".join(lines)
 
     async def generate_signal(self, session_id: int, market_data: Dict[str, Any], current_equity: float, current_exposure: float, context: Any = None, session_stats: Dict[str, Any] = None) -> Optional[StrategySignal]:
         if not market_data:
@@ -452,6 +492,12 @@ class LLMStrategy(BaseStrategy):
         context_summary = ""
         indicator_summary = ""
         
+        timeframe_summary = ""
+        try:
+            timeframe_summary = self._build_timeframe_summary(session_id, symbol)
+        except Exception as e:
+            logger.debug(f"Timeframe summary error: {e}")
+
         if symbol and trading_context:
             try:
                 context_summary = trading_context.get_context_summary(symbol, open_orders=open_orders)
@@ -515,6 +561,7 @@ class LLMStrategy(BaseStrategy):
             ),
             context_block=f"{context_summary}\n\n" if context_summary else "",
             indicator_block=f"{indicator_summary}\n\n" if indicator_summary else "",
+            multi_tf_block=f"{timeframe_summary}\n\n" if timeframe_summary else "",
             prompt_context_block=prompt_context_block,
             rules_block=f"{rules_block}\n" if rules_block else "",
             mode_note=mode_note,

@@ -22,7 +22,7 @@ Risk Constraints:
 Available Symbols: {available_symbols}
 
 {quantity_guidance}
-{context_block}{indicator_block}Decide on an action for one of the available symbols.
+{context_block}{indicator_block}{multi_tf_block}Decide on an action for one of the available symbols.
 You may also cancel an open order if it is stale or unsafe.
 REMINDERS:
 - Obey cooldown: if cooldown active AND priority=false → return HOLD.

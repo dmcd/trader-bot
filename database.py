@@ -129,6 +129,27 @@ class TradingDatabase:
         except Exception as e:
             logger.warning(f"Could not ensure market_data schema: {e}")
 
+        # OHLCV bars table (multi-timeframe)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ohlcv_bars (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                volume REAL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        """)
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_session_symbol_tf_ts ON ohlcv_bars (session_id, symbol, timeframe, timestamp DESC)")
+        except Exception as e:
+            logger.debug(f"Could not create ohlcv index: {e}")
+
         # Equity snapshots table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS equity_snapshots (
@@ -450,6 +471,55 @@ class TradingDatabase:
             VALUES (?, ?, ?)
         """, (session_id, datetime.now().isoformat(), equity))
         self.conn.commit()
+
+    def log_ohlcv_batch(self, session_id: int, symbol: str, timeframe: str, bars: List[Dict[str, Any]]):
+        """Persist a batch of OHLCV bars for a symbol/timeframe."""
+        if not bars:
+            return
+        cursor = self.conn.cursor()
+        records = []
+        for bar in bars:
+            try:
+                ts = bar.get('timestamp')
+                if ts is None:
+                    continue
+                # Normalize timestamp to ISO if milliseconds provided
+                if isinstance(ts, (int, float)):
+                    ts_iso = datetime.fromtimestamp(ts / 1000).isoformat()
+                else:
+                    ts_iso = str(ts)
+                records.append((
+                    session_id,
+                    ts_iso,
+                    symbol,
+                    timeframe,
+                    bar.get('open'),
+                    bar.get('high'),
+                    bar.get('low'),
+                    bar.get('close') if bar.get('close') is not None else bar.get('price'),
+                    bar.get('volume'),
+                ))
+            except Exception:
+                continue
+        if not records:
+            return
+        cursor.executemany("""
+            INSERT INTO ohlcv_bars (session_id, timestamp, symbol, timeframe, open, high, low, close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, records)
+        self.conn.commit()
+
+    def get_recent_ohlcv(self, session_id: int, symbol: str, timeframe: str, limit: int = 200) -> List[Dict[str, Any]]:
+        """Fetch recent OHLCV bars for a symbol/timeframe."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT timestamp, open, high, low, close, volume
+            FROM ohlcv_bars
+            WHERE session_id = ? AND symbol = ? AND timeframe = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (session_id, symbol, timeframe, limit))
+        return [dict(row) for row in cursor.fetchall()]
 
     def get_latest_equity(self, session_id: int) -> Optional[float]:
         """Get most recent equity snapshot."""

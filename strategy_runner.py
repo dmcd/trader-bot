@@ -111,6 +111,18 @@ class StrategyRunner:
         except Exception as e:
             logger.debug(f"Could not update LLM trace {trace_id}: {e}")
 
+    async def _capture_ohlcv(self, symbol: str):
+        """Fetch multi-timeframe OHLCV for the active symbol and persist."""
+        if not hasattr(self.bot, "fetch_ohlcv"):
+            return
+        timeframes = ['1m', '5m', '1h', '1d']
+        for tf in timeframes:
+            try:
+                bars = await self.bot.fetch_ohlcv(symbol, timeframe=tf, limit=50)
+                self.db.log_ohlcv_batch(self.session_id, symbol, tf, bars)
+            except Exception as e:
+                logger.debug(f"OHLCV fetch failed for {symbol} {tf}: {e}")
+
     def _apply_order_value_buffer(self, quantity: float, price: float):
         """Trim quantity so the notional sits under the order cap minus buffer."""
         adjusted_qty, overage = self.risk_manager.apply_order_value_buffer(quantity, price)
@@ -772,6 +784,12 @@ class StrategyRunner:
                             )
                         except Exception as e:
                             logger.warning(f"Could not log market data: {e}")
+
+                    # Capture multi-timeframe OHLCV for richer context
+                    try:
+                        await self._capture_ohlcv(symbol)
+                    except Exception as e:
+                        logger.debug(f"Could not capture OHLCV: {e}")
 
                     # Microstructure filter: skip trading when spread/liquidity are poor
                     if data and not self._liquidity_ok(data):

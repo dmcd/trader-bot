@@ -141,6 +141,13 @@ class StrategyRunner:
         rr = reward / risk
         return rr >= MIN_RR
 
+    def _slippage_within_limit(self, decision_price: float, latest_price: float):
+        """Return (allowed, move_pct) based on max slippage config."""
+        if not decision_price or not latest_price:
+            return True, 0.0
+        move_pct = abs(latest_price - decision_price) / decision_price * 100
+        return move_pct <= MAX_SLIPPAGE_PCT, move_pct
+
     async def _capture_ohlcv(self, symbol: str):
         """Fetch multi-timeframe OHLCV for the active symbol and persist."""
         if not hasattr(self.bot, "fetch_ohlcv"):
@@ -1086,17 +1093,15 @@ class StrategyRunner:
                             except Exception:
                                 latest_price = price
 
-                            if price and latest_price:
-                                move_pct = abs(latest_price - price) / price * 100
-                                if move_pct > MAX_SLIPPAGE_PCT:
-                                    bot_actions_logger.info(f"⏸️ Skipping trade: slippage {move_pct:.2f}% > {MAX_SLIPPAGE_PCT:.2f}%")
-                                    telemetry_record["status"] = "slippage_blocked"
-                                    telemetry_record["slippage_pct"] = move_pct
-                                    self._log_execution_trace(trace_id, telemetry_record)
-                                    self._emit_telemetry(telemetry_record)
-                                    self.strategy.on_trade_rejected("Slippage over limit")
-                                    continue
-                                telemetry_record["slippage_pct"] = move_pct
+                            ok_slip, move_pct = self._slippage_within_limit(price, latest_price)
+                            telemetry_record["slippage_pct"] = move_pct
+                            if not ok_slip:
+                                bot_actions_logger.info(f"⏸️ Skipping trade: slippage {move_pct:.2f}% > {MAX_SLIPPAGE_PCT:.2f}%")
+                                telemetry_record["status"] = "slippage_blocked"
+                                self._log_execution_trace(trace_id, telemetry_record)
+                                self._emit_telemetry(telemetry_record)
+                                self.strategy.on_trade_rejected("Slippage over limit")
+                                continue
 
                             bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (est. fee: ${estimated_fee:.4f})")
 

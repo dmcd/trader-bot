@@ -519,6 +519,13 @@ class StrategyRunner:
                         self.db.replace_positions(self.session_id, live_positions)
                     except Exception as e:
                         logger.warning(f"Could not refresh positions: {e}")
+                    # Refresh open orders for exposure headroom and context
+                    open_orders = []
+                    try:
+                        open_orders = await self.bot.get_open_orders_async()
+                        self.db.replace_open_orders(self.session_id, open_orders)
+                    except Exception as e:
+                        logger.warning(f"Could not refresh open orders: {e}")
 
                     # Build latest positions with marks for exposure checks
                     positions_dict = {}
@@ -544,6 +551,20 @@ class StrategyRunner:
                                     'current_price': current_price
                                 }
                         self.risk_manager.update_positions(positions_dict)
+
+                        # Build price lookup for open orders (fallback to recent tick)
+                        price_lookup = {}
+                        if data and data.get('price'):
+                            price_lookup[symbol] = data['price']
+                        for ord in open_orders or []:
+                            sym = ord.get('symbol')
+                            if sym and sym in price_lookup:
+                                continue
+                            latest = self.db.get_recent_market_data(self.session_id, sym, limit=1) if sym else None
+                            if latest and latest[0].get('price'):
+                                price_lookup[sym] = latest[0]['price']
+                        self.risk_manager.update_pending_orders(open_orders, price_lookup=price_lookup)
+
                         price_overrides = {symbol: data['price']} if data and data.get('price') else None
                         current_exposure = self.risk_manager.get_total_exposure(price_overrides=price_overrides)
                     except Exception as e:

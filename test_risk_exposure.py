@@ -103,6 +103,35 @@ class TestRiskManager(unittest.TestCase):
         exposure = self.rm.get_total_exposure(price_overrides={"BTC/USD": 20000.0})
         self.assertAlmostEqual(100000.0, exposure)
 
+    def test_pending_buy_orders_reduce_headroom(self):
+        # Existing exposure $400
+        self.rm.update_positions({"ETH/USD": {"quantity": 20.0, "current_price": 20.0}})
+        # Pending buy adds $300 notional
+        pending = [{
+            "symbol": "ETH/USD",
+            "side": "buy",
+            "price": 30.0,
+            "amount": 10.0,
+            "remaining": 10.0
+        }]
+        self.rm.update_pending_orders(pending)
+
+        # Exposure now $400 + $300 = $700; limit = 1000 so a $400 order should fail
+        result = self.rm.check_trade_allowed("ETH/USD", "BUY", 20, price=20.0)  # $400
+        self.assertFalse(result.allowed)
+        self.assertIn("Total exposure", result.reason)
+
+        # Pending sells should not block headroom
+        pending_sell = [{
+            "symbol": "ETH/USD",
+            "side": "sell",
+            "price": 30.0,
+            "amount": 10.0
+        }]
+        self.rm.update_pending_orders(pending_sell)
+        result_ok = self.rm.check_trade_allowed("ETH/USD", "BUY", 10, price=20.0)  # $200 -> exposure 600 < 1000
+        self.assertTrue(result_ok.allowed)
+
 
 if __name__ == "__main__":
     unittest.main()

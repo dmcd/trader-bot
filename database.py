@@ -167,6 +167,19 @@ class TradingDatabase:
                 executed_at TEXT
             )
         """)
+
+        # Session stats cache to persist in-memory aggregates across restarts
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_stats_cache (
+                session_id INTEGER PRIMARY KEY,
+                total_trades INTEGER DEFAULT 0,
+                total_fees REAL DEFAULT 0.0,
+                gross_pnl REAL DEFAULT 0.0,
+                total_llm_cost REAL DEFAULT 0.0,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        """)
         
         self.conn.commit()
         logger.info(f"Database initialized at {self.db_path}")
@@ -476,3 +489,36 @@ class TradingDatabase:
         if self.conn:
             self.conn.close()
             logger.info("Database connection closed")
+
+    # Session stats cache helpers
+    def get_session_stats_cache(self, session_id: int) -> Optional[Dict[str, Any]]:
+        """Return persisted session stats aggregates if present."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT session_id, total_trades, total_fees, gross_pnl, total_llm_cost
+            FROM session_stats_cache
+            WHERE session_id = ?
+        """, (session_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def set_session_stats_cache(self, session_id: int, stats: Dict[str, Any]):
+        """Upsert session stats aggregates for restart resilience."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO session_stats_cache (session_id, total_trades, total_fees, gross_pnl, total_llm_cost, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(session_id) DO UPDATE SET
+                total_trades=excluded.total_trades,
+                total_fees=excluded.total_fees,
+                gross_pnl=excluded.gross_pnl,
+                total_llm_cost=excluded.total_llm_cost,
+                updated_at=CURRENT_TIMESTAMP
+        """, (
+            session_id,
+            stats.get('total_trades', 0) or 0,
+            stats.get('total_fees', 0.0) or 0.0,
+            stats.get('gross_pnl', 0.0) or 0.0,
+            stats.get('total_llm_cost', 0.0) or 0.0,
+        ))
+        self.conn.commit()

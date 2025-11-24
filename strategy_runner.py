@@ -67,6 +67,8 @@ class StrategyRunner:
         self.session = None
         # Simple in-memory holdings tracker for realized PnL
         self.holdings = {}  # symbol -> {'qty': float, 'avg_cost': float}
+        # Track estimated fees per order so we can reconcile with actual fills
+        self._estimated_fees = {}  # order_id -> estimated fee
         self._last_reconnect = 0.0
         self._kill_switch = False
         
@@ -125,49 +127,59 @@ class StrategyRunner:
         # Initialize trading context
         self.context = TradingContext(self.db, self.session_id)
         
-        # Initialize session stats from Exchange Data (Source of Truth)
-        logger.info("Initializing session stats from exchange data...")
-        
-        # 1. Determine start of day (UTC) for "Daily" stats
-        now = datetime.now(timezone.utc)
-        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        start_ts_ms = int(start_of_day.timestamp() * 1000)
-        
-        # 2. Fetch trades for the day
-        # Assuming BTC/USD for now as per original code
-        symbol = 'BTC/USD' if ACTIVE_EXCHANGE == 'GEMINI' else 'BHP' 
-        trades = await self.bot.get_trades_from_timestamp(symbol, start_ts_ms)
-        
-        # 3. Rebuild Holdings and Stats
-        self.holdings = {}
-        self.session_stats = {
-            'total_trades': 0,
-            'gross_pnl': 0.0,
-            'total_fees': 0.0,
-            'total_llm_cost': 0.0 # Will fetch from DB
-        }
-        
-        for t in trades:
-             # Rebuild holdings
-             symbol = t['symbol']
-             side = t['side'].upper()
-             quantity = t['amount']
-             price = t['price']
-             fee = t.get('fee', {}).get('cost', 0.0)
-             
-             # Update holdings and calculate realized PnL for this trade
-             realized = self._update_holdings_and_realized(symbol, side, quantity, price, fee)
-             
-             # Update session stats
-             self.session_stats['total_trades'] += 1
-             self.session_stats['total_fees'] += fee
-             self.session_stats['gross_pnl'] += realized
+        # Initialize session stats with persistence awareness
+        logger.info("Initializing session stats...")
+        cached_stats = self.db.get_session_stats_cache(self.session_id)
+        if cached_stats:
+            self.session_stats = {
+                'total_trades': cached_stats.get('total_trades', 0),
+                'gross_pnl': cached_stats.get('gross_pnl', 0.0),
+                'total_fees': cached_stats.get('total_fees', 0.0),
+                'total_llm_cost': cached_stats.get('total_llm_cost', 0.0),
+            }
+            logger.info(f"Loaded session stats from cache: {self.session_stats}")
+        else:
+            logger.info("No cached stats found; rebuilding from exchange trades...")
+            # 1. Determine start of day (UTC) for "Daily" stats
+            now = datetime.now(timezone.utc)
+            start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            start_ts_ms = int(start_of_day.timestamp() * 1000)
+            
+            # 2. Fetch trades for the day
+            # Assuming BTC/USD for now as per original code
+            symbol = 'BTC/USD' if ACTIVE_EXCHANGE == 'GEMINI' else 'BHP' 
+            trades = await self.bot.get_trades_from_timestamp(symbol, start_ts_ms)
+            
+            # 3. Rebuild Holdings and Stats
+            self.holdings = {}
+            self.session_stats = {
+                'total_trades': 0,
+                'gross_pnl': 0.0,
+                'total_fees': 0.0,
+                'total_llm_cost': 0.0 # Will fetch from DB
+            }
+            
+            for t in trades:
+                 # Rebuild holdings
+                 symbol = t['symbol']
+                 side = t['side'].upper()
+                 quantity = t['amount']
+                 price = t['price']
+                 fee = t.get('fee', {}).get('cost', 0.0)
+                 
+                 # Update holdings and calculate realized PnL for this trade
+                 realized = self._update_holdings_and_realized(symbol, side, quantity, price, fee)
+                 
+                 # Update session stats
+                 self.session_stats['total_trades'] += 1
+                 self.session_stats['total_fees'] += fee
+                 self.session_stats['gross_pnl'] += realized
 
-        # Load LLM costs from DB (since exchange doesn't track this)
-        db_stats = self.db.get_session_stats(self.session_id)
-        self.session_stats['total_llm_cost'] = db_stats.get('total_llm_cost', 0.0)
-        
-        logger.info(f"Session Stats Rebuilt: {self.session_stats}")
+            # Load LLM costs from DB (since exchange doesn't track this)
+            db_stats = self.db.get_session_stats(self.session_id)
+            self.session_stats['total_llm_cost'] = db_stats.get('total_llm_cost', 0.0)
+            self.db.set_session_stats_cache(self.session_id, self.session_stats)
+            logger.info(f"Session Stats Rebuilt: {self.session_stats}")
 
         # Seed risk manager with persisted start-of-day equity to survive restarts
         start_equity = None
@@ -241,6 +253,32 @@ class StrategyRunner:
                 t['quantity'],
                 t['price']
             )
+
+    def _apply_fill_to_session_stats(self, order_id: str, actual_fee: float, realized_pnl: float):
+        """
+        Reconcile session stats with an executed trade.
+        If we estimated a fee earlier, we still book the actual fee but drop the estimate marker.
+        """
+        if not self.session_stats:
+            self.session_stats = {
+                'total_trades': 0,
+                'gross_pnl': 0.0,
+                'total_fees': 0.0,
+                'total_llm_cost': 0.0,
+            }
+
+        if order_id:
+            order_key = str(order_id)
+            if order_key in self._estimated_fees:
+                self._estimated_fees.pop(order_key, None)
+        fee_delta = actual_fee
+        self.session_stats['total_trades'] += 1
+        self.session_stats['total_fees'] += fee_delta
+        self.session_stats['gross_pnl'] += realized_pnl
+        try:
+            self.db.set_session_stats_cache(self.session_id, self.session_stats)
+        except Exception as e:
+            logger.warning(f"Failed to persist session stats cache: {e}")
 
     async def _close_all_positions_safely(self):
         """Attempt to flatten all positions using market-ish orders."""
@@ -340,6 +378,7 @@ class StrategyRunner:
                     realized_pnl=realized_pnl,
                     trade_id=trade_id
                 )
+                self._apply_fill_to_session_stats(order_id, fee, realized_pnl)
                 self.processed_trade_ids.add(trade_id)
                 bot_actions_logger.info(f"✅ Synced trade: {side} {quantity} {symbol} @ ${price:,.2f} (Fee: ${fee:.4f})")
                 
@@ -640,13 +679,8 @@ class StrategyRunner:
                                 # Store reason for syncing
                                 if order_result and order_result.get('order_id'):
                                     self.order_reasons[str(order_result['order_id'])] = reason
+                                    self._estimated_fees[str(order_result['order_id'])] = estimated_fee
                                     
-                                # Update session stats locally
-                                self.session_stats['total_trades'] += 1
-                                self.session_stats['total_fees'] += estimated_fee # Use estimate until sync confirms
-                                # Realized PnL is updated in sync_trades_from_exchange or we can estimate here?
-                                # Better to let sync handle accurate PnL from filling.
-                                
                                 # Snapshot open orders if any remain
                                 try:
                                     open_orders = await self.bot.get_open_orders_async()

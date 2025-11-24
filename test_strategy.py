@@ -65,6 +65,7 @@ class TestLLMStrategy(IsolatedAsyncioTestCase):
         self.mock_db.get_session_stats.return_value = {'gross_pnl': 100, 'total_fees': 0}
         self.mock_db.get_recent_market_data.return_value = [{'price': 100}]*50
         self.mock_ta.calculate_indicators.return_value = {'bb_width': 2.0, 'rsi': 50}
+        low_fee_stats = {'gross_pnl': 100, 'total_fees': 10}
         
         # Mock LLM response
         mock_response = MagicMock()
@@ -80,11 +81,26 @@ class TestLLMStrategy(IsolatedAsyncioTestCase):
         with patch.object(self.strategy, '_get_llm_decision', new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = '{"action": "BUY", "symbol": "BTC/USD", "quantity": 0.1, "reason": "Test"}'
             
-            signal = await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000, 0)
+            signal = await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000, 0, session_stats=low_fee_stats)
             
             self.assertIsNotNone(signal)
             self.assertEqual(signal.action, "BUY")
             self.assertEqual(signal.quantity, 0.1)
+
+    @patch('strategy.asyncio.get_event_loop')
+    async def test_generate_signal_blocks_on_fee_ratio(self, mock_loop):
+        mock_loop.return_value.time.return_value = 1000
+        self.strategy.last_trade_ts = 0
+
+        self.mock_db.get_recent_market_data.return_value = [{'price': 100}]*50
+        self.mock_ta.calculate_indicators.return_value = {'bb_width': 2.0, 'rsi': 50}
+
+        # High fee ratio should skip trading
+        high_fee_stats = {'gross_pnl': 100, 'total_fees': 60}
+        with patch.object(self.strategy, '_get_llm_decision', new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = '{"action": "BUY", "symbol": "BTC/USD", "quantity": 0.1, "reason": "Test"}'
+            signal = await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000, 0, session_stats=high_fee_stats)
+            self.assertIsNone(signal)
 
     def test_prompt_template_loaded_and_rendered(self):
         template_body = "TEMPLATE {asset_class} {available_symbols} {prompt_context_block}"

@@ -293,7 +293,7 @@ class LLMStrategy(BaseStrategy):
             f"- Open orders: {open_order_count} ({open_orders_summary})"
         )
 
-        decision_json, trace_id = await self._get_llm_decision(
+        decision_result = await self._get_llm_decision(
             session_id,
             market_data,
             current_equity,
@@ -303,6 +303,14 @@ class LLMStrategy(BaseStrategy):
             headroom=headroom,
             pending_buy_exposure=pending_buy_exposure,
         )
+        trace_id = None
+        decision_json = None
+        if isinstance(decision_result, tuple):
+            # New API returns (decision_json, trace_id)
+            decision_json, trace_id = decision_result
+        else:
+            # Backward compatibility for tests/mocks returning only JSON
+            decision_json = decision_result
         
         if decision_json:
             try:

@@ -288,6 +288,24 @@ class TradingDatabase:
         
         self.conn.commit()
         logger.debug(f"Logged LLM call: {total_tokens} tokens, ${cost:.6f}")
+
+    def get_recent_llm_stats(self, session_id: int, limit: int = 20) -> Dict[str, Any]:
+        """Return summary of recent LLM calls for telemetry."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT decision FROM llm_calls
+            WHERE session_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (session_id, limit))
+        rows = [row['decision'] or '' for row in cursor.fetchall()]
+        stats = {"total": len(rows), "schema_errors": 0, "clamped": 0}
+        for d in rows:
+            if d.startswith("schema_error"):
+                stats["schema_errors"] += 1
+            if "clamped" in d.lower():
+                stats["clamped"] += 1
+        return stats
     
     def log_market_data(self, session_id: int, symbol: str, price: float, 
                        bid: float, ask: float, volume: float = 0.0):

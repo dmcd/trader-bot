@@ -199,6 +199,13 @@ def load_session_stats():
         st.error(f"Error loading session stats: {e}")
         return None, None
 
+def load_llm_stats(session_id):
+    db = TradingDatabase()
+    try:
+        return db.get_recent_llm_stats(session_id)
+    finally:
+        db.close()
+
 def load_open_orders(session_id):
     db = TradingDatabase()
     try:
@@ -432,6 +439,13 @@ with col2:
             )
         else:
             st.info("No open trade plans")
+
+        st.subheader("🧠 LLM Decisions")
+        llm_stats = load_llm_stats(session_id)
+        llm_cols = st.columns(3)
+        llm_cols[0].metric("Total decisions (recent)", llm_stats.get("total", 0))
+        llm_cols[1].metric("Schema errors", llm_stats.get("schema_errors", 0))
+        llm_cols[2].metric("Clamped stops/targets", llm_stats.get("clamped", 0))
 
     st.subheader("📜 Logs")
     logs = load_logs()

@@ -326,7 +326,12 @@ class LLMStrategy(BaseStrategy):
                             target_price = min(max_target, max(target_price, price))  # target at/above price
                         # Telemetry for clamping
                         if decision.get('stop_price') != stop_price or decision.get('target_price') != target_price:
-                            logger.info(f"LLM stops/targets clamped: stop {decision.get('stop_price')} -> {stop_price}, target {decision.get('target_price')} -> {target_price}")
+                            clamp_msg = f"clamped: stop {decision.get('stop_price')} -> {stop_price}, target {decision.get('target_price')} -> {target_price}"
+                            logger.info(f"LLM stops/targets {clamp_msg}")
+                            try:
+                                self.db.log_llm_call(session_id, 0, 0, 0.0, clamp_msg)
+                            except Exception:
+                                pass
 
                     # We don't update last_trade_ts here, we let the runner do it upon execution success? 
                     # Actually better to update it here to prevent double signaling if execution takes time, 

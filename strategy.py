@@ -20,7 +20,8 @@ from config import (
     LOOP_INTERVAL_SECONDS,
     ACTIVE_EXCHANGE,
     TRADING_MODE,
-    MIN_TRADE_SIZE
+    MIN_TRADE_SIZE,
+    MAX_POSITIONS,
 )
 
 logger = logging.getLogger(__name__)
@@ -218,6 +219,19 @@ class LLMStrategy(BaseStrategy):
         exposure_now = current_exposure if current_exposure is not None else 0.0
         equity_now = current_equity if current_equity is not None else 0.0
         headroom = max(0.0, exposure_cap - exposure_now)
+        pending_buy_exposure = 0.0
+        open_order_counts = {}
+        for order in open_orders or []:
+            sym = order.get('symbol')
+            open_order_counts[sym] = open_order_counts.get(sym, 0) + 1
+            if (order.get('side') or '').upper() != 'BUY':
+                continue
+            qty = order.get('remaining')
+            if qty is None:
+                qty = order.get('amount', 0.0)
+            px = order.get('price')
+            if px and qty:
+                pending_buy_exposure += px * qty
         logger.info(
             f"Exposure snapshot: exposure_now=${exposure_now:,.2f}, cap=${exposure_cap:,.2f}, headroom=${headroom:,.2f}, "
             f"open_orders={len(open_orders) if open_orders else 0}, equity=${equity_now:,.2f}"
@@ -244,6 +258,8 @@ class LLMStrategy(BaseStrategy):
             f"- Last trade age: {last_trade_age_str}\n"
             f"- Equity: ${equity_now:,.2f}\n"
             f"- Exposure: ${exposure_now:,.2f} of ${exposure_cap:,.2f} (room ${headroom:,.2f})\n"
+            f"- Pending BUY exposure: ${pending_buy_exposure:,.2f}\n"
+            f"- Max open orders per symbol: {MAX_POSITIONS}\n"
             f"- Order cap: ${order_cap_value:.2f}\n"
             f"- Min trade size: ${MIN_TRADE_SIZE:.2f}\n"
             f"- Open orders: {open_order_count} ({open_orders_summary})"
@@ -423,6 +439,9 @@ class LLMStrategy(BaseStrategy):
             rules_block=f"{rules_block}\n" if rules_block else "",
             mode_note=mode_note,
             rejection_note=rejection_note,
+            exposure_headroom=f"${headroom:,.2f}",
+            pending_exposure_budget=f"${pending_buy_exposure:,.2f}",
+            max_open_orders_per_symbol=MAX_POSITIONS,
         )
             
         try:

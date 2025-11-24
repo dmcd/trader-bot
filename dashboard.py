@@ -4,6 +4,7 @@ import time
 import os
 import subprocess
 from database import TradingDatabase
+from datetime import date
 
 # --- Helper Functions ---
 
@@ -61,7 +62,6 @@ def load_history():
     """Load trade history from the SQLite database for today's session."""
     try:
         db = TradingDatabase()
-        from datetime import date
         today = date.today().isoformat()
         cursor = db.conn.cursor()
         cursor.execute(
@@ -184,7 +184,6 @@ def load_logs():
 def load_session_stats():
     try:
         db = TradingDatabase()
-        from datetime import date
         today = date.today().isoformat()
         cursor = db.conn.cursor()
         cursor.execute("SELECT id FROM sessions WHERE date = ?", (today,))
@@ -199,6 +198,22 @@ def load_session_stats():
     except Exception as e:
         st.error(f"Error loading session stats: {e}")
         return None, None
+
+def load_open_orders(session_id):
+    db = TradingDatabase()
+    try:
+        orders = db.get_open_orders(session_id)
+        return orders
+    finally:
+        db.close()
+
+def load_trade_plans(session_id):
+    db = TradingDatabase()
+    try:
+        plans = db.get_open_trade_plans(session_id)
+        return plans
+    finally:
+        db.close()
 
 # --- Page Config ---
 st.set_page_config(
@@ -265,6 +280,20 @@ with col1:
         symbols = df['symbol'].unique()
         current_prices = get_latest_prices(session_id, symbols)
         realized_pnl, unrealized_pnl, active_positions, df, exposure, trade_spacing = calculate_pnl(df, current_prices)
+        open_orders = load_open_orders(session_id)
+        pending_exposure = 0.0
+        if open_orders:
+            for o in open_orders:
+                side = (o.get('side') or '').upper()
+                if side != 'BUY':
+                    continue
+                px = o.get('price') or current_prices.get(o.get('symbol'), 0) or 0
+                qty = o.get('remaining')
+                if qty is None:
+                    qty = o.get('amount', 0)
+                if px and qty:
+                    pending_exposure += px * qty
+        total_exposure = exposure + pending_exposure
         
         gross_pnl_usd = realized_pnl + unrealized_pnl
         
@@ -307,7 +336,7 @@ with col1:
         spacing_text = f"{avg_spacing:.0f}s avg" if avg_spacing else "n/a"
         spacing_delta = f"{last_spacing:.0f}s last" if last_spacing else None
         s1.metric("Trade Spacing", spacing_text, spacing_delta)
-        s2.metric("Exposure", f"${exposure:,.2f}")
+        s2.metric("Exposure (incl pending)", f"${total_exposure:,.2f}", f"pending ${pending_exposure:,.2f}")
         s3.metric("Positions", len(active_positions))
         try:
             from config import LOOP_INTERVAL_SECONDS
@@ -365,6 +394,45 @@ with col1:
         st.info("No trade history found yet. Start the bot!")
 
 with col2:
+    if session_stats and session_id:
+        st.subheader("📌 Open Orders")
+        open_orders = load_open_orders(session_id)
+        if open_orders:
+            oo_df = pd.DataFrame(open_orders)
+            oo_df = oo_df.rename(columns={"amount": "quantity"})
+            st.dataframe(
+                oo_df[['order_id', 'symbol', 'side', 'price', 'quantity', 'remaining', 'status']],
+                hide_index=True,
+                column_config={
+                    "price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                    "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
+                    "remaining": st.column_config.NumberColumn("Remaining", format="%.4f"),
+                },
+                width="stretch",
+                height=200
+            )
+        else:
+            st.info("No open orders")
+
+        st.subheader("🎯 Trade Plans")
+        plans = load_trade_plans(session_id)
+        if plans:
+            tp_df = pd.DataFrame(plans)
+            st.dataframe(
+                tp_df[['id', 'symbol', 'side', 'size', 'stop_price', 'target_price', 'opened_at']],
+                hide_index=True,
+                column_config={
+                    "size": st.column_config.NumberColumn("Size", format="%.4f"),
+                    "stop_price": st.column_config.NumberColumn("Stop", format="$%.2f"),
+                    "target_price": st.column_config.NumberColumn("Target", format="$%.2f"),
+                    "opened_at": st.column_config.DatetimeColumn("Opened", format="HH:mm:ss"),
+                },
+                width="stretch",
+                height=200
+            )
+        else:
+            st.info("No open trade plans")
+
     st.subheader("📜 Logs")
     logs = load_logs()
     log_text = "".join(logs)

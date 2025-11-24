@@ -156,6 +156,8 @@ class StrategyRunner:
                         self.db.update_trade_plan_status(plan_id, status='closed', closed_at=now_iso, reason=reason)
                     except Exception as e:
                         logger.error(f"Failed to close plan {plan_id}: {e}")
+        except Exception as e:
+            logger.warning(f"Monitor trade plans failed: {e}")
 
     async def initialize(self):
         """Connects and initializes the bot."""
@@ -712,95 +714,95 @@ class StrategyRunner:
                         md = market_data.get(symbol)
                         price = md.get('price') if md else (data['price'] if data else 0)
                             
-                            if not price:
-                                logger.warning("Skipped trade: missing price data")
-                                continue
+                        if not price:
+                            logger.warning("Skipped trade: missing price data")
+                            continue
 
-                            # Guardrails: clip size to sit under the max order cap minus buffer
-                            quantity = self._apply_order_value_buffer(quantity, price)
+                        # Guardrails: clip size to sit under the max order cap minus buffer
+                        quantity = self._apply_order_value_buffer(quantity, price)
 
-                            if quantity <= 0:
-                                logger.warning("Skipped trade: buffered quantity became non-positive")
-                                continue
+                        if quantity <= 0:
+                            logger.warning("Skipped trade: buffered quantity became non-positive")
+                            continue
 
-                            # Format quantity appropriately (show more decimals for small amounts) after buffering
-                            if quantity < 1:
-                                qty_str = f"{quantity:.6f}".rstrip('0').rstrip('.')
-                            else:
-                                qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
-                            bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol} - {reason}")
+                        # Format quantity appropriately (show more decimals for small amounts) after buffering
+                        if quantity < 1:
+                            qty_str = f"{quantity:.6f}".rstrip('0').rstrip('.')
+                        else:
+                            qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
+                        bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol} - {reason}")
 
-                            risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
+                        risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
 
-                            if risk_result.allowed:
-                                # Calculate fee before execution (estimate)
-                                estimated_fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, action)
-                                liquidity = "maker_intent"
-                                # Capture stop/target if provided by strategy
-                                stop_price = getattr(signal, 'stop_price', None)
-                                target_price = getattr(signal, 'target_price', None)
-                                
-                                bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (est. fee: ${estimated_fee:.4f})")
-                                
-                                # Execute trade
-                                retries = 0
-                                order_result = None
-                                while retries < 2 and order_result is None:
-                                    try:
-                                        order_result = await asyncio.wait_for(
-                                            self.bot.place_order_async(symbol, action, quantity, prefer_maker=True),
-                                            timeout=15
-                                        )
-                                    except asyncio.TimeoutError:
-                                        logger.error("Order placement timed out")
-                                        await self._reconnect_bot()
-                                        retries += 1
-                                    except Exception as e:
-                                        logger.error(f"Order placement error: {e}")
-                                        await self._reconnect_bot()
-                                        retries += 1
+                        if risk_result.allowed:
+                            # Calculate fee before execution (estimate)
+                            estimated_fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, action)
+                            liquidity = "maker_intent"
+                            # Capture stop/target if provided by strategy
+                            stop_price = getattr(signal, 'stop_price', None)
+                            target_price = getattr(signal, 'target_price', None)
+                            
+                            bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (est. fee: ${estimated_fee:.4f})")
+                            
+                            # Execute trade
+                            retries = 0
+                            order_result = None
+                            while retries < 2 and order_result is None:
+                                try:
+                                    order_result = await asyncio.wait_for(
+                                        self.bot.place_order_async(symbol, action, quantity, prefer_maker=True),
+                                        timeout=15
+                                    )
+                                except asyncio.TimeoutError:
+                                    logger.error("Order placement timed out")
+                                    await self._reconnect_bot()
+                                    retries += 1
+                                except Exception as e:
+                                    logger.error(f"Order placement error: {e}")
+                                    await self._reconnect_bot()
+                                    retries += 1
 
-                                # Capture reported liquidity if present
-                                if order_result and isinstance(order_result, dict) and order_result.get('liquidity'):
-                                    liquidity = order_result.get('liquidity')
-                                
-                                # Notify strategy of execution
-                                now_ts = asyncio.get_event_loop().time()
-                                self.strategy.on_trade_executed(now_ts)
-                                
-                                # Store reason for syncing
-                                if order_result and order_result.get('order_id'):
-                                    self.order_reasons[str(order_result['order_id'])] = reason
-                                    self._estimated_fees[str(order_result['order_id'])] = estimated_fee
-                                    # Also persist estimated fee to DB for optional auditing
-                                    try:
-                                        self.db.log_estimated_fee(self.session_id, order_result['order_id'], estimated_fee, symbol, action)
-                                    except Exception as e:
-                                        logger.debug(f"Could not log estimated fee: {e}")
+                            # Capture reported liquidity if present
+                            if order_result and isinstance(order_result, dict) and order_result.get('liquidity'):
+                                liquidity = order_result.get('liquidity')
+                            
+                            # Notify strategy of execution
+                            now_ts = asyncio.get_event_loop().time()
+                            self.strategy.on_trade_executed(now_ts)
+                            
+                            # Store reason for syncing
+                            if order_result and order_result.get('order_id'):
+                                self.order_reasons[str(order_result['order_id'])] = reason
+                                self._estimated_fees[str(order_result['order_id'])] = estimated_fee
+                                # Also persist estimated fee to DB for optional auditing
+                                try:
+                                    self.db.log_estimated_fee(self.session_id, order_result['order_id'], estimated_fee, symbol, action)
+                                except Exception as e:
+                                    logger.debug(f"Could not log estimated fee: {e}")
 
-                                # Record trade plan so we can monitor stops/targets (only for new BUY/SELL)
-                                if action in ['BUY', 'SELL'] and stop_price or target_price:
-                                    try:
-                                        plan_id = self.db.create_trade_plan(
-                                            self.session_id,
-                                            symbol,
-                                            action,
-                                            price,
-                                            stop_price,
-                                            target_price,
-                                            quantity,
-                                            reason
-                                        )
-                                        self._open_trade_plans[plan_id] = {
-                                            'symbol': symbol,
-                                            'side': action,
-                                            'stop_price': stop_price,
-                                            'target_price': target_price,
-                                            'size': quantity
-                                        }
-                                        bot_actions_logger.info(f"📝 Plan #{plan_id}: stop={stop_price}, target={target_price}")
-                                    except Exception as e:
-                                        logger.debug(f"Could not create trade plan: {e}")
+                            # Record trade plan so we can monitor stops/targets (only for new BUY/SELL)
+                            if action in ['BUY', 'SELL'] and (stop_price or target_price):
+                                try:
+                                    plan_id = self.db.create_trade_plan(
+                                        self.session_id,
+                                        symbol,
+                                        action,
+                                        price,
+                                        stop_price,
+                                        target_price,
+                                        quantity,
+                                        reason
+                                    )
+                                    self._open_trade_plans[plan_id] = {
+                                        'symbol': symbol,
+                                        'side': action,
+                                        'stop_price': stop_price,
+                                        'target_price': target_price,
+                                        'size': quantity
+                                    }
+                                    bot_actions_logger.info(f"📝 Plan #{plan_id}: stop={stop_price}, target={target_price}")
+                                except Exception as e:
+                                    logger.debug(f"Could not create trade plan: {e}")
                                     
                                 # Snapshot open orders if any remain
                                 try:

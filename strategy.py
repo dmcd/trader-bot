@@ -5,6 +5,7 @@ import asyncio
 import json
 from pathlib import Path
 import google.generativeai as genai
+import jsonschema
 from config import (
     GEMINI_API_KEY,
     MAX_ORDER_VALUE,
@@ -65,6 +66,20 @@ class LLMStrategy(BaseStrategy):
         # Optional async callable that fetches OHLCV data
         self.ohlcv_provider = ohlcv_provider
         self.prompt_template = self._load_prompt_template()
+        self._decision_schema = {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["BUY", "SELL", "HOLD", "CANCEL"]},
+                "symbol": {"type": "string"},
+                "quantity": {"type": "number", "minimum": 0},
+                "reason": {"type": "string"},
+                "order_id": {"type": ["string", "number", "null"]},
+                "stop_price": {"type": ["number", "null"], "minimum": 0},
+                "target_price": {"type": ["number", "null"], "minimum": 0}
+            },
+            "required": ["action", "symbol", "quantity", "reason"],
+            "additionalProperties": False
+        }
 
     def _is_choppy(self, symbol: str, market_data_point, recent_data):
         """
@@ -246,6 +261,12 @@ class LLMStrategy(BaseStrategy):
         if decision_json:
             try:
                 decision = json.loads(decision_json)
+                # Validate shape
+                try:
+                    jsonschema.validate(decision, self._decision_schema)
+                except Exception as e:
+                    logger.error(f"LLM decision failed schema validation: {e}")
+                    return None
                 action = decision.get('action')
                 quantity = decision.get('quantity', 0)
                 reason = decision.get('reason')
@@ -264,10 +285,12 @@ class LLMStrategy(BaseStrategy):
                         max_order_value = min(order_cap_value, headroom)
                         if not price or max_order_value <= 0:
                             return StrategySignal('HOLD', symbol, 0, 'No exposure headroom')
-                        max_qty = max_order_value / price
-                        if quantity > max_qty:
-                            quantity = max_qty
-                    
+                        quantity = self._clamp_quantity(quantity, price, headroom)
+                    else:
+                        # SELL: still clamp to order cap for safety
+                        if price:
+                            quantity = self._clamp_quantity(quantity, price, order_cap_value)
+
                     # We don't update last_trade_ts here, we let the runner do it upon execution success? 
                     # Actually better to update it here to prevent double signaling if execution takes time, 
                     # BUT runner might reject it. 
@@ -434,3 +457,11 @@ class LLMStrategy(BaseStrategy):
     def on_trade_rejected(self, reason):
         """Callback to update internal state after a rejected trade."""
         self.last_rejection_reason = reason
+
+    def _clamp_quantity(self, quantity: float, price: float, headroom: float) -> float:
+        """Clamp quantities to fit within exposure and order caps."""
+        if price <= 0 or quantity <= 0:
+            return 0.0
+        max_notional = min(MAX_ORDER_VALUE, headroom if headroom is not None else MAX_ORDER_VALUE)
+        max_qty = max_notional / price if price else 0.0
+        return min(quantity, max_qty)

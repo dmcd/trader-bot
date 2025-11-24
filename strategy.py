@@ -187,6 +187,10 @@ class LLMStrategy(BaseStrategy):
         exposure_now = current_exposure if current_exposure is not None else 0.0
         equity_now = current_equity if current_equity is not None else 0.0
         headroom = max(0.0, exposure_cap - exposure_now)
+        logger.info(
+            f"Exposure snapshot: exposure_now=${exposure_now:,.2f}, cap=${exposure_cap:,.2f}, headroom=${headroom:,.2f}, "
+            f"open_orders={len(open_orders) if open_orders else 0}, equity=${equity_now:,.2f}"
+        )
 
         open_order_count = len(open_orders)
         open_order_snippets = []

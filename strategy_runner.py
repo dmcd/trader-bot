@@ -19,11 +19,13 @@ from config import (
     MAX_DAILY_LOSS_PERCENT,
     MAX_ORDER_VALUE,
     MAX_DAILY_LOSS,
+    MIN_TRADE_SIZE,
     LOOP_INTERVAL_SECONDS,
     MIN_TRADE_INTERVAL_SECONDS,
     FEE_RATIO_COOLDOWN,
     MAX_TOTAL_EXPOSURE,
     ORDER_VALUE_BUFFER,
+    MAX_POSITIONS,
     PRIORITY_MOVE_PCT,
     PRIORITY_LOOKBACK_MIN,
     BREAK_GLASS_COOLDOWN_MIN,
@@ -95,6 +97,14 @@ class StrategyRunner:
         """Connects and initializes the bot."""
         logger.info(f"Initializing Strategy Runner in {TRADING_MODE} mode (Exchange: {self.exchange_name})...")
         bot_actions_logger.info(f"🤖 Trading Bot Started - Mode: {TRADING_MODE}, Exchange: {self.exchange_name}")
+        bot_actions_logger.info(
+            "📏 Risk Limits: "
+            f"Max order ${MAX_ORDER_VALUE:,.2f} (buffer ${ORDER_VALUE_BUFFER:,.2f}), "
+            f"Min trade ${MIN_TRADE_SIZE:,.2f}, "
+            f"Max exposure ${MAX_TOTAL_EXPOSURE:,.2f}, "
+            f"Max positions {MAX_POSITIONS}, "
+            f"Max daily loss ${MAX_DAILY_LOSS:,.2f} / {MAX_DAILY_LOSS_PERCENT:.1f}%"
+        )
         
         # Connect to the active exchange
         await self.bot.connect_async()

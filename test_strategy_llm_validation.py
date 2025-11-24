@@ -49,6 +49,23 @@ class TestLLMValidation(unittest.IsolatedAsyncioTestCase):
             self.assertLessEqual(signal.stop_price, 100)
             self.assertLessEqual(signal.target_price, 102)
 
+    def test_extract_json_payload_handles_chatter(self):
+        noisy = (
+            "Some analysis text that should be ignored before the JSON.\n\n"
+            "```json\n"
+            "{\n"
+            "  \"action\": \"HOLD\",\n"
+            "  \"symbol\": \"BTC/USD\",\n"
+            "  \"quantity\": 0.0,\n"
+            "  \"reason\": \"Conflicting indicators\"\n"
+            "}\n"
+            "```"
+        )
+
+        payload = self.strategy._extract_json_payload(noisy)
+        decision = json.loads(payload)
+        self.assertEqual(decision['action'], 'HOLD')
+
 
 if __name__ == '__main__':
     unittest.main()

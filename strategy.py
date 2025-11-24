@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 import asyncio
 import json
+import re
 from pathlib import Path
 import google.generativeai as genai
 import jsonschema
@@ -81,6 +82,32 @@ class LLMStrategy(BaseStrategy):
             "required": ["action", "symbol", "quantity", "reason"],
             "additionalProperties": False
         }
+
+    def _extract_json_payload(self, text: str) -> str:
+        """Extract a JSON object from an LLM response that may include chatter."""
+        if not text:
+            return ""
+
+        cleaned = text.strip()
+
+        # Prefer an explicit fenced code block
+        block = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+        if block:
+            return block.group(1).strip()
+
+        # Fall back to the first brace-delimited object
+        first_brace = cleaned.find('{')
+        if first_brace != -1:
+            last_brace = cleaned.rfind('}')
+            while last_brace != -1 and last_brace >= first_brace:
+                candidate = cleaned[first_brace:last_brace + 1].strip()
+                try:
+                    json.loads(candidate)
+                    return candidate
+                except json.JSONDecodeError:
+                    # Try an earlier closing brace in case we overshot
+                    last_brace = cleaned.rfind('}', first_brace, last_brace)
+        return cleaned
 
     def _is_choppy(self, symbol: str, market_data_point, recent_data):
         """
@@ -503,11 +530,7 @@ class LLMStrategy(BaseStrategy):
                 except Exception as e:
                     logger.warning(f"Error tracking LLM usage: {e}")
             
-            text = response.text.strip()
-            if text.startswith('```json'):
-                text = text[7:-3]
-            elif text.startswith('```'):
-                text = text[3:-3]
+            text = self._extract_json_payload(response.text)
             return text
         except Exception as e:
             logger.error(f"LLM Error: {e}")

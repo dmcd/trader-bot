@@ -94,9 +94,22 @@ class TradingDatabase:
                 bid REAL,
                 ask REAL,
                 volume REAL,
+                spread_pct REAL,
+                bid_size REAL,
+                ask_size REAL,
+                ob_imbalance REAL,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
+        # Backfill additive columns on existing installs
+        try:
+            cursor.execute("PRAGMA table_info(market_data)")
+            cols = {row['name'] for row in cursor.fetchall()}
+            for col in ["spread_pct", "bid_size", "ask_size", "ob_imbalance"]:
+                if col not in cols:
+                    cursor.execute(f"ALTER TABLE market_data ADD COLUMN {col} REAL")
+        except Exception as e:
+            logger.warning(f"Could not ensure market_data schema: {e}")
 
         # Equity snapshots table
         cursor.execute("""
@@ -326,14 +339,16 @@ class TradingDatabase:
                 stats["clamped"] += 1
         return stats
     
-    def log_market_data(self, session_id: int, symbol: str, price: float, 
-                       bid: float, ask: float, volume: float = 0.0):
+    def log_market_data(self, session_id: int, symbol: str, price: float,
+                       bid: float, ask: float, volume: float = 0.0,
+                       spread_pct: float = None, bid_size: float = None,
+                       ask_size: float = None, ob_imbalance: float = None):
         """Log market data snapshot."""
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO market_data (session_id, timestamp, symbol, price, bid, ask, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, datetime.now().isoformat(), symbol, price, bid, ask, volume))
+            INSERT INTO market_data (session_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, datetime.now().isoformat(), symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance))
         self.conn.commit()
     
     def get_recent_trades(self, session_id: int, limit: int = 10) -> List[Dict[str, Any]]:

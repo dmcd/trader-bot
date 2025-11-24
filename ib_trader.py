@@ -96,7 +96,12 @@ class IBTrader(BaseTrader):
             'price': price,
             'bid': ticker.bid,
             'ask': ticker.ask,
-            'close': ticker.close
+            'close': ticker.close,
+            'volume': None,
+            'bid_size': None,
+            'ask_size': None,
+            'spread_pct': None,
+            'ob_imbalance': None
         }
 
     async def place_order_async(self, symbol, action, quantity, order_type='MKT', exchange='SMART', currency='AUD', **kwargs):

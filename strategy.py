@@ -400,7 +400,17 @@ class LLMStrategy(BaseStrategy):
         market_summary = ""
         for symbol, data in market_data.items():
             if data:
-                market_summary += f"\n  - {symbol}: Price ${data.get('price', 'N/A')}, Bid ${data.get('bid', 'N/A')}, Ask ${data.get('ask', 'N/A')}"
+                spread = data.get('spread_pct')
+                ob_imb = data.get('ob_imbalance')
+                vol = data.get('volume')
+                spread_str = f", Spread {spread:.3f}%" if spread is not None else ""
+                ob_str = f", OB Imb {ob_imb:+.2f}" if ob_imb is not None else ""
+                vol_str = f", Vol {vol}" if vol is not None else ""
+                market_summary += (
+                    f"\n  - {symbol}: Price ${data.get('price', 'N/A')}, "
+                    f"Bid ${data.get('bid', 'N/A')}, Ask ${data.get('ask', 'N/A')}"
+                    f"{spread_str}{ob_str}{vol_str}"
+                )
         
         symbol = available_symbols[0]
         context_summary = ""

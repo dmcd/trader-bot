@@ -23,6 +23,7 @@ def setup_logging():
     Configures the logging system.
     - bot.log: User-friendly log showing only trading decisions and reasoning (via bot_actions logger)
     - console.log: Technical DEBUG level log (for Debugging, captures stdout/stderr)
+    - telemetry.log: Structured JSON per-loop telemetry for analysis
     - Terminal: INFO level
     """
     # Save original streams to avoid infinite loops
@@ -65,6 +66,15 @@ def setup_logging():
     bot_handler.setLevel(logging.INFO)
     bot_handler.setFormatter(simple_formatter)
     bot_actions_logger.addHandler(bot_handler)
+
+    # 4. Telemetry Log (telemetry.log) - structured JSON per loop
+    telemetry_logger = logging.getLogger('telemetry')
+    telemetry_logger.setLevel(logging.INFO)
+    telemetry_logger.propagate = False
+    telemetry_handler = logging.FileHandler('telemetry.log', mode='a')
+    telemetry_handler.setLevel(logging.INFO)
+    telemetry_handler.setFormatter(logging.Formatter('%(message)s'))
+    telemetry_logger.addHandler(telemetry_handler)
 
     # Redirect stdout and stderr to the logger
     # We use specific loggers for these so we can identify the source

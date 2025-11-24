@@ -3,6 +3,7 @@ import logging
 import os
 import signal
 import sys
+import json
 from datetime import datetime, timezone
 import google.generativeai as genai
 from ib_trader import IBTrader
@@ -39,6 +40,7 @@ from logger_config import setup_logging
 
 # Configure logging
 bot_actions_logger = setup_logging()
+telemetry_logger = logging.getLogger('telemetry')
 logger = logging.getLogger(__name__)
 
 # Configure Gemini (still needed for direct usage if any, but mostly in Strategy now)
@@ -91,6 +93,23 @@ class StrategyRunner:
         self.max_plan_age_minutes = 60  # TODO: move to config if desired
         self.day_end_flatten_hour_utc = None  # optional UTC hour to flatten plans
         self.max_plans_per_symbol = 2
+        self.telemetry_logger = telemetry_logger
+
+    def _emit_telemetry(self, record: dict):
+        """Emit structured telemetry as JSON line."""
+        if not self.telemetry_logger:
+            return
+        try:
+            self.telemetry_logger.info(json.dumps(record, default=str))
+        except Exception as e:
+            logger.debug(f"Telemetry emit failed: {e}")
+
+    def _log_execution_trace(self, trace_id: int, execution_result: dict):
+        """Attach execution outcome to LLM trace when available."""
+        try:
+            self.db.update_llm_trace_execution(trace_id, execution_result)
+        except Exception as e:
+            logger.debug(f"Could not update LLM trace {trace_id}: {e}")
 
     def _apply_order_value_buffer(self, quantity: float, price: float):
         """Trim quantity so the notional sits under the order cap minus buffer."""
@@ -869,15 +888,38 @@ class StrategyRunner:
                         order_id = getattr(signal, 'order_id', None)
                         stop_price = getattr(signal, 'stop_price', None)
                         target_price = getattr(signal, 'target_price', None)
+                        trace_id = getattr(signal, 'trace_id', None)
+                        telemetry_record = {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "session_id": self.session_id,
+                            "exchange": self.exchange_name,
+                            "symbol": symbol,
+                            "action": action,
+                            "quantity": quantity,
+                            "reason": reason,
+                            "stop_price": stop_price,
+                            "target_price": target_price,
+                            "equity": current_equity,
+                            "exposure": current_exposure,
+                            "open_orders": len(open_orders) if open_orders is not None else None,
+                            "trace_id": trace_id,
+                        }
                         
                         # Log decision to user-friendly log
                         if action == 'HOLD':
                             bot_actions_logger.info(f"📊 Decision: HOLD - {reason}")
+                            telemetry_record["status"] = "hold"
+                            self._log_execution_trace(trace_id, {"status": "hold", "reason": reason})
+                            self._emit_telemetry(telemetry_record)
                             continue
                         
                         elif action == 'CANCEL':
                             if not order_id:
                                 logger.warning("Skipped cancel: missing order_id")
+                                telemetry_record["status"] = "cancel_missing_id"
+                                telemetry_record["error"] = "missing order_id"
+                                self._log_execution_trace(trace_id, {"status": "cancel_missing_id"})
+                                self._emit_telemetry(telemetry_record)
                                 continue
                             cancel_id = order_id
                             if isinstance(order_id, str) and order_id.isdigit():
@@ -886,8 +928,10 @@ class StrategyRunner:
                                 success = await self.bot.cancel_open_order_async(cancel_id)
                                 if success:
                                     bot_actions_logger.info(f"🛑 Cancelled order {order_id}: {reason}")
+                                    telemetry_record["status"] = "cancelled"
                                 else:
                                     bot_actions_logger.info(f"⚠️ Cancel request failed for order {order_id}: {reason}")
+                                    telemetry_record["status"] = "cancel_failed"
                                 # Refresh open orders snapshot so strategy context stays current
                                 try:
                                     open_orders = await self.bot.get_open_orders_async()
@@ -896,6 +940,10 @@ class StrategyRunner:
                                     logger.warning(f"Could not refresh open orders after cancel: {e}")
                             except Exception as e:
                                 logger.error(f"Cancel order error: {e}")
+                                telemetry_record["status"] = "cancel_error"
+                                telemetry_record["error"] = str(e)
+                            self._log_execution_trace(trace_id, telemetry_record)
+                            self._emit_telemetry(telemetry_record)
                             continue
 
                         elif action in ['BUY', 'SELL'] and quantity > 0:
@@ -922,6 +970,8 @@ class StrategyRunner:
                         bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol} - {reason}")
 
                         risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
+                        telemetry_record["risk_allowed"] = risk_result.allowed
+                        telemetry_record["risk_reason"] = risk_result.reason
 
                         if risk_result.allowed:
                             # Calculate fee before execution (estimate)
@@ -949,11 +999,19 @@ class StrategyRunner:
                                 if action == 'BUY' and pending_count >= self.max_plans_per_symbol:
                                     bot_actions_logger.info(f"⛔ Trade Blocked: open order count reached for {symbol} ({pending_count}/{self.max_plans_per_symbol})")
                                     self.strategy.on_trade_rejected("Open order cap reached")
+                                    telemetry_record["status"] = "risk_blocked"
+                                    telemetry_record["risk_reason"] = "Open order cap reached"
+                                    self._log_execution_trace(trace_id, telemetry_record)
+                                    self._emit_telemetry(telemetry_record)
                                     continue
                                 order_value = quantity * price
                                 if action == 'BUY' and (pending_exposure + order_value + current_exposure) > MAX_TOTAL_EXPOSURE:
                                     bot_actions_logger.info("⛔ Trade Blocked: pending/open exposure would exceed cap")
                                     self.strategy.on_trade_rejected("Pending exposure over cap")
+                                    telemetry_record["status"] = "risk_blocked"
+                                    telemetry_record["risk_reason"] = "Pending exposure over cap"
+                                    self._log_execution_trace(trace_id, telemetry_record)
+                                    self._emit_telemetry(telemetry_record)
                                     continue
                             except Exception as e:
                                 logger.debug(f"Pending exposure check failed: {e}")
@@ -1031,9 +1089,17 @@ class StrategyRunner:
                                 except Exception as e:
                                     logger.warning(f"Could not snapshot open orders: {e}")
 
-                            else:
-                                bot_actions_logger.info(f"⛔ Trade Blocked: {risk_result.reason}")
-                                self.strategy.on_trade_rejected(risk_result.reason)
+                            telemetry_record["status"] = order_result.get('status') if isinstance(order_result, dict) else "order_unknown"
+                            telemetry_record["order_result"] = order_result
+                            self._log_execution_trace(trace_id, telemetry_record)
+                            self._emit_telemetry(telemetry_record)
+
+                        else:
+                            telemetry_record["status"] = "risk_blocked"
+                            bot_actions_logger.info(f"⛔ Trade Blocked: {risk_result.reason}")
+                            self.strategy.on_trade_rejected(risk_result.reason)
+                            self._log_execution_trace(trace_id, telemetry_record)
+                            self._emit_telemetry(telemetry_record)
                     
                     # 5. Sleep
                     logger.info(f"Sleeping for {LOOP_INTERVAL_SECONDS} seconds...")

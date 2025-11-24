@@ -1,6 +1,7 @@
 import sqlite3
 import logging
 import os
+import json
 from datetime import datetime, date
 from typing import Optional, List, Dict, Any
 
@@ -66,6 +67,21 @@ class TradingDatabase:
                 total_tokens INTEGER DEFAULT 0,
                 cost REAL DEFAULT 0.0,
                 decision TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        """)
+
+        # LLM trace table for full prompt/response/decision and optional execution result
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS llm_traces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                prompt TEXT,
+                response TEXT,
+                decision_json TEXT,
+                market_context TEXT,
+                execution_result TEXT,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
@@ -322,6 +338,36 @@ class TradingDatabase:
         
         self.conn.commit()
         logger.debug(f"Logged LLM call: {total_tokens} tokens, ${cost:.6f}")
+
+    def log_llm_trace(self, session_id: int, prompt: str, response: str, decision_json: str = "", market_context: Any = None) -> int:
+        """Persist full LLM prompt/response plus parsed decision and context; returns trace id."""
+        cursor = self.conn.cursor()
+        try:
+            market_context_str = json.dumps(market_context, default=str) if market_context is not None else None
+        except Exception:
+            market_context_str = str(market_context)
+        cursor.execute("""
+            INSERT INTO llm_traces (session_id, timestamp, prompt, response, decision_json, market_context)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (session_id, datetime.now().isoformat(), prompt, response, decision_json, market_context_str))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def update_llm_trace_execution(self, trace_id: int, execution_result: Any):
+        """Attach execution outcome to an existing LLM trace row."""
+        if not trace_id:
+            return
+        cursor = self.conn.cursor()
+        try:
+            execution_str = json.dumps(execution_result, default=str) if execution_result is not None else None
+        except Exception:
+            execution_str = str(execution_result)
+        cursor.execute("""
+            UPDATE llm_traces
+            SET execution_result = ?
+            WHERE id = ?
+        """, (execution_str, trace_id))
+        self.conn.commit()
 
     def get_recent_llm_stats(self, session_id: int, limit: int = 20) -> Dict[str, Any]:
         """Return summary of recent LLM calls for telemetry."""

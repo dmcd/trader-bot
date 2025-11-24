@@ -28,12 +28,13 @@ from config import (
 logger = logging.getLogger(__name__)
 
 class StrategySignal:
-    def __init__(self, action: str, symbol: str, quantity: float, reason: str, order_id=None):
+    def __init__(self, action: str, symbol: str, quantity: float, reason: str, order_id=None, trace_id: int = None):
         self.action = action.upper()
         self.symbol = symbol
         self.quantity = quantity
         self.reason = reason
         self.order_id = order_id
+        self.trace_id = trace_id
 
     def __str__(self):
         return f"{self.action} {self.quantity} {self.symbol} ({self.reason})"
@@ -292,7 +293,7 @@ class LLMStrategy(BaseStrategy):
             f"- Open orders: {open_order_count} ({open_orders_summary})"
         )
 
-        decision_json = await self._get_llm_decision(
+        decision_json, trace_id = await self._get_llm_decision(
             session_id,
             market_data,
             current_equity,
@@ -376,15 +377,15 @@ class LLMStrategy(BaseStrategy):
                     # For now, we'll leave state update to the caller or handle it optimistically?
                     # The original code checked `can_trade` in the loop.
                     
-                    signal = StrategySignal(action, symbol, quantity, reason)
+                    signal = StrategySignal(action, symbol, quantity, reason, trace_id=trace_id)
                     # Carry stop/target forward to runner via attributes
                     signal.stop_price = stop_price
                     signal.target_price = target_price
                     return signal
                 elif action == 'CANCEL' and order_id:
-                    return StrategySignal('CANCEL', symbol or '', 0, reason or 'Cancel open order', order_id=order_id)
+                    return StrategySignal('CANCEL', symbol or '', 0, reason or 'Cancel open order', order_id=order_id, trace_id=trace_id)
                 elif action == 'HOLD':
-                    return StrategySignal('HOLD', symbol, 0, reason)
+                    return StrategySignal('HOLD', symbol, 0, reason, trace_id=trace_id)
             except json.JSONDecodeError:
                 logger.error(f"Failed to parse LLM response: {decision_json}")
         
@@ -411,9 +412,9 @@ class LLMStrategy(BaseStrategy):
         return self.prompt_template.format_map(_SafeDict(**kwargs))
 
     async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0):
-        """Asks Gemini for a trading decision."""
+        """Asks Gemini for a trading decision and logs full prompt/response; returns (decision_json, trace_id)."""
         if not GEMINI_API_KEY:
-            return None
+            return None, None
 
         open_orders = open_orders or []
 
@@ -531,10 +532,30 @@ class LLMStrategy(BaseStrategy):
                     logger.warning(f"Error tracking LLM usage: {e}")
             
             text = self._extract_json_payload(response.text)
-            return text
+
+            trace_id = None
+            try:
+                market_context = {
+                    "market_data": market_data,
+                    "prompt_context": prompt_context,
+                    "context_summary": context_summary,
+                    "indicator_summary": indicator_summary,
+                    "open_orders": open_orders,
+                }
+                trace_id = self.db.log_llm_trace(
+                    session_id,
+                    prompt,
+                    response.text,
+                    decision_json=text,
+                    market_context=market_context,
+                )
+            except Exception as e:
+                logger.warning(f"Could not log LLM trace: {e}")
+
+            return text, trace_id
         except Exception as e:
             logger.error(f"LLM Error: {e}")
-            return None
+            return None, None
 
     def on_trade_executed(self, timestamp):
         """Callback to update internal state after a successful trade."""

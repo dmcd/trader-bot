@@ -25,7 +25,8 @@ class RiskManager:
         self.start_of_day_equity = None
         self.positions = {} # Symbol -> Quantity
         self.pending_buy_exposure = 0.0  # Notional of outstanding buy orders
-        self.pending_orders_by_symbol = {}  # symbol -> {'buy': notional, 'count': int}
+        self.pending_sell_exposure = 0.0  # Notional of outstanding sell orders (short intent)
+        self.pending_orders_by_symbol = {}  # symbol -> {'buy': notional, 'sell': notional, 'count_buy': int, 'count_sell': int}
 
     def seed_start_of_day(self, start_equity: float):
         """Persist start-of-day equity so restarts keep loss limits consistent."""
@@ -51,27 +52,34 @@ class RiskManager:
 
     def update_pending_orders(self, pending_orders: list, price_lookup: dict = None):
         """
-        Track notional exposure from outstanding BUY orders to avoid over-allocation.
-        Only BUY sides are counted toward exposure headroom; sells are ignored here.
+        Track notional exposure from outstanding orders to avoid over-allocation.
+        Both BUY and SELL sides are tracked so shorts/hedges consume gross exposure.
         """
-        total = 0.0
+        buy_total = 0.0
+        sell_total = 0.0
         counts = {}
         price_lookup = price_lookup or {}
         for order in pending_orders or []:
-            side = (order.get('side') or '').upper()
-            if side != 'BUY':
-                continue
             symbol = order.get('symbol')
+            side = (order.get('side') or '').upper()
             price = order.get('price') or price_lookup.get(symbol) or 0.0
             qty = order.get('remaining')
             if qty is None:
                 qty = order.get('amount', 0.0)
-            if price and qty:
-                total += price * qty
-                sym_entry = counts.setdefault(symbol, {'buy': 0.0, 'count': 0})
-                sym_entry['buy'] += price * qty
-                sym_entry['count'] += 1
-        self.pending_buy_exposure = total
+            if not price or not qty:
+                continue
+            notional = price * qty
+            sym_entry = counts.setdefault(symbol, {'buy': 0.0, 'sell': 0.0, 'count_buy': 0, 'count_sell': 0})
+            if side == 'BUY':
+                buy_total += notional
+                sym_entry['buy'] += notional
+                sym_entry['count_buy'] += 1
+            elif side == 'SELL':
+                sell_total += notional
+                sym_entry['sell'] += notional
+                sym_entry['count_sell'] += 1
+        self.pending_buy_exposure = buy_total
+        self.pending_sell_exposure = sell_total
         self.pending_orders_by_symbol = counts
 
     def apply_order_value_buffer(self, quantity: float, price: float):
@@ -122,30 +130,40 @@ class RiskManager:
             logger.warning(f"Risk Reject: {msg}")
             return RiskCheckResult(False, msg)
 
-        # 3. Check Max Positions (only for BUY orders)
-        if action == 'BUY':
-            # Check Total Exposure
-            price_overrides = {symbol: price} if price else None
-            current_exposure = self.get_total_exposure(price_overrides=price_overrides)
-            new_exposure = current_exposure + order_value
-            
-            if new_exposure > MAX_TOTAL_EXPOSURE:
-                msg = f"Total exposure ${new_exposure:.2f} would exceed limit of ${MAX_TOTAL_EXPOSURE:.2f}"
-                logger.warning(f"Risk Reject: {msg}")
-                return RiskCheckResult(False, msg)
-                
-            # Safe Buffer Warning (90%)
-            if new_exposure > (MAX_TOTAL_EXPOSURE * 0.9):
-                logger.warning(f"Risk Warning: Total exposure ${new_exposure:.2f} is close to limit of ${MAX_TOTAL_EXPOSURE:.2f}")
+        # 3. Exposure and position caps
+        price_overrides = {symbol: price} if price else None
+        current_exposure = self.get_total_exposure(price_overrides=price_overrides)
 
-            # Enforce max distinct positions (including pending buys on new symbols)
+        def projected_exposure_for_sell(sym_qty, qty, px):
+            # If selling more than current long, the overage is new short exposure
+            if qty > sym_qty:
+                return current_exposure + (qty - sym_qty) * px
+            # Otherwise exposure shrinks or stays; allow
+            return current_exposure
+
+        projected_exposure = current_exposure
+        if action == 'BUY':
+            projected_exposure = current_exposure + order_value
+        else:  # SELL
+            sym_qty = (self.positions or {}).get(symbol, {}).get('quantity', 0.0) or 0.0
+            projected_exposure = projected_exposure_for_sell(sym_qty, quantity, price)
+
+        if projected_exposure > MAX_TOTAL_EXPOSURE:
+            msg = f"Total exposure ${projected_exposure:.2f} would exceed limit of ${MAX_TOTAL_EXPOSURE:.2f}"
+            logger.warning(f"Risk Reject: {msg}")
+            return RiskCheckResult(False, msg)
+        if projected_exposure > (MAX_TOTAL_EXPOSURE * 0.9):
+            logger.warning(f"Risk Warning: Total exposure ${projected_exposure:.2f} is close to limit of ${MAX_TOTAL_EXPOSURE:.2f}")
+
+        # Enforce max distinct positions (including pending buys on new symbols)
+        if action == 'BUY':
             active_positions = {
                 sym for sym, data in (self.positions or {}).items()
                 if abs(data.get('quantity', 0) or 0.0) > 1e-9
             }
             pending_symbols = {
                 sym for sym, data in (self.pending_orders_by_symbol or {}).items()
-                if data.get('count', 0) > 0
+                if (data.get('count_buy', 0) + data.get('count_sell', 0)) > 0
             }
             distinct_symbols = active_positions.union(pending_symbols)
             has_position = symbol in active_positions
@@ -156,8 +174,8 @@ class RiskManager:
 
             # Cap stacking multiple pending buys on the same symbol
             pending_for_symbol = self.pending_orders_by_symbol.get(symbol, {}) if self.pending_orders_by_symbol else {}
-            if pending_for_symbol.get('count', 0) >= MAX_POSITIONS:
-                msg = f"Open order cap reached for {symbol} ({pending_for_symbol.get('count')}/{MAX_POSITIONS})"
+            if pending_for_symbol.get('count_buy', 0) >= MAX_POSITIONS:
+                msg = f"Open order cap reached for {symbol} ({pending_for_symbol.get('count_buy')}/{MAX_POSITIONS})"
                 logger.warning(f"Risk Reject: {msg}")
                 return RiskCheckResult(False, msg)
 
@@ -175,6 +193,6 @@ class RiskManager:
             else:
                 curr_price = data.get('current_price', 0) or 0.0
 
-            exposure += qty * curr_price
+            exposure += abs(qty) * curr_price
 
-        return exposure + self.pending_buy_exposure
+        return exposure + self.pending_buy_exposure + self.pending_sell_exposure

@@ -838,20 +838,6 @@ class StrategyRunner:
 
                     # Slippage guard: if latest price moved >2% from decision price, skip execution
                     decision_price = market_data[symbol]['price'] if market_data.get(symbol) else None
-                    
-                    # Log market data to database
-                    if data and self.session_id:
-                        try:
-                            self.db.log_market_data(
-                                self.session_id,
-                                symbol,
-                                data.get('price', 0),
-                                data.get('bid', 0),
-                                data.get('ask', 0),
-                                data.get('volume', 0)
-                            )
-                        except Exception as e:
-                            logger.warning(f"Error logging market data: {e}")
 
                     # 2.5 Sync Trades from Exchange (for logging only)
                     await self.sync_trades_from_exchange()
@@ -957,8 +943,9 @@ class StrategyRunner:
 
                             # Enforce pending exposure headroom including open orders
                             try:
-                                pending_exposure = self.risk_manager.pending_orders_by_symbol.get(symbol, {}).get('buy', 0.0) if action == 'BUY' else 0.0
-                                pending_count = self.risk_manager.pending_orders_by_symbol.get(symbol, {}).get('count', 0) if action == 'BUY' else 0
+                                pending_data = self.risk_manager.pending_orders_by_symbol.get(symbol, {})
+                                pending_exposure = pending_data.get('buy', 0.0) if action == 'BUY' else pending_data.get('sell', 0.0)
+                                pending_count = pending_data.get('count_buy', 0) if action == 'BUY' else pending_data.get('count_sell', 0)
                                 if action == 'BUY' and pending_count >= self.max_plans_per_symbol:
                                     bot_actions_logger.info(f"⛔ Trade Blocked: open order count reached for {symbol} ({pending_count}/{self.max_plans_per_symbol})")
                                     self.strategy.on_trade_rejected("Open order cap reached")

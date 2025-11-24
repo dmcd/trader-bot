@@ -360,20 +360,37 @@ class GeminiTrader(BaseTrader):
             return False
 
     async def _calculate_total_usd(self, balance: dict):
-        """Helper to value holdings in USD; returns (total_usd, btc_price_used)."""
+        """Helper to value holdings in USD; returns (total_usd, price_map)."""
         total_usd = 0.0
-        btc_price = 0.0
+        price_map = {}
+        totals = balance.get('total', {}) or {}
 
-        if 'USD' in balance.get('total', {}):
-            total_usd += balance['total']['USD']
+        usd_val = totals.get('USD', 0) or 0
+        total_usd += usd_val
 
-        btc_qty = balance.get('total', {}).get('BTC', 0)
-        if btc_qty and btc_qty > 0:
-            ticker = await self.exchange.fetch_ticker('BTC/USD')
-            btc_price = ticker.get('last') or 0.0
-            total_usd += btc_qty * btc_price
+        for currency, qty in totals.items():
+            if currency == 'USD' or not qty or qty == 0:
+                continue
+            price = None
+            symbol_direct = f"{currency}/USD"
+            symbol_invert = f"USD/{currency}"
+            try:
+                if symbol_direct in self.exchange.markets:
+                    ticker = await self.exchange.fetch_ticker(symbol_direct)
+                    price = ticker.get('last') or ticker.get('close')
+                elif symbol_invert in self.exchange.markets:
+                    ticker = await self.exchange.fetch_ticker(symbol_invert)
+                    px = ticker.get('last') or ticker.get('close')
+                    price = (1 / px) if px else None
+                if price:
+                    price_map[currency] = price
+                    total_usd += qty * price
+                else:
+                    logger.debug(f"Could not value {currency} (no USD market)")
+            except Exception as e:
+                logger.warning(f"Error valuing {currency}: {e}")
 
-        return total_usd, btc_price
+        return total_usd, price_map
     async def get_my_trades_async(self, symbol: str, since: int = None, limit: int = None):
         """Fetch past trades for a symbol."""
         if not self.connected:

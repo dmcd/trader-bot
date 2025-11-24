@@ -124,7 +124,7 @@ class TestRiskManager(unittest.TestCase):
         self.assertFalse(result.allowed)
         self.assertIn("Total exposure", result.reason)
 
-        # Pending sells should not block headroom
+        # Pending sells consume gross exposure now; headroom reduced accordingly
         pending_sell = [{
             "symbol": "ETH/USD",
             "side": "sell",
@@ -132,7 +132,7 @@ class TestRiskManager(unittest.TestCase):
             "amount": 10.0
         }]
         self.rm.update_pending_orders(pending_sell)
-        result_ok = self.rm.check_trade_allowed("ETH/USD", "BUY", 10, price=20.0)  # $200 -> exposure 600 < 1000
+        result_ok = self.rm.check_trade_allowed("ETH/USD", "BUY", 5, price=20.0)  # adds $100; still under 1000
         self.assertTrue(result_ok.allowed)
 
     def test_pending_orders_by_symbol_tracks_count_and_notional(self):
@@ -145,11 +145,13 @@ class TestRiskManager(unittest.TestCase):
         self.rm.update_pending_orders(pending)
         sym = self.rm.pending_orders_by_symbol
         self.assertIn("BTC/USD", sym)
-        self.assertEqual(sym["BTC/USD"]["count"], 2)
+        self.assertEqual(sym["BTC/USD"]["count_buy"], 2)
         self.assertGreater(sym["BTC/USD"]["buy"], 0)
         self.assertIn("ETH/USD", sym)
-        self.assertEqual(sym["ETH/USD"]["count"], 1)  # sell ignored
+        self.assertEqual(sym["ETH/USD"]["count_buy"], 1)
         self.assertAlmostEqual(sym["ETH/USD"]["buy"], 2000.0)  # 1 * 2000
+        self.assertEqual(sym["ETH/USD"]["count_sell"], 1)
+        self.assertAlmostEqual(sym["ETH/USD"]["sell"], 1050.0)  # 0.5 * 2100
 
     def test_max_positions_blocks_new_symbol_when_full(self):
         rm_module.MAX_POSITIONS = 1

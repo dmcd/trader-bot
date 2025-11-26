@@ -23,7 +23,7 @@ Available Symbols: {available_symbols}
 
 {quantity_guidance}
 Regime flags: {regime_flags}
-{context_block}{indicator_block}{multi_tf_block}Decide on an action for one of the available symbols.
+{context_block}Decide on an action for one of the available symbols.
 You may also cancel an open order if it is stale or unsafe.
 REMINDERS:
 - Obey cooldown: if cooldown active AND priority=false → return HOLD.
@@ -33,18 +33,5 @@ REMINDERS:
 - Stops/targets: provide prudent stop_price/target_price when trading; skip if not justified.
 - If no valid setup or headroom, return HOLD.
 
-Return ONLY a JSON object with the following format:
-{{
-    "action": "BUY" | "SELL" | "HOLD" | "CANCEL" | "UPDATE_PLAN" | "PARTIAL_CLOSE" | "CLOSE_POSITION" | "PAUSE_TRADING",
-    "symbol": "<symbol from available symbols>",
-    "quantity": <number>,
-    "reason": "<short explanation>",
-    "order_id": "<order id to cancel when action=CANCEL>",
-    "stop_price": <number|null>,
-    "target_price": <number|null>,
-    "plan_id": <number|null>,          // required when action=UPDATE_PLAN or PARTIAL_CLOSE
-    "size_factor": <number|null>,      // optional for UPDATE_PLAN (e.g., 0.5 to halve size)
-    "close_fraction": <number|null>,   // optional for PARTIAL_CLOSE (0-1 fraction to close)
-    "duration_minutes": <number|null>  // optional for PAUSE_TRADING
-}}
+{response_instructions}
 {prompt_context_block}{rules_block}{mode_note}{rejection_note}

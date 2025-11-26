@@ -28,6 +28,11 @@ from config import (
     MIN_TRADE_SIZE,
     MAX_POSITIONS,
     MAX_SPREAD_PCT,
+    TOOL_DEFAULT_TIMEFRAMES,
+    TOOL_MAX_BARS,
+    TOOL_MAX_DEPTH,
+    TOOL_MAX_TRADES,
+    TOOL_MAX_JSON_BYTES,
 )
 from llm_tools import ToolRequest, ToolResponse, ToolName
 
@@ -623,24 +628,11 @@ class LLMStrategy(BaseStrategy):
         
         symbol = available_symbols[0]
         context_summary = ""
-        indicator_summary = ""
-        
-        timeframe_summary = ""
         regime_flags = {}
-        try:
-            timeframe_summary = self._build_timeframe_summary(session_id, symbol)
-        except Exception as e:
-            logger.debug(f"Timeframe summary error: {e}")
 
         if symbol and trading_context:
             try:
                 context_summary = trading_context.get_context_summary(symbol, open_orders=open_orders)
-                recent_data = self.db.get_recent_market_data(session_id, symbol, limit=50)
-                if recent_data and len(recent_data) >= 20:
-                    indicators = self.ta.calculate_indicators(recent_data)
-                    if indicators:
-                        current_price = market_data[symbol]['price']
-                        indicator_summary = self.ta.format_indicators_for_llm(indicators, current_price)
                 recent_bars = {
                     tf: self.db.get_recent_ohlcv(session_id, symbol, tf, limit=50)
                     for tf in ['1m', '5m', '1h', '1d']
@@ -648,7 +640,7 @@ class LLMStrategy(BaseStrategy):
                 }
                 regime_flags = self._compute_regime_flags(session_id, symbol, market_data.get(symbol, {}), recent_bars)
             except Exception as e:
-                logger.warning(f"Error getting context/indicators: {e}")
+                logger.warning(f"Error getting context/regime: {e}")
         
         is_crypto = ACTIVE_EXCHANGE == 'GEMINI' and any('/' in symbol for symbol in available_symbols)
 
@@ -685,6 +677,42 @@ class LLMStrategy(BaseStrategy):
             )
             self.last_rejection_reason = None
 
+        response_instructions_planner = (
+            "Return ONLY a JSON object with this shape:\n"
+            "{\n"
+            '  "tool_requests": [\n'
+            '    {"id":"req1","tool":"get_market_data","params":{"symbol":"<symbol from available symbols>","timeframes":<subset of timeframes>,"limit":<bars up to '
+            f'{TOOL_MAX_BARS}>}},\n'
+            '    {"id":"req2","tool":"get_order_book","params":{"symbol":"<symbol>","depth":<levels up to '
+            f'{TOOL_MAX_DEPTH}>}},\n'
+            '    {"id":"req3","tool":"get_recent_trades","params":{"symbol":"<symbol>","limit":<trades up to '
+            f'{TOOL_MAX_TRADES}>}}\n'
+            "  ]\n"
+            "}\n"
+            "Use only allowed tools (get_market_data, get_order_book, get_recent_trades). "
+            f"Stay within caps: max_bars={TOOL_MAX_BARS}, max_depth={TOOL_MAX_DEPTH}, max_trades={TOOL_MAX_TRADES}, max_json_bytes={TOOL_MAX_JSON_BYTES}. "
+            "If no extra data is needed, return {\"tool_requests\":[]}. Do not propose actions here."
+        )
+
+        response_instructions_decision = (
+            "Tool responses (if any) are provided below. Use them as the source of truth. "
+            "Return ONLY a JSON object with the following format:\n"
+            "{\n"
+            '    "action": "BUY" | "SELL" | "HOLD" | "CANCEL" | "UPDATE_PLAN" | "PARTIAL_CLOSE" | "CLOSE_POSITION" | "PAUSE_TRADING",\n'
+            '    "symbol": "<symbol from available symbols>",\n'
+            '    "quantity": <number>,\n'
+            '    "reason": "<short explanation>",\n'
+            '    "order_id": "<order id to cancel when action=CANCEL>",\n'
+            '    "stop_price": <number|null>,\n'
+            '    "target_price": <number|null>,\n'
+            '    "plan_id": <number|null>,          // required when action=UPDATE_PLAN or PARTIAL_CLOSE\n'
+            '    "size_factor": <number|null>,      // optional for UPDATE_PLAN (e.g., 0.5 to halve size)\n'
+            '    "close_fraction": <number|null>,   // optional for PARTIAL_CLOSE (0-1 fraction to close)\n'
+            '    "duration_minutes": <number|null>  // optional for PAUSE_TRADING\n'
+            "}\n"
+            "Do not request tools in this step."
+        )
+
         base_prompt = self._build_prompt(
             asset_class="crypto" if is_crypto else "stock",
             equity_line=f"${equity_now:,.2f} USD" if is_crypto else f"${equity_now:,.2f} AUD",
@@ -700,8 +728,6 @@ class LLMStrategy(BaseStrategy):
                 else "For stock trading, quantities must be WHOLE NUMBERS (integers)."
             ),
             context_block=f"{context_summary}\n\n" if context_summary else "",
-            indicator_block=f"{indicator_summary}\n\n" if indicator_summary else "",
-            multi_tf_block=f"{timeframe_summary}\n\n" if timeframe_summary else "",
             regime_flags=(", ".join(f"{k}={v}" for k, v in regime_flags.items()) if regime_flags else "none"),
             prompt_context_block=prompt_context_block,
             rules_block=f"{rules_block}\n" if rules_block else "",
@@ -710,6 +736,7 @@ class LLMStrategy(BaseStrategy):
             exposure_headroom=f"${headroom:,.2f}",
             pending_exposure_budget=f"${pending_buy_exposure:,.2f}",
             max_open_orders_per_symbol=MAX_POSITIONS,
+            response_instructions=response_instructions_decision,
         )
 
         trace_id = None
@@ -718,12 +745,30 @@ class LLMStrategy(BaseStrategy):
 
         # Planner turn to request tools when coordinator is available
         if self.tool_coordinator:
-            planner_prompt = (
-                base_prompt
-                + "\n\nTOOL PLANNER:\n"
-                "If you need more data, return JSON: {\"tool_requests\":[{\"id\":\"req1\",\"tool\":\"get_market_data\",\"params\":{\"symbol\":\"BTC/USD\",\"timeframes\":[\"1m\",\"5m\",\"15m\",\"1h\"],\"limit\":200}}, {\"id\":\"req2\",\"tool\":\"get_order_book\",\"params\":{\"symbol\":\"BTC/USD\",\"depth\":50}}]}.\n"
-                "Use only allowed tools: get_market_data, get_order_book, get_recent_trades.\n"
-                "If no extra data is needed, return {\"tool_requests\":[]}."
+            planner_prompt = self._build_prompt(
+                asset_class="crypto" if is_crypto else "stock",
+                equity_line=f"${equity_now:,.2f} USD" if is_crypto else f"${equity_now:,.2f} AUD",
+                market_summary=market_summary or "  - No market data available",
+                max_order_value=f"${MAX_ORDER_VALUE:.2f} USD" if is_crypto else f"${MAX_ORDER_VALUE:.2f} AUD",
+                min_trade_size=f"${MIN_TRADE_SIZE:.2f} USD" if is_crypto else f"${MIN_TRADE_SIZE:.2f} AUD",
+                max_daily_loss=f"{MAX_DAILY_LOSS_PERCENT}% of portfolio" if is_crypto else f"${MAX_DAILY_LOSS:.2f} AUD",
+                available_symbols=", ".join(available_symbols),
+                quantity_guidance=(
+                    "For crypto trading, you can use FRACTIONAL quantities (e.g., 0.001 BTC). "
+                    f"Calculate the appropriate fractional amount to stay within the ${MAX_ORDER_VALUE:.2f} max order value."
+                    if is_crypto
+                    else "For stock trading, quantities must be WHOLE NUMBERS (integers)."
+                ),
+                context_block=f"{context_summary}\n\n" if context_summary else "",
+                regime_flags=(", ".join(f"{k}={v}" for k, v in regime_flags.items()) if regime_flags else "none"),
+                prompt_context_block="",
+                rules_block="",
+                mode_note="",
+                rejection_note="",
+                exposure_headroom=f"${headroom:,.2f}",
+                pending_exposure_budget=f"${pending_buy_exposure:,.2f}",
+                max_open_orders_per_symbol=MAX_POSITIONS,
+                response_instructions=response_instructions_planner,
             )
             try:
                 telemetry_logger.info(
@@ -810,7 +855,6 @@ class LLMStrategy(BaseStrategy):
                     "market_data": market_data,
                     "prompt_context": prompt_context,
                     "context_summary": context_summary,
-                    "indicator_summary": indicator_summary,
                     "open_orders": open_orders,
                     "tool_requests": [tr.model_dump() for tr in tool_requests],
                     "tool_responses": [tr.model_dump() for tr in tool_responses],

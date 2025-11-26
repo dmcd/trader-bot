@@ -1,34 +1,65 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Core loop and orchestration: `strategy_runner.py` (LLM-driven decisions), `strategy.py` (LLMStrategy), `shadow_runner.py` (dry-run), `risk_manager.py` and `cost_tracker.py` (controls), `trading_context.py` and `database.py` (state), `technical_analysis.py` (indicators).
-- Venue adapters: `gemini_trader.py` (ccxt-based) and `ib_trader.py` (ib_insync) with shared `config.py` for limits and API keys.
-- Interfaces: `dashboard.py` (Streamlit monitor), `server.py` (FastMCP tools), `run.sh` (one-shot loop + dashboard).
-- Data and logs: `trading.db` (SQLite), `bot.log` (human-readable), `console.log` (debug).
-- Docs and tests: `docs/strategy.md` plus `test_*.py` modules for unit coverage.
+
+### Core Components
+- **`strategy_runner.py`**: The main orchestration loop. Handles data fetching, risk checks, order placement, and logging.
+- **`strategy.py`**: Contains the `LLMStrategy` class, which interfaces with Gemini 2.5 Flash for decision making.
+- **`risk_manager.py`**: Enforces safety limits (daily loss, max order value, exposure caps).
+- **`cost_tracker.py`**: Tracks trading fees and LLM token usage.
+- **`trading_context.py`**: Manages context for the LLM (open orders, market data summary).
+- **`database.py`**: SQLite database interface for persisting state and logs.
+- **`technical_analysis.py`**: Calculates indicators (RSI, MACD, Bollinger Bands).
+
+### Venue Adapters
+- **`gemini_trader.py`**: Adapter for Gemini Exchange (using `ccxt`). Handles sandbox precision fixes.
+- **`ib_trader.py`**: Adapter for Interactive Brokers (using `ib_insync`).
+- **`config.py`**: Central configuration for API keys, limits, and trading mode.
+
+### Interfaces
+- **`dashboard.py`**: Streamlit dashboard for monitoring and manual control.
+- **`server.py`**: FastMCP server exposing tools for Interactive Brokers.
+- **`run.sh`**: Helper script to launch the strategy loop and dashboard together.
+
+### Data and Logs
+- **`trading.db`**: SQLite database file.
+- **`bot.log`**: Human-readable log of high-level actions and decisions.
+- **`telemetry.log`**: Structured JSON logs for analysis, including full LLM prompts.
+- **`console.log`**: Detailed debug logs capturing stdout/stderr.
 
 ## Build, Test, and Development Commands
-- Install deps: `pip install -r requirements.txt`.
-- Full test suite: `python -m pytest` (use `python -m pytest test_technical_analysis_unit.py` for a targeted file).
-- Run strategy loop only: `python strategy_runner.py`.
-- Run dashboard only: `streamlit run dashboard.py`.
-- MCP server tools (IB): `python server.py`.
-- Combined launcher: `chmod +x run.sh && ./run.sh` (loop + dashboard).
+
+- **Install dependencies**: `pip install -r requirements.txt`
+- **Run tests**: `python -m pytest`
+- **Run specific test**: `python -m pytest test_technical_analysis_unit.py`
+- **Run strategy loop**: `python strategy_runner.py`
+- **Run dashboard**: `streamlit run dashboard.py`
+- **Run MCP server**: `python server.py`
+- **Launch everything**: `./run.sh`
 
 ## Coding Style & Naming Conventions
-- Python 3.10+; 4-space indentation; prefer type hints where practical.
-- Keep functions small with explicit logging instead of print; reuse `logger` from `logger_config.py`.
-- Use descriptive snake_case for variables/functions, CapWords for classes, and align new config flags with existing names in `config.py`.
+
+- **Python**: 3.10+
+- **Indentation**: 4 spaces
+- **Type Hints**: Preferred where practical.
+- **Logging**: Use `logger` from `logger_config.py`. Avoid `print`.
+- **Naming**: Descriptive `snake_case` for variables/functions, `CapWords` for classes.
+- **Config**: Align new configuration flags with existing patterns in `config.py`.
 
 ## Testing Guidelines
-- Framework: pytest; place new tests in `test_*.py` alongside existing unit files.
-- Name tests for behavior (e.g., `test_stop_target_clamping_when_price_moves`).
-- When adding risk or sizing logic, include regression tests and run `python -m pytest` before pushing.
+
+- **Framework**: `pytest`.
+- **Location**: Place new tests in `test_*.py` files.
+- **Scope**: Name tests for behavior (e.g., `test_stop_target_clamping_when_price_moves`).
+- **Regression**: Always run the full suite (`python -m pytest`) before pushing changes, especially for risk or sizing logic.
 
 ## Commit & Pull Request Guidelines
-- Commits: concise, present-tense summaries (e.g., "Clamp stop/target band"), scoped to a single concern when possible.
-- PRs: include a short description, key risk considerations, tests run (`pytest` output), and screenshots/GIFs for dashboard changes.
+
+- **Commits**: Concise, present-tense summaries (e.g., "Clamp stop/target band"). Scope to a single concern.
+- **PRs**: Include a short description, key risk considerations, test output, and screenshots for UI changes.
 
 ## Security & Configuration Tips
-- Secrets live in `.env`; never commit keys. Review `config.py` for all tunables (caps, fee overrides, cadence).
-- Verify venue choice via `ACTIVE_EXCHANGE` and `TRADING_MODE`; paper/live settings change API endpoints and limits.
+
+- **Secrets**: Store in `.env`. Never commit API keys.
+- **Tunables**: Review `config.py` for all adjustable parameters (caps, fees, cadence).
+- **Venues**: Verify `ACTIVE_EXCHANGE` and `TRADING_MODE` in `.env`. Paper and Live modes use different endpoints and limits.

@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import google.generativeai as genai
 import jsonschema
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from config import (
     GEMINI_API_KEY,
     MAX_ORDER_VALUE,
@@ -34,7 +34,7 @@ from config import (
     TOOL_MAX_TRADES,
     TOOL_MAX_JSON_BYTES,
 )
-from llm_tools import ToolRequest, ToolResponse, ToolName
+from llm_tools import TOOL_PARAM_MODELS, ToolRequest, ToolResponse, ToolName
 
 logger = logging.getLogger(__name__)
 telemetry_logger = logging.getLogger('telemetry')
@@ -592,9 +592,21 @@ class LLMStrategy(BaseStrategy):
         requests: List[ToolRequest] = []
         for item in tool_items:
             try:
+                tool = item.get("tool") if isinstance(item, dict) else None
+                target_model = TOOL_PARAM_MODELS.get(tool) if tool else None
+                params = item.get("params") if isinstance(item, dict) else None
+                if target_model and params is not None:
+                    if isinstance(params, BaseModel):
+                        params = params.model_dump()
+                    if isinstance(params, dict):
+                        allowed = set(target_model.model_fields.keys())
+                        params = {k: v for k, v in params.items() if k in allowed}
+                        item = dict(item)
+                        item["params"] = params
                 requests.append(ToolRequest.model_validate(item))
             except ValidationError as exc:
                 logger.warning(f"Tool request validation failed: {exc}")
+                bot_actions_logger.info("⚠️ LLM tool request rejected (see console.log for details)")
         return requests
 
     async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0):
@@ -824,6 +836,7 @@ class LLMStrategy(BaseStrategy):
                     )
                 except Exception as e:
                     logger.warning(f"Tool fetch failed: {e}")
+                    bot_actions_logger.info("⚠️ Tool fetch failed (check console.log for details)")
 
         decision_prompt = base_prompt
         if tool_responses:

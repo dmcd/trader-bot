@@ -40,6 +40,9 @@ TOOL_MAX_BARS = int(os.getenv('TOOL_MAX_BARS', '2000'))  # cap per-timeframe bar
 TOOL_MAX_TRADES = int(os.getenv('TOOL_MAX_TRADES', '500'))  # cap recent trades returned
 TOOL_MAX_DEPTH = int(os.getenv('TOOL_MAX_DEPTH', '200'))  # cap order book depth levels
 TOOL_DEFAULT_TIMEFRAMES = os.getenv('TOOL_DEFAULT_TIMEFRAMES', '1m,5m,15m,1h,6h,1d').split(',')
+# Allowed/whitelisted timeframes for market data fetches. Values not in this list
+# will be dropped during tool request normalization.
+TOOL_ALLOWED_TIMEFRAMES = os.getenv('TOOL_ALLOWED_TIMEFRAMES', '1m,5m,15m,30m,1h,6h,1d').split(',')
 TOOL_MAX_JSON_BYTES = int(os.getenv('TOOL_MAX_JSON_BYTES', '200000'))  # fail-safe cap on JSON payload size
 TOOL_CACHE_TTL_SECONDS = int(os.getenv('TOOL_CACHE_TTL_SECONDS', '5'))  # reuse fresh fetches within this window
 

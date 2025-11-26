@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from config import (
+    TOOL_ALLOWED_TIMEFRAMES,
     TOOL_DEFAULT_TIMEFRAMES,
     TOOL_MAX_BARS,
     TOOL_MAX_DEPTH,
@@ -17,17 +18,49 @@ logger = logging.getLogger(__name__)
 
 
 def _clean_timeframes(raw: List[str]) -> List[str]:
-    cleaned = []
+    """
+    Normalize and filter timeframes to a whitelisted set.
+
+    - Trims whitespace
+    - Maps common aliases (1hr -> 1h, 1day -> 1d, 6hr -> 6h)
+    - Drops unsupported entries (e.g., 4h on Gemini)
+    """
+    alias_map = {
+        "1hr": "1h",
+        "1hour": "1h",
+        "1day": "1d",
+        "1d": "1d",
+        "6hr": "6h",
+        "6hour": "6h",
+        "30min": "30m",
+        "30m": "30m",
+        "15min": "15m",
+        "15m": "15m",
+        "5min": "5m",
+        "5m": "5m",
+        "1min": "1m",
+        "1m": "1m",
+    }
+
+    allowed_raw = [tf.strip() for tf in TOOL_ALLOWED_TIMEFRAMES if tf and tf.strip()]
+    allowed_map = {tf.lower(): tf for tf in allowed_raw}
+
+    normalized: List[str] = []
     for tf in raw:
         if not tf:
             continue
-        trimmed = tf.strip()
-        if trimmed:
-            cleaned.append(trimmed)
+        trimmed = tf.strip().lower()
+        if not trimmed:
+            continue
+        canonical = alias_map.get(trimmed, trimmed)
+        allowed_value = allowed_map.get(canonical)
+        if allowed_value:
+            normalized.append(allowed_value)
+
     # Deduplicate while preserving order
     seen = set()
     ordered = []
-    for tf in cleaned:
+    for tf in normalized:
         if tf not in seen:
             seen.add(tf)
             ordered.append(tf)

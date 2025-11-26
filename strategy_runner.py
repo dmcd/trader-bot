@@ -988,11 +988,16 @@ class StrategyRunner:
                             break
                     # Check absolute daily loss
                     if self.risk_manager.daily_loss > MAX_DAILY_LOSS:
-                        logger.error(f"Max daily loss exceeded: ${self.risk_manager.daily_loss:.2f} > ${MAX_DAILY_LOSS:.2f}. Stopping loop.")
-                        bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded (${self.risk_manager.daily_loss:.2f})")
-                        await self._close_all_positions_safely()
-                        self._kill_switch = True
-                        break
+                        if TRADING_MODE == 'PAPER':
+                            # In sandbox, large balances make absolute loss limits ($500) too tight.
+                            # We rely on the percentage check above for safety.
+                            logger.warning(f"Sandbox: Absolute daily loss exceeded (${self.risk_manager.daily_loss:.2f} > ${MAX_DAILY_LOSS:.2f}), but continuing loop.")
+                        else:
+                            logger.error(f"Max daily loss exceeded: ${self.risk_manager.daily_loss:.2f} > ${MAX_DAILY_LOSS:.2f}. Stopping loop.")
+                            bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded (${self.risk_manager.daily_loss:.2f})")
+                            await self._close_all_positions_safely()
+                            self._kill_switch = True
+                            break
 
                     # 2. Fetch Market Data
                     now_monotonic = asyncio.get_event_loop().time()

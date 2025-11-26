@@ -34,6 +34,12 @@ class StubExchange:
         ]
 
 
+class NoOhlcvExchange(StubExchange):
+    async def fetch_ohlcv(self, symbol, timeframe, limit):
+        self.ohlcv_calls += 1
+        return []
+
+
 @pytest.mark.asyncio
 async def test_market_data_uses_cache_between_calls():
     exchange = StubExchange()
@@ -79,3 +85,20 @@ def test_normalize_trades_truncates():
     shaped = normalize_trades(raw, requested_limit=2, max_trades=2)
     assert shaped["returned"] == 2
     assert shaped["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_fallback_trades_to_candles_when_ohlcv_empty():
+    exchange = NoOhlcvExchange()
+    coordinator = DataFetchCoordinator(exchange, cache_ttl_seconds=0)
+    params = ToolRequest(
+        id="m1",
+        tool=ToolName.GET_MARKET_DATA,
+        params={"symbol": "BTC/USD", "timeframes": ["1m"], "limit": 2},
+    ).params
+
+    data = await coordinator.fetch_market_data(params)
+    tf_data = data["timeframes"]["1m"]
+    assert tf_data["returned"] == 2 or tf_data["returned"] == 1
+    # Ensure trades fallback was used when OHLCV empty
+    assert exchange.trade_calls > 0

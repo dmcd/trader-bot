@@ -1,7 +1,8 @@
 import asyncio
 import logging
+import math
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from config import (
     TOOL_CACHE_TTL_SECONDS,
@@ -77,6 +78,50 @@ class DataFetchCoordinator:
             raise RuntimeError("Exchange does not support fetch_trades")
         return await self.exchange.fetch_trades(symbol, limit=limit)
 
+    @staticmethod
+    def _timeframe_ms(timeframe: str) -> int:
+        """Convert ccxt-style timeframe to milliseconds."""
+        units = {"m": 60_000, "h": 3_600_000, "d": 86_400_000}
+        if not timeframe or timeframe[-1] not in units:
+            raise ValueError(f"Unsupported timeframe: {timeframe}")
+        try:
+            value = int(timeframe[:-1])
+        except ValueError as exc:
+            raise ValueError(f"Unsupported timeframe: {timeframe}") from exc
+        return value * units[timeframe[-1]]
+
+    def _build_candles_from_trades(
+        self, trades: List[Dict[str, Any]], timeframe: str, limit: int
+    ) -> List[List[Any]]:
+        """Fallback candle builder from trades (IB-style)."""
+        if not trades:
+            return []
+        frame_ms = self._timeframe_ms(timeframe)
+        buckets: Dict[int, List[Tuple[int, float, float]]] = {}
+        for trade in trades:
+            ts = trade.get("timestamp") or trade.get("ts")
+            price = trade.get("price")
+            size = trade.get("amount") or trade.get("size")
+            if ts is None or price is None or size is None:
+                continue
+            bucket = int(math.floor(ts / frame_ms) * frame_ms)
+            buckets.setdefault(bucket, []).append((int(ts), float(price), float(size)))
+
+        candles: List[List[Any]] = []
+        for bucket_ts, points in buckets.items():
+            points_sorted = sorted(points, key=lambda p: p[0])
+            prices = [p[1] for p in points_sorted]
+            sizes = [p[2] for p in points_sorted]
+            o = prices[0]
+            h = max(prices)
+            l = min(prices)
+            c = prices[-1]
+            v = sum(sizes)
+            candles.append([bucket_ts, o, h, l, c, v])
+
+        candles_sorted = sorted(candles, key=lambda c: c[0], reverse=False)
+        return candles_sorted[-limit:]
+
     async def fetch_market_data(self, params: MarketDataParams) -> Dict[str, Any]:
         limit = min(params.limit, self.max_bars)
         results: Dict[str, Any] = {"symbol": params.symbol, "timeframes": {}}
@@ -99,12 +144,23 @@ class DataFetchCoordinator:
         for tf, task in pending:
             try:
                 data = await task
+                if not data:
+                    raise ValueError("Empty OHLCV response")
                 shaped = normalize_candles(data, tf, params.limit, self.max_bars)
                 self._cache_set(f"ohlcv:{params.symbol}:{tf}:{limit}", shaped)
                 results["timeframes"][tf] = shaped
             except Exception as exc:
                 logger.warning(f"OHLCV fetch failed for {params.symbol} {tf}: {exc}")
-                results["timeframes"][tf] = {"error": str(exc), "timeframe": tf, "candles": []}
+                # Fallback: build candles from trades when available
+                try:
+                    trades_raw = await self._fetch_recent_trades(params.symbol, limit)
+                    fallback = self._build_candles_from_trades(trades_raw, tf, limit)
+                    shaped = normalize_candles(fallback, tf, params.limit, self.max_bars)
+                    self._cache_set(f"ohlcv:{params.symbol}:{tf}:{limit}", shaped)
+                    results["timeframes"][tf] = shaped
+                except Exception as inner_exc:
+                    logger.warning(f"Fallback trades->candles failed for {params.symbol} {tf}: {inner_exc}")
+                    results["timeframes"][tf] = {"error": str(exc), "timeframe": tf, "candles": []}
         return results
 
     async def fetch_order_book(self, params: OrderBookParams) -> Dict[str, Any]:

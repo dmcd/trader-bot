@@ -28,7 +28,7 @@ Goal: stop inlining thin snapshots into the prompt and instead let the LLM pull 
 ### Execution checklist
 - [x] Add Pydantic tool schemas for `get_market_data`, `get_order_book`, `get_recent_trades` with param bounds (timeframes, max bars, depth caps, symbol allowlist).
 - [x] Create `DataFetchCoordinator` to fan out tool requests, hit caches, and apply rate limits; return normalized JSON + truncation metadata.
-- [ ] Implement ccxt-backed OHLCV fetch with multi-timeframe support and volume; fall back to tick-to-candle builder for IB gaps.
+- [x] Implement ccxt-backed OHLCV fetch with multi-timeframe support and volume; fall back to tick-to-candle builder for IB gaps.
 - [x] Add recent trades/tape fetch and normalize fields (ts, side, price, size).
 - [x] Add full-depth order book fetch with configurable depth (10/50/200) and derived metrics (mid, spread_bps, top depth, imbalance).
 - [x] Build response-shaping helpers for candles/books/trades to enforce consistent field names and checksums/truncation flags.

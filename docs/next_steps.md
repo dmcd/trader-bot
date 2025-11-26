@@ -25,3 +25,7 @@
 2) Implement runner-level integration test and a basic backtest harness using recorded ccxt data.  
 3) Layer deterministic overlays (min RR, slippage check vs. decision price, anti-stack rules) before execution.  
 4) Run paper sessions with telemetry review; optionally add a simple pause/HOLD control once tools are stable.  
+
+### Findings from latest code review
+- `llm_tools.py`: `clamp_payload_size` only annotates `truncated=True` without shrinking the payload, so oversized tool responses still exceed `TOOL_MAX_JSON_BYTES`; implement actual trimming before returning to the LLM.
+- `strategy_runner.py`: `_passes_rr_filter` returns `True` when risk is zero/negative, allowing stop/target on the wrong side of entry; tighten to reject invalid RR inputs instead of letting them pass risk gating.

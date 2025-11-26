@@ -595,13 +595,21 @@ class LLMStrategy(BaseStrategy):
                 tool = item.get("tool") if isinstance(item, dict) else None
                 target_model = TOOL_PARAM_MODELS.get(tool) if tool else None
                 params = item.get("params") if isinstance(item, dict) else None
+                
                 if target_model and params is not None:
                     if isinstance(params, BaseModel):
                         params = params.model_dump()
                     if isinstance(params, dict):
+                        # 1. Handle timeframes being a single string instead of a list
+                        if "timeframes" in params and isinstance(params["timeframes"], str):
+                            # Split by comma if present, otherwise treat as single item list
+                            tf_str = params["timeframes"]
+                            params["timeframes"] = [t.strip() for t in tf_str.split(",")] if "," in tf_str else [tf_str]
+
                         allowed = set(target_model.model_fields.keys())
-                        # Drop fields that do not belong to the target model (e.g., timeframes on order book).
+                        # Drop fields that do not belong to the target model
                         params = {k: v for k, v in params.items() if k in allowed}
+                        
                         # Coerce numeric params that may be supplied as strings or dicts by the LLM.
                         for numeric_field in ("limit", "depth"):
                             if numeric_field in params:
@@ -613,15 +621,23 @@ class LLMStrategy(BaseStrategy):
                                     ]
                                     params[numeric_field] = max(numeric_values) if numeric_values else None
                                 elif isinstance(value, str):
-                                    params[numeric_field] = int(float(value)) if value.strip() else None
+                                    # Handle "100" or "100.0"
+                                    try:
+                                        params[numeric_field] = int(float(value))
+                                    except ValueError:
+                                        params[numeric_field] = None
+                        
                         # Remove any None coercions to let defaults apply.
                         params = {k: v for k, v in params.items() if v is not None}
                         item = dict(item)
                         item["params"] = params
+                
                 requests.append(ToolRequest.model_validate(item))
             except ValidationError as exc:
-                logger.warning(f"Tool request validation failed: {exc}")
-                bot_actions_logger.info("⚠️ LLM tool request rejected (see console.log for details)")
+                # Log the specific item that failed for better debugging
+                logger.warning(f"Tool request validation failed for item: {json.dumps(item)} - Error: {exc}")
+                # Don't spam the main bot log, but keep it in debug or a specific logger if needed
+                # bot_actions_logger.info("⚠️ LLM tool request rejected (see console.log for details)")
         return requests
 
     async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0):

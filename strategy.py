@@ -600,7 +600,22 @@ class LLMStrategy(BaseStrategy):
                         params = params.model_dump()
                     if isinstance(params, dict):
                         allowed = set(target_model.model_fields.keys())
+                        # Drop fields that do not belong to the target model (e.g., timeframes on order book).
                         params = {k: v for k, v in params.items() if k in allowed}
+                        # Coerce numeric params that may be supplied as strings or dicts by the LLM.
+                        for numeric_field in ("limit", "depth"):
+                            if numeric_field in params:
+                                value = params[numeric_field]
+                                if isinstance(value, dict):
+                                    # Pick the largest numeric value if a timeframe keyed dict slipped through.
+                                    numeric_values = [
+                                        v for v in value.values() if isinstance(v, (int, float))
+                                    ]
+                                    params[numeric_field] = max(numeric_values) if numeric_values else None
+                                elif isinstance(value, str):
+                                    params[numeric_field] = int(float(value)) if value.strip() else None
+                        # Remove any None coercions to let defaults apply.
+                        params = {k: v for k, v in params.items() if v is not None}
                         item = dict(item)
                         item["params"] = params
                 requests.append(ToolRequest.model_validate(item))

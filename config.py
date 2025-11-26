@@ -35,6 +35,14 @@ BREAK_GLASS_SIZE_FACTOR = float(os.getenv('BREAK_GLASS_SIZE_FACTOR', '0.6'))  # 
 MAX_SPREAD_PCT = float(os.getenv('MAX_SPREAD_PCT', '0.20'))  # Skip trading if spread exceeds this % of mid
 MIN_TOP_OF_BOOK_NOTIONAL = float(os.getenv('MIN_TOP_OF_BOOK_NOTIONAL', '100.0'))  # Require at least this notional at best bid/ask
 
+# LLM tool/data fetch limits
+TOOL_MAX_BARS = int(os.getenv('TOOL_MAX_BARS', '2000'))  # cap per-timeframe bars returned to the LLM
+TOOL_MAX_TRADES = int(os.getenv('TOOL_MAX_TRADES', '500'))  # cap recent trades returned
+TOOL_MAX_DEPTH = int(os.getenv('TOOL_MAX_DEPTH', '200'))  # cap order book depth levels
+TOOL_DEFAULT_TIMEFRAMES = os.getenv('TOOL_DEFAULT_TIMEFRAMES', '1m,5m,15m,1h,4h,1d').split(',')
+TOOL_MAX_JSON_BYTES = int(os.getenv('TOOL_MAX_JSON_BYTES', '200000'))  # fail-safe cap on JSON payload size
+TOOL_CACHE_TTL_SECONDS = int(os.getenv('TOOL_CACHE_TTL_SECONDS', '5'))  # reuse fresh fetches within this window
+
 # API Keys
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '') # LLM Key
 GEMINI_EXCHANGE_API_KEY = os.getenv('GEMINI_EXCHANGE_API_KEY', '') # Trading Key

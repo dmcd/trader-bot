@@ -850,7 +850,8 @@ class StrategyRunner:
                     reason,
                     liquidity=liquidity,
                     realized_pnl=realized_pnl,
-                    trade_id=trade_id
+                    trade_id=trade_id,
+                    timestamp=t.get('datetime')
                 )
                 self._apply_fill_to_session_stats(order_id, fee, realized_pnl)
                 self.processed_trade_ids.add(trade_id)

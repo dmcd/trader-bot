@@ -288,7 +288,7 @@ class TradingDatabase:
         return dict(row) if row else None
     
     def log_trade(self, session_id: int, symbol: str, action: str, 
-                  quantity: float, price: float, fee: float, reason: str = "", liquidity: str = "unknown", realized_pnl: float = 0.0, trade_id: str = None):
+                  quantity: float, price: float, fee: float, reason: str = "", liquidity: str = "unknown", realized_pnl: float = 0.0, trade_id: str = None, timestamp: str = None):
         """Log a trade to the database."""
         cursor = self.conn.cursor()
         
@@ -299,10 +299,12 @@ class TradingDatabase:
                 logger.debug(f"Skipping duplicate trade {trade_id}")
                 return
 
+        ts = timestamp if timestamp else datetime.now().isoformat()
+
         cursor.execute("""
             INSERT INTO trades (session_id, timestamp, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, datetime.now().isoformat(), symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id))
+        """, (session_id, ts, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id))
         
         # Update session trade count and fees
         cursor.execute("""

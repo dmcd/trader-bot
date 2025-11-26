@@ -17,7 +17,7 @@
 
 ### Opinionated assessment
 - Strengths: solid logging scaffolding (telemetry + traces), move to tool-driven data (full books, multi-timeframe OHLCV), and risk primitives already present (caps, cooldowns). The trades→candles fallback reduces exchange gaps.
-- Gaps: no proof of edge yet—LLM decisions are untested vs. baseline strategies. Execution layer still thin on slippage/latency modeling. IB support remains partial until ticks/trades are wired. Tool allowlists/rate limits need tightening to be production-safe.
+- Gaps: no proof of edge yet—LLM decisions are untested vs. baseline strategies. Execution layer still thin on slippage/latency modeling. Tool allowlists/rate limits need tightening to be production-safe.
 - Path to profitability: decouple “idea generation” (LLM narrative/tool requests) from “order auth” (deterministic filters on RR, vol-adjusted sizing, slippage guard). Build a replay harness to measure Sharpe/EV before risking capital. Keep session-level budget for LLM cost and reject churn.
 
 ### Suggested immediate steps

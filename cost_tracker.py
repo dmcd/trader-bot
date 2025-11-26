@@ -41,13 +41,7 @@ class CostTracker:
             logger.debug(f"Gemini fee: ${fee:.4f} ({self.fee_rates['GEMINI']['taker']*100}% of ${trade_value:.2f})")
             return fee
         
-        elif self.exchange == 'IB':
-            # Stocks: per-share fee
-            fee = quantity * self.fee_rates['IB']['stock_per_share']
-            # Apply minimum fee
-            fee = max(fee, self.fee_rates['IB']['min_fee'])
-            logger.debug(f"IB fee: ${fee:.4f} (${self.fee_rates['IB']['stock_per_share']}/share * {quantity} shares)")
-            return fee
+
         
         else:
             logger.warning(f"Unknown exchange: {self.exchange}, assuming no fees")

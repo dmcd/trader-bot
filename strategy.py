@@ -90,7 +90,7 @@ class LLMStrategy(BaseStrategy):
                 "close_fraction": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
                 "duration_minutes": {"type": ["number", "null"], "minimum": 1}
             },
-            "required": ["action", "symbol", "quantity", "reason"],
+            "required": ["action", "symbol", "reason"],
             "additionalProperties": False
         }
 

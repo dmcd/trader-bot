@@ -33,6 +33,7 @@ from llm_tools import ToolRequest, ToolResponse, ToolName
 
 logger = logging.getLogger(__name__)
 telemetry_logger = logging.getLogger('telemetry')
+bot_actions_logger = logging.getLogger('bot_actions')
 
 class StrategySignal:
     def __init__(self, action: str, symbol: str, quantity: float, reason: str, order_id=None, trace_id: int = None, regime_flags: Dict[str, str] = None):
@@ -744,6 +745,12 @@ class LLMStrategy(BaseStrategy):
                 self._log_llm_usage(session_id, planner_response, planner_response.text)
                 planner_payload = self._extract_json_payload(planner_response.text)
                 tool_requests = self._parse_tool_requests(planner_payload)
+                if tool_requests:
+                    summary = "; ".join(
+                        f"{tr.tool.value}({getattr(tr.params, 'symbol', '')})"
+                        for tr in tool_requests
+                    )
+                    bot_actions_logger.info(f"🛠️ LLM requested tools: {summary}")
                 telemetry_logger.info(
                     json.dumps(
                         {

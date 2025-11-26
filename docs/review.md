@@ -32,9 +32,9 @@ Goal: stop inlining thin snapshots into the prompt and instead let the LLM pull 
 - [x] Add recent trades/tape fetch and normalize fields (ts, side, price, size).
 - [x] Add full-depth order book fetch with configurable depth (10/50/200) and derived metrics (mid, spread_bps, top depth, imbalance).
 - [x] Build response-shaping helpers for candles/books/trades to enforce consistent field names and checksums/truncation flags.
-- [ ] Update LLM turn protocol: planner turn accepts tool requests; runner replies with tool responses plus brief context header; decision turn consumes JSON only.
-- [ ] Wire new protocol into `strategy_runner.py` and `strategy.py` (planner→data→decision flow), keeping execution authority in Python.
+- [x] Update LLM turn protocol: planner turn accepts tool requests; runner replies with tool responses plus brief context header; decision turn consumes JSON only.
+- [x] Wire new protocol into `strategy_runner.py` and `strategy.py` (planner→data→decision flow), keeping execution authority in Python.
 - [x] Add config knobs in `config.py` for max bars per timeframe, max depth, max JSON bytes, and per-tool rate limits.
-- [ ] Extend telemetry (`llm_traces.log`/DB) to persist full tool request/response envelopes and costs; redact secrets.
+- [x] Extend telemetry (`llm_traces.log`/DB) to persist full tool request/response envelopes and costs; redact secrets.
 - [x] Add unit tests for tool schema validation, response shaping, and `DataFetchCoordinator` caching/truncation behavior.
-- [ ] Add integration test that simulates an LLM requesting multi-timeframe data + order book and receiving normalized JSON.
+- [x] Add integration test that simulates an LLM requesting multi-timeframe data + order book and receiving normalized JSON.

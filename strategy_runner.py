@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import google.generativeai as genai
 
 from gemini_trader import GeminiTrader
+from data_fetch_coordinator import DataFetchCoordinator
 from risk_manager import RiskManager
 from database import TradingDatabase
 from cost_tracker import CostTracker
@@ -75,6 +76,7 @@ class StrategyRunner:
         self.session_id = None
         self.context = None
         self.session = None
+        self.data_fetch_coordinator = None
         # Simple in-memory holdings tracker for realized PnL
         self.holdings = {}  # symbol -> {'qty': float, 'avg_cost': float}
         # Track estimated fees per order so we can reconcile with actual fills
@@ -89,6 +91,7 @@ class StrategyRunner:
             self.cost_tracker,
             open_orders_provider=self.bot.get_open_orders_async,
             ohlcv_provider=self.bot.fetch_ohlcv,
+            tool_coordinator=None,  # set post-connect when exchange is ready
         )
         
         # Trade syncing state
@@ -503,6 +506,12 @@ class StrategyRunner:
         
         # Connect to the active exchange
         await self.bot.connect_async()
+
+        # Initialize tool coordinator after exchange connection
+        if getattr(self.bot, "exchange", None):
+            self.data_fetch_coordinator = DataFetchCoordinator(self.bot.exchange)
+            # Wire into strategy
+            self.strategy.tool_coordinator = self.data_fetch_coordinator
         
         # Get initial equity (full account value)
         initial_equity = await self.bot.get_equity_async()

@@ -1,6 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import asyncio
 import json
 import math
@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import google.generativeai as genai
 import jsonschema
+from pydantic import ValidationError
 from config import (
     GEMINI_API_KEY,
     MAX_ORDER_VALUE,
@@ -28,6 +29,7 @@ from config import (
     MAX_POSITIONS,
     MAX_SPREAD_PCT,
 )
+from llm_tools import ToolRequest, ToolResponse, ToolName
 
 logger = logging.getLogger(__name__)
 telemetry_logger = logging.getLogger('telemetry')
@@ -59,7 +61,7 @@ class BaseStrategy(ABC):
         pass
 
 class LLMStrategy(BaseStrategy):
-    def __init__(self, db, technical_analysis, cost_tracker, open_orders_provider=None, ohlcv_provider=None):
+    def __init__(self, db, technical_analysis, cost_tracker, open_orders_provider=None, ohlcv_provider=None, tool_coordinator=None):
         super().__init__(db, technical_analysis, cost_tracker)
         self.model = genai.GenerativeModel('gemini-2.5-flash')
         if GEMINI_API_KEY:
@@ -74,6 +76,8 @@ class LLMStrategy(BaseStrategy):
         self.open_orders_provider = open_orders_provider
         # Optional async callable that fetches OHLCV data
         self.ohlcv_provider = ohlcv_provider
+        # Optional tool coordinator for LLM tool requests
+        self.tool_coordinator = tool_coordinator
         self.prompt_template = self._load_prompt_template()
         self._decision_schema = {
             "type": "object",
@@ -549,6 +553,44 @@ class LLMStrategy(BaseStrategy):
 
         return self.prompt_template.format_map(_SafeDict(**kwargs))
 
+    async def _invoke_llm(self, prompt: str, timeout: int = 30):
+        """Invoke the LLM with a timeout."""
+        return await asyncio.wait_for(
+            asyncio.to_thread(self.model.generate_content, prompt),
+            timeout=timeout,
+        )
+
+    def _log_llm_usage(self, session_id: int, response: Any, response_text: str):
+        """Record token usage and partial response to DB."""
+        if not hasattr(response, "usage_metadata") or not session_id:
+            return
+        try:
+            input_tokens = response.usage_metadata.prompt_token_count
+            output_tokens = response.usage_metadata.candidates_token_count
+            cost = self.cost_tracker.calculate_llm_cost(input_tokens, output_tokens)
+            self.db.log_llm_call(session_id, input_tokens, output_tokens, cost, response_text[:500])
+        except Exception as e:
+            logger.warning(f"Error tracking LLM usage: {e}")
+
+    def _parse_tool_requests(self, payload: str) -> List[ToolRequest]:
+        """Parse tool_requests JSON into validated ToolRequest objects."""
+        if not payload:
+            return []
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError:
+            return []
+        tool_items = parsed.get("tool_requests") if isinstance(parsed, dict) else None
+        if not tool_items:
+            return []
+        requests: List[ToolRequest] = []
+        for item in tool_items:
+            try:
+                requests.append(ToolRequest.model_validate(item))
+            except ValidationError as exc:
+                logger.warning(f"Tool request validation failed: {exc}")
+        return requests
+
     async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0):
         """Asks Gemini for a trading decision and logs full prompt/response; returns (decision_json, trace_id)."""
         if not GEMINI_API_KEY:
@@ -642,7 +684,7 @@ class LLMStrategy(BaseStrategy):
             )
             self.last_rejection_reason = None
 
-        prompt = self._build_prompt(
+        base_prompt = self._build_prompt(
             asset_class="crypto" if is_crypto else "stock",
             equity_line=f"${equity_now:,.2f} USD" if is_crypto else f"${equity_now:,.2f} AUD",
             market_summary=market_summary or "  - No market data available",
@@ -669,36 +711,93 @@ class LLMStrategy(BaseStrategy):
             max_open_orders_per_symbol=MAX_POSITIONS,
         )
 
-        # Log full prompt to telemetry
+        trace_id = None
+        tool_requests: List[ToolRequest] = []
+        tool_responses: List[ToolResponse] = []
+
+        # Planner turn to request tools when coordinator is available
+        if self.tool_coordinator:
+            planner_prompt = (
+                base_prompt
+                + "\n\nTOOL PLANNER:\n"
+                "If you need more data, return JSON: {\"tool_requests\":[{\"id\":\"req1\",\"tool\":\"get_market_data\",\"params\":{\"symbol\":\"BTC/USD\",\"timeframes\":[\"1m\",\"5m\",\"15m\",\"1h\"],\"limit\":200}}, {\"id\":\"req2\",\"tool\":\"get_order_book\",\"params\":{\"symbol\":\"BTC/USD\",\"depth\":50}}]}.\n"
+                "Use only allowed tools: get_market_data, get_order_book, get_recent_trades.\n"
+                "If no extra data is needed, return {\"tool_requests\":[]}."
+            )
+            try:
+                telemetry_logger.info(
+                    json.dumps(
+                        {
+                            "type": "llm_prompt",
+                            "role": "planner",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "session_id": session_id,
+                            "prompt": planner_prompt,
+                        }
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Failed to log planner prompt: {e}")
+
+            try:
+                planner_response = await self._invoke_llm(planner_prompt)
+                self._log_llm_usage(session_id, planner_response, planner_response.text)
+                planner_payload = self._extract_json_payload(planner_response.text)
+                tool_requests = self._parse_tool_requests(planner_payload)
+                telemetry_logger.info(
+                    json.dumps(
+                        {
+                            "type": "llm_tool_requests",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "session_id": session_id,
+                            "tool_requests": [tr.model_dump() for tr in tool_requests],
+                        }
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Planner turn failed: {e}")
+
+            if tool_requests:
+                try:
+                    tool_responses = await self.tool_coordinator.handle_requests(tool_requests)
+                    telemetry_logger.info(
+                        json.dumps(
+                            {
+                                "type": "llm_tool_responses",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "session_id": session_id,
+                                "tool_responses": [tr.model_dump() for tr in tool_responses],
+                            }
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"Tool fetch failed: {e}")
+
+        decision_prompt = base_prompt
+        if tool_responses:
+            decision_prompt += "\n\nTOOL RESPONSES (JSON):\n"
+            decision_prompt += json.dumps([r.model_dump() for r in tool_responses], default=str) + "\n"
+            decision_prompt += "Use the tool_responses above to make your decision.\n"
+
+        # Log full decision prompt to telemetry
         try:
             prompt_log = {
                 "type": "llm_prompt",
+                "role": "decision",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "session_id": session_id,
-                "prompt": prompt
+                "prompt": decision_prompt
             }
             telemetry_logger.info(json.dumps(prompt_log, default=str))
         except Exception as e:
             logger.warning(f"Failed to log LLM prompt to telemetry: {e}")
-            
+
         try:
-            response = await asyncio.wait_for(
-                asyncio.to_thread(self.model.generate_content, prompt),
-                timeout=30
-            )
-            
-            if hasattr(response, 'usage_metadata') and session_id:
-                try:
-                    input_tokens = response.usage_metadata.prompt_token_count
-                    output_tokens = response.usage_metadata.candidates_token_count
-                    cost = self.cost_tracker.calculate_llm_cost(input_tokens, output_tokens)
-                    self.db.log_llm_call(session_id, input_tokens, output_tokens, cost, response.text[:500])
-                except Exception as e:
-                    logger.warning(f"Error tracking LLM usage: {e}")
-            
+            response = await self._invoke_llm(decision_prompt)
+            self._log_llm_usage(session_id, response, response.text)
+
             text = self._extract_json_payload(response.text)
 
-            trace_id = None
             try:
                 market_context = {
                     "market_data": market_data,
@@ -706,10 +805,12 @@ class LLMStrategy(BaseStrategy):
                     "context_summary": context_summary,
                     "indicator_summary": indicator_summary,
                     "open_orders": open_orders,
+                    "tool_requests": [tr.model_dump() for tr in tool_requests],
+                    "tool_responses": [tr.model_dump() for tr in tool_responses],
                 }
                 trace_id = self.db.log_llm_trace(
                     session_id,
-                    prompt,
+                    decision_prompt,
                     response.text,
                     decision_json=text,
                     market_context=market_context,

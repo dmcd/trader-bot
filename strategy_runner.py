@@ -6,7 +6,7 @@ import sys
 import json
 from datetime import datetime, timezone
 import google.generativeai as genai
-from ib_trader import IBTrader
+
 from gemini_trader import GeminiTrader
 from risk_manager import RiskManager
 from database import TradingDatabase
@@ -54,14 +54,15 @@ if GEMINI_API_KEY:
 class StrategyRunner:
     def __init__(self, execute_orders: bool = True):
         # Only instantiate the bot for the active exchange
-        if ACTIVE_EXCHANGE == 'IB':
-            self.bot = IBTrader()
-            self.exchange_name = 'IB'
-        elif ACTIVE_EXCHANGE == 'GEMINI':
+        # Only instantiate the bot for the active exchange
+        if ACTIVE_EXCHANGE == 'GEMINI':
             self.bot = GeminiTrader()
             self.exchange_name = 'GEMINI'
         else:
-            raise ValueError(f"Invalid ACTIVE_EXCHANGE: {ACTIVE_EXCHANGE}. Must be 'IB' or 'GEMINI'")
+            # Default to Gemini if not specified or invalid
+            logger.warning(f"Unknown ACTIVE_EXCHANGE '{ACTIVE_EXCHANGE}', defaulting to GEMINI")
+            self.bot = GeminiTrader()
+            self.exchange_name = 'GEMINI'
         
         self.risk_manager = RiskManager(self.bot)
         self.running = False
@@ -542,7 +543,7 @@ class StrategyRunner:
             
             # 2. Fetch trades for the day
             # Assuming BTC/USD for now as per original code
-            symbol = 'BTC/USD' if ACTIVE_EXCHANGE == 'GEMINI' else 'BHP' 
+            symbol = 'BTC/USD'
             trades = await self.bot.get_trades_from_timestamp(symbol, start_ts_ms)
             
             # 3. Rebuild Holdings and Stats
@@ -994,10 +995,7 @@ class StrategyRunner:
                     market_data = {}
                     
                     # Determine which symbol to fetch based on exchange
-                    if ACTIVE_EXCHANGE == 'IB':
-                        symbol = 'BHP'
-                    else:  # GEMINI
-                        symbol = 'BTC/USD'
+                    symbol = 'BTC/USD'
                     
                     data = await self.bot.get_market_data_async(symbol)
                     market_data[symbol] = data

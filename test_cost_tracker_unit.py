@@ -10,12 +10,6 @@ class TestCostTracker(unittest.TestCase):
         expected = 0.5 * 20000.0 * tracker.fee_rates["GEMINI"]["taker"]
         self.assertAlmostEqual(fee, expected)
 
-    def test_ib_min_fee_applied(self):
-        tracker = CostTracker("IB")
-        fee = tracker.calculate_trade_fee("BHP", quantity=10, price=50.0, action="BUY")
-        # 10 * 0.005 = 0.05 < min_fee, so we should see the minimum fee
-        self.assertEqual(fee, tracker.fee_rates["IB"]["min_fee"])
-
     def test_llm_costs_and_net_pnl(self):
         tracker = CostTracker("GEMINI")
         cost = tracker.calculate_llm_cost(input_tokens=1000, output_tokens=500)

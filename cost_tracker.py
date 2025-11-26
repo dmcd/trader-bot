@@ -3,8 +3,6 @@ from typing import Dict, Any
 from config import (
     GEMINI_MAKER_FEE,
     GEMINI_TAKER_FEE,
-    IB_STOCK_FEE_PER_SHARE,
-    IB_MIN_FEE,
     GEMINI_INPUT_COST_PER_TOKEN,
     GEMINI_OUTPUT_COST_PER_TOKEN,
 )
@@ -22,10 +20,6 @@ class CostTracker:
             'GEMINI': {
                 'maker': GEMINI_MAKER_FEE,
                 'taker': GEMINI_TAKER_FEE,
-            },
-            'IB': {
-                'stock_per_share': IB_STOCK_FEE_PER_SHARE,
-                'min_fee': IB_MIN_FEE,
             }
         }
         

@@ -13,12 +13,10 @@
 
 ### Venue Adapters
 - **`gemini_trader.py`**: Adapter for Gemini Exchange (using `ccxt`). Handles sandbox precision fixes.
-- **`ib_trader.py`**: Adapter for Interactive Brokers (using `ib_insync`).
 - **`config.py`**: Central configuration for API keys, limits, and trading mode.
 
 ### Interfaces
 - **`dashboard.py`**: Streamlit dashboard for monitoring and manual control.
-- **`server.py`**: FastMCP server exposing tools for Interactive Brokers.
 - **`run.sh`**: Helper script to launch the strategy loop and dashboard together.
 
 ### Data and Logs
@@ -34,7 +32,6 @@
 - **Run specific test**: `python -m pytest test_technical_analysis_unit.py`
 - **Run strategy loop**: `python strategy_runner.py`
 - **Run dashboard**: `streamlit run dashboard.py`
-- **Run MCP server**: `python server.py`
 - **Launch everything**: `./run.sh`
 
 ## Coding Style & Naming Conventions

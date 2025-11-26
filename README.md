@@ -1,6 +1,6 @@
 # Dennis-Day Trading Bot
 
-An autonomous trading bot that trades on Interactive Brokers or Gemini using Gemini 2.5 Flash for decision making. It features a robust risk engine, SQLite logging, and a Streamlit dashboard for monitoring.
+An autonomous trading bot that trades on Gemini(cryptocurrency exchange) using Gemini 2.5 Flash for decision making. It features a robust risk engine, SQLite logging, and a Streamlit dashboard for monitoring.
 
 ## 🚀 Getting Started
 
@@ -12,8 +12,7 @@ Follow these steps to get the bot up and running in minutes.
 *   **API Keys**:
     *   **Gemini (Google)**: An API key for Gemini 2.5 Flash (for the LLM strategy).
     *   **Exchange**:
-        *   **Gemini Exchange**: API Key and Secret (Sandbox recommended for testing).
-        *   **Interactive Brokers**: IB Gateway or TWS installed and running.
+        *   **Gemini Exchange Account**: API Key and Secret (Sandbox or Live).
 
 ### 2. Installation
 
@@ -32,7 +31,7 @@ Create a `.env` file in the root directory. You can copy the example below and f
 ```env
 # --- Core Settings ---
 TRADING_MODE=PAPER            # 'PAPER' or 'LIVE'
-ACTIVE_EXCHANGE=GEMINI        # 'GEMINI' or 'IB'
+ACTIVE_EXCHANGE=GEMINI        # 'GEMINI'
 
 # --- Gemini (Google) LLM ---
 GEMINI_API_KEY=your_google_gemini_api_key
@@ -42,11 +41,6 @@ GEMINI_EXCHANGE_API_KEY=your_gemini_exchange_key
 GEMINI_EXCHANGE_SECRET=your_gemini_exchange_secret
 GEMINI_SANDBOX_API_KEY=your_gemini_sandbox_key
 GEMINI_SANDBOX_SECRET=your_gemini_sandbox_secret
-
-# --- Exchange: Interactive Brokers ---
-IB_HOST=127.0.0.1
-IB_PORT=4002                  # 4002 for Paper, 7497 for Live
-IB_CLIENT_ID=1
 
 # --- Risk Management (Adjust to your preference) ---
 MAX_DAILY_LOSS=500.0          # Stop trading if loss exceeds this amount

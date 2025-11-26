@@ -232,11 +232,8 @@ st.set_page_config(
 st.title("🤖 AI Trader Bot Dashboard")
 
 # --- Sidebar ---
-if 'refresh_rate' not in st.session_state:
-    st.session_state.refresh_rate = 5
 
-refresh_rate = st.sidebar.slider("Refresh Rate (seconds)", 1, 60, st.session_state.refresh_rate)
-st.session_state.refresh_rate = refresh_rate
+
 
 
 
@@ -349,7 +346,7 @@ with col1:
             from config import LOOP_INTERVAL_SECONDS
             loop_interval_display = f"{LOOP_INTERVAL_SECONDS}s loop"
         except Exception:
-            loop_interval_display = f"{st.session_state.refresh_rate}s refresh"
+            loop_interval_display = "5s refresh"
         s4.metric("Loop Interval", loop_interval_display)
         
         st.subheader("📈 Active Positions")
@@ -451,5 +448,5 @@ with col2:
     logs = load_logs()
     log_text = "".join(logs)
     st.text_area("Log Output", log_text, height=900, disabled=True)
-    time.sleep(refresh_rate)
+    time.sleep(5)
     st.rerun()

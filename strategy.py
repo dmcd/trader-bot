@@ -7,6 +7,7 @@ import math
 from statistics import pstdev
 import re
 from pathlib import Path
+from datetime import datetime, timezone
 import google.generativeai as genai
 import jsonschema
 from config import (
@@ -29,6 +30,7 @@ from config import (
 )
 
 logger = logging.getLogger(__name__)
+telemetry_logger = logging.getLogger('telemetry')
 
 class StrategySignal:
     def __init__(self, action: str, symbol: str, quantity: float, reason: str, order_id=None, trace_id: int = None, regime_flags: Dict[str, str] = None):
@@ -666,6 +668,18 @@ class LLMStrategy(BaseStrategy):
             pending_exposure_budget=f"${pending_buy_exposure:,.2f}",
             max_open_orders_per_symbol=MAX_POSITIONS,
         )
+
+        # Log full prompt to telemetry
+        try:
+            prompt_log = {
+                "type": "llm_prompt",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "session_id": session_id,
+                "prompt": prompt
+            }
+            telemetry_logger.info(json.dumps(prompt_log, default=str))
+        except Exception as e:
+            logger.warning(f"Failed to log LLM prompt to telemetry: {e}")
             
         try:
             response = await asyncio.wait_for(

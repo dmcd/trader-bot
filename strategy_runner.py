@@ -584,7 +584,11 @@ class StrategyRunner:
             logger.warning(f"Could not fetch persisted start-of-day equity: {e}")
             persisted_baseline = None
 
-        if persisted_baseline is not None:
+        if TRADING_MODE == 'PAPER':
+            # In sandbox, always reset start-of-day equity to current to avoid false daily loss triggers
+            start_equity = initial_equity
+            logger.info(f"Sandbox Mode: Resetting start_of_day_equity to current: ${start_equity:,.2f}")
+        elif persisted_baseline is not None:
             start_equity = persisted_baseline
         elif self.session and self.session.get('starting_balance') is not None:
             start_equity = self.session.get('starting_balance')

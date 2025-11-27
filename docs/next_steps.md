@@ -6,7 +6,7 @@
 
 ### Remaining work
 - [ ] Runner integration polish: decision prompt should state tool_responses supersede inline snapshots; strip any legacy multi-TF summaries when tools are used.
-- [ ] Risk overlays: enforce min RR, slippage/vol scaling, and position stacking rules at execution; align with regime flags.
+- [ ] Risk overlays: enforce slippage/vol scaling and position stacking rules at execution; align with regime flags.
 - [ ] Integration test (runner loop): simulate planner→tool→decision within the runner, asserting clamps/truncation flags propagate.
 - [ ] LLM cost guard: cap planner/decision frequency and budget per session; fail-safe to HOLD on repeated errors.
 

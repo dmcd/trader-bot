@@ -31,6 +31,11 @@ class TestDeterministicOverlays(unittest.TestCase):
         self.assertTrue(self.runner._passes_rr_filter('BUY', 100, 99, 102))
         # SELL: risk 1, reward 2 -> rr 2 >= min
         self.assertTrue(self.runner._passes_rr_filter('SELL', 100, 101, 98))
+        # Zero/negative risk or reward should reject
+        self.assertFalse(self.runner._passes_rr_filter('BUY', 100, 100, 101))
+        self.assertFalse(self.runner._passes_rr_filter('BUY', 100, 101, 100))
+        self.assertFalse(self.runner._passes_rr_filter('SELL', 100, 100, 99))
+        self.assertFalse(self.runner._passes_rr_filter('SELL', 100, 99, 100))
 
     def test_slippage_guard_helper(self):
         ok, move = self.runner._slippage_within_limit(100, 100.2)

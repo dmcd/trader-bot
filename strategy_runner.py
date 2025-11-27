@@ -142,8 +142,8 @@ class StrategyRunner:
         else:
             risk = stop_price - price
             reward = price - target_price
-        if risk <= 0:
-            return True
+        if risk <= 0 or reward <= 0:
+            return False
         rr = reward / risk
         return rr >= MIN_RR
 

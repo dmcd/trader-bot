@@ -10,9 +10,9 @@ TRADING_MODE = os.getenv('TRADING_MODE', 'PAPER') # PAPER or LIVE
 
 
 # Risk Management Limits
-MAX_DAILY_LOSS = float(os.getenv('MAX_DAILY_LOSS', '500.0')) # absolute currency stop
+MAX_DAILY_LOSS = float(os.getenv('MAX_DAILY_LOSS', '1000.0')) # absolute currency stop
 MAX_DAILY_LOSS_PERCENT = float(os.getenv('MAX_DAILY_LOSS_PERCENT', '3.0')) # percent of equity stop
-MAX_ORDER_VALUE = float(os.getenv('MAX_ORDER_VALUE', '500.0')) # currency depends on venue
+MAX_ORDER_VALUE = float(os.getenv('MAX_ORDER_VALUE', '5000.0')) # currency depends on venue
 ORDER_VALUE_BUFFER = float(os.getenv('ORDER_VALUE_BUFFER', '5.0')) # trim near-cap trades by this buffer
 MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '3'))
 MAX_TOTAL_EXPOSURE = float(os.getenv('MAX_TOTAL_EXPOSURE', '10000.0')) # Total portfolio exposure limit

@@ -122,6 +122,7 @@ async def test_tool_roundtrip_executes_and_returns_decision(monkeypatch):
     trace = db.traces[0]
     assert trace["context"]["tool_requests"][0]["tool"] == ToolName.GET_MARKET_DATA
     assert trace["context"]["tool_responses"][1]["tool"] == ToolName.GET_ORDER_BOOK
+    assert "TOOL RESPONSES ABOVE ARE THE SOURCE OF TRUTH" in trace["prompt"]
 
 
 @pytest.mark.asyncio

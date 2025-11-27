@@ -690,6 +690,10 @@ class LLMStrategy(BaseStrategy):
                     f"Bid ${data.get('bid', 'N/A')}, Ask ${data.get('ask', 'N/A')}"
                     f"{spread_str}{ob_str}{vol_str}"
                 )
+
+        # When tools are available, prefer them over inline snapshots
+        if self.tool_coordinator:
+            market_summary = "Tool responses will be the source of truth; inline market snapshot omitted to save tokens."
         
         symbol = available_symbols[0]
         context_summary = ""
@@ -902,7 +906,7 @@ class LLMStrategy(BaseStrategy):
         if tool_responses:
             decision_prompt += "\n\nTOOL RESPONSES (JSON):\n"
             decision_prompt += json.dumps([r.model_dump() for r in tool_responses], default=str) + "\n"
-            decision_prompt += "Use the tool_responses above to make your decision.\n"
+            decision_prompt += "TOOL RESPONSES ABOVE ARE THE SOURCE OF TRUTH. If any inline snapshot conflicts, prefer tool_responses.\n"
 
         # Log full decision prompt to telemetry
         try:

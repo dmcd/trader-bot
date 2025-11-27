@@ -77,5 +77,6 @@ If you prefer to run components individually:
 
 For a deeper dive into how the bot works, check out the documentation:
 
-*   [**Strategy Architecture**](docs/strategy.md): Learn about the `LLMStrategy` and decision flow.
-*   [**Repository Guidelines**](AGENTS.md): Structure and conventions.
+*   [**Repository Guidelines**](AGENTS.md): Structure, commands, and conventions.
+*   [**Component Docs**](docs/components/README.md): Per-component deep dives (strategy runner, risk manager, exchange adapter, dashboard, etc.).
+*   [**Architecture Overview**](docs/architecture.md): High-level system layout and data flows.

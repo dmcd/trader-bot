@@ -76,6 +76,40 @@ async def test_handle_requests_returns_normalized_order_book_and_clamps_size():
     assert exchange.order_book_calls == 1
 
 
+@pytest.mark.asyncio
+async def test_handle_requests_enforces_symbol_allowlist_and_rate_limits():
+    exchange = StubExchange()
+    coordinator = DataFetchCoordinator(
+        exchange,
+        allowed_symbols=["BTC/USD"],
+        rate_limits={ToolName.GET_ORDER_BOOK: 1},
+        rate_limit_window_seconds=60,
+    )
+    reqs = [
+        ToolRequest(
+            id="symblock",
+            tool=ToolName.GET_ORDER_BOOK,
+            params=OrderBookParams(symbol="ETH/USD", depth=10),
+        ),
+        ToolRequest(
+            id="first",
+            tool=ToolName.GET_ORDER_BOOK,
+            params=OrderBookParams(symbol="BTC/USD", depth=10),
+        ),
+        ToolRequest(
+            id="second",
+            tool=ToolName.GET_ORDER_BOOK,
+            params=OrderBookParams(symbol="BTC/USD", depth=10),
+        ),
+    ]
+    responses = await coordinator.handle_requests(reqs)
+    errors = {r.id: r.error for r in responses}
+    assert errors["symblock"].startswith("symbol_not_allowed")
+    assert errors["second"] == "rate_limited"
+    assert responses[1].error is None
+    assert exchange.order_book_calls == 1  # only first allowed request hit the exchange
+
+
 def test_normalize_trades_truncates():
     raw = [
         {"timestamp": 1, "price": 10, "amount": 0.1, "side": "buy"},

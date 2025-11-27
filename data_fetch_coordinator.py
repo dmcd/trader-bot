@@ -6,10 +6,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config import (
     TOOL_CACHE_TTL_SECONDS,
+    TOOL_ALLOWED_SYMBOLS,
     TOOL_MAX_BARS,
     TOOL_MAX_DEPTH,
     TOOL_MAX_JSON_BYTES,
     TOOL_MAX_TRADES,
+    TOOL_RATE_LIMIT_MARKET_DATA,
+    TOOL_RATE_LIMIT_ORDER_BOOK,
+    TOOL_RATE_LIMIT_RECENT_TRADES,
+    TOOL_RATE_LIMIT_WINDOW_SECONDS,
 )
 from llm_tools import (
     MarketDataParams,
@@ -43,6 +48,9 @@ class DataFetchCoordinator:
         max_trades: int = TOOL_MAX_TRADES,
         cache_ttl_seconds: int = TOOL_CACHE_TTL_SECONDS,
         max_json_bytes: int = TOOL_MAX_JSON_BYTES,
+        allowed_symbols: Optional[List[str]] = None,
+        rate_limits: Optional[Dict[ToolName, int]] = None,
+        rate_limit_window_seconds: int = TOOL_RATE_LIMIT_WINDOW_SECONDS,
     ):
         self.exchange = exchange
         self.max_bars = max_bars
@@ -51,6 +59,15 @@ class DataFetchCoordinator:
         self.cache_ttl_seconds = cache_ttl_seconds
         self.max_json_bytes = max_json_bytes
         self._cache: Dict[str, Dict[str, Any]] = {}
+        self.allowed_symbols = [s.upper() for s in (allowed_symbols or TOOL_ALLOWED_SYMBOLS)]
+        self.rate_limits = rate_limits or {
+            ToolName.GET_MARKET_DATA: TOOL_RATE_LIMIT_MARKET_DATA,
+            ToolName.GET_ORDER_BOOK: TOOL_RATE_LIMIT_ORDER_BOOK,
+            ToolName.GET_RECENT_TRADES: TOOL_RATE_LIMIT_RECENT_TRADES,
+        }
+        self.rate_limit_window_seconds = rate_limit_window_seconds
+        self._tool_counts: Dict[ToolName, int] = {}
+        self._tool_window_start = time.time()
 
     def _cache_get(self, key: str) -> Optional[Dict[str, Any]]:
         entry = self._cache.get(key)
@@ -62,6 +79,27 @@ class DataFetchCoordinator:
 
     def _cache_set(self, key: str, data: Dict[str, Any]) -> None:
         self._cache[key] = {"ts": time.time(), "data": data}
+
+    def _is_symbol_allowed(self, symbol: str) -> bool:
+        if not symbol:
+            return False
+        if "*" in self.allowed_symbols:
+            return True
+        return symbol.upper() in self.allowed_symbols
+
+    def _check_rate_limit(self, tool: ToolName) -> bool:
+        now = time.time()
+        if now - self._tool_window_start >= self.rate_limit_window_seconds:
+            self._tool_window_start = now
+            self._tool_counts = {}
+        limit = self.rate_limits.get(tool)
+        if limit is None:
+            return True
+        count = self._tool_counts.get(tool, 0)
+        if count >= limit:
+            return False
+        self._tool_counts[tool] = count + 1
+        return True
 
     async def _fetch_ohlcv(self, symbol: str, timeframe: str, limit: int) -> List[List[Any]]:
         if not hasattr(self.exchange, "fetch_ohlcv"):
@@ -189,6 +227,31 @@ class DataFetchCoordinator:
         responses: List[ToolResponse] = []
         for req in requests:
             try:
+                symbol = getattr(req.params, "symbol", "") if hasattr(req, "params") else ""
+                if symbol and not self._is_symbol_allowed(symbol):
+                    logger.info(f"Tool request {req.id} rejected: symbol {symbol} not in allowlist")
+                    responses.append(
+                        ToolResponse(
+                            id=req.id,
+                            tool=req.tool,
+                            data={},
+                            error=f"symbol_not_allowed:{symbol}",
+                        )
+                    )
+                    continue
+
+                if not self._check_rate_limit(req.tool):
+                    logger.info(f"Tool request {req.id} dropped: rate limit exceeded for {req.tool.value}")
+                    responses.append(
+                        ToolResponse(
+                            id=req.id,
+                            tool=req.tool,
+                            data={},
+                            error="rate_limited",
+                        )
+                    )
+                    continue
+
                 if req.tool == ToolName.GET_MARKET_DATA:
                     data = await self.fetch_market_data(req.params)  # type: ignore[arg-type]
                 elif req.tool == ToolName.GET_ORDER_BOOK:

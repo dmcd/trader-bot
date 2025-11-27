@@ -4,7 +4,8 @@ import time
 import os
 import subprocess
 from database import TradingDatabase
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 # --- Helper Functions ---
 
@@ -58,9 +59,39 @@ def start_bot():
         st.error(f"Failed to start bot: {e}")
         return False
 
-def load_history():
+def get_user_timezone():
+    """Resolve the user's timezone from env or system local time."""
+    tz_env = os.getenv("LOCAL_TIMEZONE") or os.getenv("TZ")
+    if tz_env:
+        try:
+            return ZoneInfo(tz_env)
+        except Exception:
+            st.warning(f"Invalid timezone '{tz_env}', falling back to system local time.")
+    try:
+        tz = datetime.now().astimezone().tzinfo
+        if tz:
+            return tz
+    except Exception:
+        pass
+    return ZoneInfo("UTC")
+
+
+def get_timezone_label(tzinfo):
+    if hasattr(tzinfo, "key") and tzinfo.key:
+        return tzinfo.key
+    try:
+        label = tzinfo.tzname(datetime.now(tzinfo))
+        if label:
+            return label
+    except Exception:
+        pass
+    return "Local"
+
+
+def load_history(user_timezone):
     """Load trade history from the SQLite database for today's session."""
     try:
+        user_timezone = user_timezone or ZoneInfo("UTC")
         db = TradingDatabase()
         today = date.today().isoformat()
         cursor = db.conn.cursor()
@@ -73,7 +104,7 @@ def load_history():
         if rows:
             df = pd.DataFrame(rows, columns=["timestamp", "symbol", "action", "price", "quantity", "fee", "liquidity", "realized_pnl", "reason"])
             df["trade_value"] = df["price"] * df["quantity"]
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert(user_timezone)
             return df
         return pd.DataFrame()
     except Exception as e:
@@ -225,12 +256,15 @@ def load_trade_plans(session_id):
 
 # --- Page Config ---
 st.set_page_config(
-    page_title="Trader Bot Dashboard",
+    page_title="Dennis-Day Trading Bot",
     page_icon="📈",
     layout="wide"
 )
 
-st.title("🤖 AI Trader Bot Dashboard")
+st.title("🤖 Dennis-Day Trading Bot")
+
+user_timezone = get_user_timezone()
+timezone_label = get_timezone_label(user_timezone)
 
 # --- Sidebar ---
 
@@ -278,7 +312,7 @@ col1, col2 = st.columns([2, 1])
 
 with col1:
     st.subheader("📊 Session Performance")
-    df = load_history()
+    df = load_history(user_timezone)
     session_stats, session_id = load_session_stats()
     
     if session_stats and not df.empty:
@@ -384,7 +418,7 @@ with col1:
             width="stretch",
             hide_index=True,
             column_config={
-                "timestamp": st.column_config.DatetimeColumn("Time", format="HH:mm:ss"),
+                "timestamp": st.column_config.DatetimeColumn(f"Date/Time ({timezone_label})", format="YYYY-MM-DD HH:mm:ss"),
                 "symbol": "Symbol",
                 "action": "Action",
                 "price": st.column_config.NumberColumn("Price", format="$%.2f"),

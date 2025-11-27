@@ -1,6 +1,6 @@
 # Dennis-Day Trading Bot
 
-An autonomous trading bot that trades on Gemini(cryptocurrency exchange) using Gemini 2.5 Flash for decision making. It features a robust risk engine, SQLite logging, and a Streamlit dashboard for monitoring.
+A laptop-run trading co-pilot that aims to replicate a disciplined professional day trader on Gemini. Decisions come from Gemini 2.5 Flash using only fresh market/context data (no pretraining on your history) plus heuristic intuition from the runner’s guards. It runs manually from your machine, with a robust risk engine, SQLite logging, and a Streamlit dashboard for monitoring and control.
 
 ## 🚀 Getting Started
 

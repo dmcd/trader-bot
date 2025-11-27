@@ -222,27 +222,6 @@ def load_trade_plans(session_id):
     finally:
         db.close()
 
-def load_recent_trade_plans(session_id, limit: int = 20):
-    db = TradingDatabase()
-    try:
-        cursor = db.conn.cursor()
-        cursor.execute(
-            """
-            SELECT id, symbol, side, size, status, opened_at, closed_at, reason, version
-            FROM trade_plans
-            WHERE session_id = ?
-            ORDER BY opened_at DESC
-            LIMIT ?
-            """,
-            (session_id, limit),
-        )
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
-    except Exception as e:
-        st.error(f"Error loading recent trade plans: {e}")
-        return []
-    finally:
-        db.close()
 # --- Page Config ---
 st.set_page_config(
     page_title="Trader Bot Dashboard",
@@ -457,24 +436,6 @@ with col2:
             )
         else:
             st.info("No open trade plans")
-
-        st.subheader("🗂️ Recent Trade Plans (all statuses)")
-        recent_plans = load_recent_trade_plans(session_id, limit=25)
-        if recent_plans:
-            recent_df = pd.DataFrame(recent_plans)
-            st.dataframe(
-                recent_df[['id', 'symbol', 'side', 'size', 'status', 'opened_at', 'closed_at', 'reason']],
-                hide_index=True,
-                column_config={
-                    "size": st.column_config.NumberColumn("Size", format="%.4f"),
-                    "opened_at": st.column_config.DatetimeColumn("Opened", format="HH:mm:ss"),
-                    "closed_at": st.column_config.DatetimeColumn("Closed", format="HH:mm:ss"),
-                },
-                width="stretch",
-                height=220
-            )
-        else:
-            st.info("No trade plans recorded yet")
 
         st.subheader("🧠 LLM Decisions")
         llm_stats = load_llm_stats(session_id)

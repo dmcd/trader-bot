@@ -399,6 +399,19 @@ class LLMStrategy(BaseStrategy):
             open_order_snippets.append(f"{id_str} {side} {qty:.4f} {sym} @ {price_str} (rem {remaining:.4f})")
         open_orders_summary = "; ".join(open_order_snippets) if open_order_snippets else "none"
 
+        # Per-symbol plan counts to expose cap usage to the LLM
+        plan_counts = {}
+        try:
+            open_plans = self.db.get_open_trade_plans(session_id)
+            for plan in open_plans:
+                sym = plan.get('symbol')
+                if not sym:
+                    continue
+                plan_counts[sym] = plan_counts.get(sym, 0) + 1
+        except Exception as exc:
+            logger.debug(f"Could not fetch plan counts: {exc}")
+        plan_counts_str = ", ".join(f"{sym}:{cnt}/{MAX_POSITIONS}" for sym, cnt in plan_counts.items()) or "none"
+
         prompt_context = (
             f"- Cooldown: {spacing_flag}\n"
             f"- Priority signal allowed: {priority_flag}\n"
@@ -408,6 +421,7 @@ class LLMStrategy(BaseStrategy):
             f"- Exposure: ${exposure_now:,.2f} of ${exposure_cap:,.2f} (room ${headroom:,.2f})\n"
             f"- Pending BUY exposure: ${pending_buy_exposure:,.2f}\n"
             f"- Max open orders per symbol: {MAX_POSITIONS}\n"
+            f"- Plans per symbol (used/cap): {plan_counts_str}\n"
             f"- Order cap: ${order_cap_value:.2f}\n"
             f"- Min trade size: ${MIN_TRADE_SIZE:.2f}\n"
             f"- Open orders: {open_order_count} ({open_orders_summary})"

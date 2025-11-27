@@ -157,4 +157,4 @@ async def test_tool_truncation_flag_propagates_to_trace(monkeypatch):
     assert decision_json is not None
     assert db.traces
     tool_responses = db.traces[0]["context"]["tool_responses"]
-    assert tool_responses[0]["data"].get("truncated") is True
+    assert tool_responses and tool_responses[0]["data"].get("truncated") is True

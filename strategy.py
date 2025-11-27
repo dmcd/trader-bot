@@ -70,7 +70,8 @@ class BaseStrategy(ABC):
 class LLMStrategy(BaseStrategy):
     def __init__(self, db, technical_analysis, cost_tracker, open_orders_provider=None, ohlcv_provider=None, tool_coordinator=None):
         super().__init__(db, technical_analysis, cost_tracker)
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        self.system_prompt = self._load_system_prompt()
+        self.model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=self.system_prompt)
         if GEMINI_API_KEY:
             genai.configure(api_key=GEMINI_API_KEY)
         else:
@@ -532,7 +533,8 @@ class LLMStrategy(BaseStrategy):
                     sig = StrategySignal('CLOSE_POSITION', symbol, 0, reason or 'Close position', trace_id=trace_id, regime_flags=regime_flags)
                     return sig
                 elif action == 'PAUSE_TRADING':
-                    sig = StrategySignal('PAUSE_TRADING', symbol, 0, reason or 'Pause trading', trace_id=trace_id, regime_flags=regime_flags)
+                    pause_symbol = decision.get('symbol')
+                    sig = StrategySignal('PAUSE_TRADING', pause_symbol, 0, reason or 'Pause trading', trace_id=trace_id, regime_flags=regime_flags)
                     sig.duration_minutes = decision.get('duration_minutes')
                     return sig
                 elif action == 'HOLD':
@@ -552,6 +554,15 @@ class LLMStrategy(BaseStrategy):
         template_text = template_path.read_text()
         LLMStrategy._prompt_template_cache = template_text
         return template_text
+
+    def _load_system_prompt(self) -> str:
+        """Load system prompt (static instructions) from adjacent file."""
+        if hasattr(LLMStrategy, "_system_prompt_cache"):
+            return LLMStrategy._system_prompt_cache
+        system_path = Path(__file__).with_name("llm_system_prompt.txt")
+        system_text = system_path.read_text()
+        LLMStrategy._system_prompt_cache = system_text
+        return system_text
 
     def _build_prompt(self, **kwargs) -> str:
         """Render prompt with a forgiving formatter so optional fields can be empty."""

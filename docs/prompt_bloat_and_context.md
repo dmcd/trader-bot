@@ -14,5 +14,5 @@
 - [x] Trim and structure context: convert `get_context_summary` to a compact, capped JSON block with only essential fields (win rate/PnL, positions summary, open orders summary, last N trades), and prefer deltas since last turn.
 - [x] Enforce deterministic size limits on tool data: make `clamp_payload_size` actually prune payloads (drop deep book levels/old candles/verbose fields) and apply it before logging/embedding tool responses; set per-tool byte caps and brief summaries.
 - [x] Surface prior intent/outcomes: inject a small “memory” block containing open trade plans (id/side/size/stop/target/reason), last N decisions with execution results, and recent risk rejections—kept under a strict byte budget.
-- [ ] Separate static instructions from live state: keep playbook/rules in template/system prompt; ensure per-turn prompt only includes live metrics, compact memory, and tool responses.
+- [x] Separate static instructions from live state: keep playbook/rules in template/system prompt; ensure per-turn prompt only includes live metrics, compact memory, and tool responses.
 - [ ] Add guardrails that indirectly cut bloat: symbol/param allowlists and per-tool rate limits so the LLM cannot request or see extraneous data.

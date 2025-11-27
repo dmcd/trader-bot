@@ -71,7 +71,8 @@ def setup_logging():
     telemetry_logger = logging.getLogger('telemetry')
     telemetry_logger.setLevel(logging.INFO)
     telemetry_logger.propagate = False
-    telemetry_handler = logging.FileHandler('telemetry.log', mode='a')
+    # Reset telemetry log each startup to keep sessions isolated
+    telemetry_handler = logging.FileHandler('telemetry.log', mode='w')
     telemetry_handler.setLevel(logging.INFO)
     telemetry_handler.setFormatter(logging.Formatter('%(message)s'))
     telemetry_logger.addHandler(telemetry_handler)

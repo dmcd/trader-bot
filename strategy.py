@@ -1,4 +1,5 @@
 import logging
+import traceback
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
 import asyncio
@@ -925,7 +926,7 @@ class LLMStrategy(BaseStrategy):
 
             return text, trace_id
         except Exception as e:
-            logger.error(f"LLM Error: {e}")
+            logger.error(f"LLM Error: {e}\n{traceback.format_exc()}")
             return None, None
 
     def on_trade_executed(self, timestamp):

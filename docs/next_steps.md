@@ -3,16 +3,13 @@
 ### Strategic priorities
 - Prove reliability before sizing: stabilize data/tooling, harden risk checks, and run paper sessions with telemetry replay to validate LLM/tool loop.
 - Reduce prompt bloat and move to deterministic guards: let tools supply data; keep Python in charge of risk, sizing, and execution.
-- Build evaluation loop: backtest/sim against recorded market data and replay LLM/tool envelopes to measure edge vs. costs.
 
 ### Execution checklist
 - [ ] **Symbol allowlist + tool guardrails**: enforce allowed symbols/venues in tool requests; reject disallowed params and surface errors to LLM.
 - [ ] **Per-tool rate limits**: config-driven throttle for market_data/order_book/trades to avoid LLM thrash; log drops.
-- [ ] **Telemetry persistence**: store tool requests/responses (with trace_id) in DB for replay/analysis; keep JSON byte size recorded.
 - [ ] **Runner integration polish**: decision prompt should state tool_responses supersede inline snapshots; strip any legacy multi-TF summaries when tools are used.
 - [ ] **Risk overlays**: enforce min RR, slippage/vol scaling, and position stacking rules at execution; align with regime flags.
 - [ ] **Integration test (runner loop)**: simulate planner→tool→decision within the runner, asserting clamps/truncation flags propagate.
-- [ ] **Backtest/sim harness**: use ccxt historical data + DB schema to replay LLM decisions with deterministic fills; compute EV after fees/latency.
 - [ ] **LLM cost guard**: cap planner/decision frequency and budget per session; fail-safe to HOLD on repeated errors.
 
 ### Opinionated assessment

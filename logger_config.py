@@ -62,7 +62,7 @@ def setup_logging():
     bot_actions_logger.setLevel(logging.INFO)
     bot_actions_logger.propagate = False  # Don't propagate to root logger
     
-    bot_handler = logging.FileHandler('bot.log', mode='a')  # Append to keep history
+    bot_handler = logging.FileHandler('bot.log', mode='w')  # Overwrite on startup
     bot_handler.setLevel(logging.INFO)
     bot_handler.setFormatter(simple_formatter)
     bot_actions_logger.addHandler(bot_handler)

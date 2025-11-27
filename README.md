@@ -1,6 +1,6 @@
 # Dennis-Day Trading Bot
 
-A laptop-run trading co-pilot that aims to replicate a disciplined professional day trader on Gemini. Decisions come from Gemini 2.5 Flash using only fresh market/context data (no pretraining on your history) plus heuristic intuition from the runner’s guards. It runs manually from your machine, with a robust risk engine, SQLite logging, and a Streamlit dashboard for monitoring and control.
+A laptop-run trading bot that aims to replicate a disciplined professional day trader. Decisions come from Gemini 2.5 Flash using only fresh market/context data (no back-testing) and heuristic intuition. It includes a risk engine, SQLite storage, structured logging, and a Streamlit dashboard for monitoring and control.
 
 ## 🚀 Getting Started
 

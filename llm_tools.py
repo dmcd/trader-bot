@@ -315,10 +315,79 @@ def estimate_json_bytes(payload: Dict[str, Any]) -> int:
 
 
 def clamp_payload_size(payload: Dict[str, Any], max_bytes: int = TOOL_MAX_JSON_BYTES) -> Dict[str, Any]:
-    size = estimate_json_bytes(payload)
-    if size <= max_bytes:
-        return payload
-    payload = dict(payload)
-    payload["truncated"] = True
-    payload["note"] = f"payload exceeded {max_bytes} bytes; consider narrower request"
-    return payload
+    """
+    Ensure tool payload fits within max_bytes by progressively trimming lists (candles,
+    order book levels, trades). Marks payload as truncated when modifications occur.
+    """
+    try:
+        # Deep copy via JSON for predictable sizing
+        result: Dict[str, Any] = json.loads(json.dumps(payload, default=str))
+    except Exception:
+        # Fall back to shallow copy
+        result = dict(payload)
+
+    def _size(obj: Dict[str, Any]) -> int:
+        return estimate_json_bytes(obj)
+
+    def _mark_truncated(note: str = "") -> None:
+        result["truncated"] = True
+        if note:
+            existing = result.get("note", "")
+            if existing:
+                result["note"] = f"{existing}; {note}"
+            else:
+                result["note"] = note
+
+    if _size(result) <= max_bytes:
+        return result
+
+    # Step 1: shrink candles per timeframe
+    timeframes = result.get("timeframes")
+    if isinstance(timeframes, dict):
+        for tf_data in timeframes.values():
+            if isinstance(tf_data, dict) and "candles" in tf_data:
+                candles = tf_data.get("candles") or []
+                if len(candles) > 10:
+                    new_len = max(5, len(candles) // 2)
+                    tf_data["candles"] = candles[:new_len]
+                    tf_data["truncated"] = True
+                    _mark_truncated("candles trimmed")
+        if _size(result) <= max_bytes:
+            return result
+
+    # Step 2: shrink order book depth
+    if "bids" in result or "asks" in result:
+        bids = result.get("bids") or []
+        asks = result.get("asks") or []
+        max_depth = max(1, min(len(bids), len(asks), TOOL_MAX_DEPTH))
+        if max_depth > 5:
+            max_depth = max(5, max_depth // 2)
+        result["bids"] = bids[:max_depth]
+        result["asks"] = asks[:max_depth]
+        _mark_truncated("order book depth trimmed")
+        if _size(result) <= max_bytes:
+            return result
+
+    # Step 3: shrink trades list
+    if "trades" in result and isinstance(result.get("trades"), list):
+        trades = result.get("trades") or []
+        if len(trades) > 10:
+            result["trades"] = trades[: max(5, len(trades) // 2)]
+            _mark_truncated("trades trimmed")
+            if _size(result) <= max_bytes:
+                return result
+
+    # Step 4: aggressively drop heavy fields if still too large
+    heavy_fields = ("candles", "bids", "asks", "trades")
+    # Drop nested candles first
+    if isinstance(timeframes, dict):
+        for tf_data in timeframes.values():
+            if isinstance(tf_data, dict) and "candles" in tf_data:
+                tf_data["candles"] = []
+                tf_data["truncated"] = True
+                _mark_truncated("candles dropped")
+    for field in heavy_fields:
+        if field in result:
+            result[field] = []
+            _mark_truncated(f"{field} dropped")
+    return result

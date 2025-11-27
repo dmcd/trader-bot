@@ -5,6 +5,7 @@ from llm_tools import (
     OrderBookParams,
     ToolName,
     ToolRequest,
+    estimate_json_bytes,
     clamp_payload_size,
     normalize_candles,
     normalize_order_book,
@@ -53,10 +54,24 @@ def test_normalize_order_book_mid_and_spread():
 
 
 def test_clamp_payload_size_marks_truncation_when_exceeding_max_bytes():
-    payload = {"big": "x" * 50}
-    clamped = clamp_payload_size(payload, max_bytes=10)
+    payload = {
+        "timeframes": {
+            "1m": {"candles": [[i, 1, 1, 1, 1, 1] for i in range(100)], "summary": {}}
+        },
+        "bids": [[100 - i, 1] for i in range(50)],
+        "asks": [[101 + i, 1] for i in range(50)],
+        "trades": [{"ts": i, "price": 100 + i, "amount": 1} for i in range(50)],
+    }
+    max_bytes = 500
+    clamped = clamp_payload_size(payload, max_bytes=max_bytes)
     assert clamped.get("truncated") is True
     assert "note" in clamped
+    assert estimate_json_bytes(clamped) <= max_bytes
+    # Ensure large lists were reduced
+    tf = clamped["timeframes"]["1m"]
+    assert len(tf.get("candles", [])) <= 50
+    assert len(clamped.get("bids", [])) <= 50
+    assert len(clamped.get("trades", [])) <= 50
 
 
 def test_tool_request_disambiguates_union_types():
@@ -76,4 +91,3 @@ def test_tool_request_disambiguates_union_types():
     assert not hasattr(req.params, "timeframes")
     assert not hasattr(req.params, "include_volume")
     assert req.params.limit == 50
-

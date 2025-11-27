@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -28,11 +29,13 @@ class TestTradingContext(unittest.TestCase):
 
     def test_context_summary_contains_key_sections(self):
         summary = self.context.get_context_summary("BTC/USD")
-        self.assertIn("TRADING SESSION CONTEXT", summary)
-        self.assertIn("Performance:", summary)
-        self.assertIn("Current Positions:", summary)
-        self.assertIn("Recent Activity:", summary)
-        self.assertIn("Market Trend", summary)
+        parsed = json.loads(summary)
+        self.assertIn("session", parsed)
+        self.assertIn("positions", parsed)
+        self.assertIn("open_orders", parsed)
+        self.assertIn("recent_trades", parsed)
+        self.assertIn("trend_pct", parsed)
+        self.assertIn("win_rate_pct", parsed["session"])
 
 
 if __name__ == "__main__":

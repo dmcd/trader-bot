@@ -90,7 +90,7 @@ class LLMStrategy(BaseStrategy):
             "properties": {
                 "action": {"type": "string", "enum": ["BUY", "SELL", "HOLD", "CANCEL", "UPDATE_PLAN", "PARTIAL_CLOSE", "CLOSE_POSITION", "PAUSE_TRADING"]},
                 "symbol": {"type": "string"},
-                "quantity": {"type": "number", "minimum": 0},
+                "quantity": {"type": ["number", "null"], "minimum": 0},
                 "reason": {"type": "string"},
                 "order_id": {"type": ["string", "number", "null"]},
                 "stop_price": {"type": ["number", "null"], "minimum": 0},
@@ -444,7 +444,9 @@ class LLMStrategy(BaseStrategy):
                         pass
                     return None
                 action = decision.get('action')
-                quantity = decision.get('quantity', 0)
+                quantity = decision.get('quantity')
+                if quantity is None:
+                    quantity = 0
                 reason = decision.get('reason')
                 order_id = decision.get('order_id')
                 stop_price = decision.get('stop_price')

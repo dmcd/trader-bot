@@ -49,6 +49,30 @@ class TestLLMValidation(unittest.IsolatedAsyncioTestCase):
             self.assertLessEqual(signal.stop_price, 100)
             self.assertLessEqual(signal.target_price, 102)
 
+    @patch('strategy.asyncio.get_event_loop')
+    async def test_null_quantity_validation(self, mock_loop):
+        mock_loop.return_value.time.return_value = 1000
+        self.mock_db.get_recent_market_data.return_value = [{'price': 100}] * 50
+        self.mock_ta.calculate_indicators.return_value = {'bb_width': 2.0, 'rsi': 50}
+        self.strategy.last_trade_ts = 0
+        
+        # JSON with null quantity
+        raw_decision = json.dumps({
+            "action": "HOLD",
+            "symbol": "BTC/USD",
+            "quantity": None,
+            "reason": "test null quantity"
+        })
+        
+        with patch.object(self.strategy, '_get_llm_decision', new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = raw_decision
+            # This should not raise a schema validation error
+            signal = await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000, 0)
+            
+            self.assertIsNotNone(signal)
+            self.assertEqual(signal.action, 'HOLD')
+            self.assertEqual(signal.quantity, 0)
+
     def test_extract_json_payload_handles_chatter(self):
         noisy = (
             "Some analysis text that should be ignored before the JSON.\n\n"

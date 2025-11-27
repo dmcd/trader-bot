@@ -28,6 +28,14 @@ class StubExchange:
         return []
 
 
+class BigOrderBookExchange(StubExchange):
+    async def fetch_order_book(self, symbol, limit):
+        self.ob_calls += 1
+        bids = [[100 - i * 0.01, 1] for i in range(200)]
+        asks = [[100 + i * 0.01, 1] for i in range(200)]
+        return {"bids": bids, "asks": asks, "timestamp": 123}
+
+
 class StubDB:
     def __init__(self):
         self.traces = []
@@ -114,3 +122,38 @@ async def test_tool_roundtrip_executes_and_returns_decision(monkeypatch):
     trace = db.traces[0]
     assert trace["context"]["tool_requests"][0]["tool"] == ToolName.GET_MARKET_DATA
     assert trace["context"]["tool_responses"][1]["tool"] == ToolName.GET_ORDER_BOOK
+
+
+@pytest.mark.asyncio
+async def test_tool_truncation_flag_propagates_to_trace(monkeypatch):
+    db = StubDB()
+    ta = StubTA()
+    cost = StubCost()
+    coordinator = DataFetchCoordinator(BigOrderBookExchange(), max_json_bytes=200)
+    strategy = LLMStrategy(db, ta, cost, tool_coordinator=coordinator)
+
+    async def fake_invoke(prompt, timeout=30):
+        # Planner then decision
+        if '"tool_requests"' in prompt:
+            return _fake_response(
+                '{"tool_requests":[{"id":"req1","tool":"get_order_book","params":{"symbol":"BTC/USD","depth":150}}]}'
+            )
+        return _fake_response('{"action":"HOLD","symbol":"BTC/USD","reason":"truncation test"}')
+
+    monkeypatch.setattr(strategy, "_invoke_llm", fake_invoke)
+
+    decision_json, trace_id = await strategy._get_llm_decision(
+        session_id=1,
+        market_data={"BTC/USD": {"price": 100, "bid": 99, "ask": 101}},
+        current_equity=1000.0,
+        prompt_context="",
+        trading_context=None,
+        open_orders=[],
+        headroom=5000.0,
+        pending_buy_exposure=0.0,
+    )
+
+    assert decision_json is not None
+    assert db.traces
+    tool_responses = db.traces[0]["context"]["tool_responses"]
+    assert tool_responses[0]["data"].get("truncated") is True

@@ -154,6 +154,26 @@ class StrategyRunner:
         move_pct = abs(latest_price - decision_price) / decision_price * 100
         return move_pct <= MAX_SLIPPAGE_PCT, move_pct
 
+    def _stacking_block(
+        self,
+        action: str,
+        symbol: str,
+        open_plan_count: int,
+        pending_data: dict,
+        position_qty: float,
+    ) -> bool:
+        """
+        Prevent stacking same-direction risk when we already have a position and
+        pending orders/plans on the symbol.
+        """
+        if action != 'BUY':
+            return False
+        if position_qty <= 0:
+            return False
+        pending_same_side = (pending_data.get('count_buy', 0) or 0) > 0
+        has_plans = open_plan_count > 0
+        return pending_same_side or has_plans
+
     async def _handle_update_plan(self, signal, telemetry_record, trace_id):
         """Handle UPDATE_PLAN intents."""
         plan_id = getattr(signal, 'plan_id', None)
@@ -1307,8 +1327,7 @@ class StrategyRunner:
                                     continue
                             except Exception as e:
                                 logger.debug(f"Could not check plan cap: {e}")
-
-                            # Enforce pending exposure headroom including open orders
+                            # Enforce pending exposure headroom including open orders, stacking, and per-symbol caps
                             try:
                                 pending_data = self.risk_manager.pending_orders_by_symbol.get(symbol, {})
                                 pending_exposure = pending_data.get('buy', 0.0) if action == 'BUY' else pending_data.get('sell', 0.0)
@@ -1318,6 +1337,15 @@ class StrategyRunner:
                                     self.strategy.on_trade_rejected("Open order cap reached")
                                     telemetry_record["status"] = "risk_blocked"
                                     telemetry_record["risk_reason"] = "Open order cap reached"
+                                    self._log_execution_trace(trace_id, telemetry_record)
+                                    self._emit_telemetry(telemetry_record)
+                                    continue
+                                position_qty = (self.risk_manager.positions or {}).get(symbol, {}).get('quantity', 0.0) or 0.0
+                                if self._stacking_block(action, symbol, open_plan_count, pending_data, position_qty):
+                                    bot_actions_logger.info(f"⛔ Trade Blocked: stacking same-side risk on {symbol}")
+                                    self.strategy.on_trade_rejected("Stacking blocked")
+                                    telemetry_record["status"] = "risk_blocked"
+                                    telemetry_record["risk_reason"] = "Stacking blocked"
                                     self._log_execution_trace(trace_id, telemetry_record)
                                     self._emit_telemetry(telemetry_record)
                                     continue

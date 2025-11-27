@@ -37,6 +37,14 @@ class TestDeterministicOverlays(unittest.TestCase):
         self.assertFalse(self.runner._passes_rr_filter('SELL', 100, 100, 99))
         self.assertFalse(self.runner._passes_rr_filter('SELL', 100, 99, 100))
 
+    def test_stacking_block_when_existing_position_and_pending(self):
+        pending = {"count_buy": 1, "buy": 100.0}
+        self.runner.risk_manager.positions = {"BTC/USD": {"quantity": 1.0, "current_price": 100.0}}
+        blocked = self.runner._stacking_block('BUY', "BTC/USD", open_plan_count=1, pending_data=pending, position_qty=1.0)
+        self.assertTrue(blocked)
+        allowed = self.runner._stacking_block('SELL', "BTC/USD", open_plan_count=1, pending_data=pending, position_qty=1.0)
+        self.assertFalse(allowed)
+
     def test_slippage_guard_helper(self):
         ok, move = self.runner._slippage_within_limit(100, 100.2)
         self.assertTrue(ok)

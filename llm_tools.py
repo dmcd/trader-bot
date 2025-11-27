@@ -40,6 +40,9 @@ def _clean_timeframes(raw: List[str]) -> List[str]:
         "5m": "5m",
         "1min": "1m",
         "1m": "1m",
+        "4hr": "6h",
+        "4hour": "6h",
+        "4h": "6h",
     }
 
     allowed_raw = [tf.strip() for tf in TOOL_ALLOWED_TIMEFRAMES if tf and tf.strip()]

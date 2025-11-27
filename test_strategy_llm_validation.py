@@ -73,6 +73,31 @@ class TestLLMValidation(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(signal.action, 'HOLD')
             self.assertEqual(signal.quantity, 0)
 
+    @patch('strategy.asyncio.get_event_loop')
+    async def test_null_symbol_validation(self, mock_loop):
+        mock_loop.return_value.time.return_value = 1000
+        self.mock_db.get_recent_market_data.return_value = [{'price': 100}] * 50
+        self.mock_ta.calculate_indicators.return_value = {'bb_width': 2.0, 'rsi': 50}
+        self.strategy.last_trade_ts = 0
+        
+        # JSON with null symbol
+        raw_decision = json.dumps({
+            "action": "PAUSE_TRADING",
+            "symbol": None,
+            "quantity": 0,
+            "reason": "Market closed",
+            "duration_minutes": 60
+        })
+        
+        with patch.object(self.strategy, '_get_llm_decision', new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = raw_decision
+            # This should not raise a schema validation error
+            signal = await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000, 0)
+            
+            self.assertIsNotNone(signal)
+            self.assertEqual(signal.action, 'PAUSE_TRADING')
+            self.assertIsNone(signal.symbol)
+
     def test_extract_json_payload_handles_chatter(self):
         noisy = (
             "Some analysis text that should be ignored before the JSON.\n\n"
@@ -89,6 +114,53 @@ class TestLLMValidation(unittest.IsolatedAsyncioTestCase):
         payload = self.strategy._extract_json_payload(noisy)
         decision = json.loads(payload)
         self.assertEqual(decision['action'], 'HOLD')
+
+    def test_tool_request_filtering_and_alias(self):
+        # Test 1: Enum lookup and extra param filtering
+        # "get_recent_trades" string should resolve to ToolName.GET_RECENT_TRADES
+        # and "extra_field" should be filtered out
+        payload = json.dumps({
+            "tool_requests": [
+                {
+                    "id": "req1",
+                    "tool": "get_recent_trades",
+                    "params": {
+                        "symbol": "BTC/USD",
+                        "limit": 10,
+                        "extra_field": "should_be_removed"
+                    }
+                }
+            ]
+        })
+        requests = self.strategy._parse_tool_requests(payload)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].tool, "get_recent_trades")
+        # Check that extra_field is NOT in the model dump (it's filtered before validation)
+        # Wait, ToolRequest.params is a model. We can check if it has the field.
+        # The model RecentTradesParams does not have extra_field.
+        # If filtering failed, validation would have raised an error and request would be skipped.
+        # So existence of request implies success.
+        self.assertEqual(requests[0].params.limit, 10)
+
+        # Test 2: 4h alias mapping
+        payload_alias = json.dumps({
+            "tool_requests": [
+                {
+                    "id": "req2",
+                    "tool": "get_market_data",
+                    "params": {
+                        "symbol": "BTC/USD",
+                        "timeframes": ["4h", "1m"]
+                    }
+                }
+            ]
+        })
+        requests_alias = self.strategy._parse_tool_requests(payload_alias)
+        self.assertEqual(len(requests_alias), 1)
+        # "4h" should be mapped to "6h" (as per our edit to llm_tools.py)
+        self.assertIn("6h", requests_alias[0].params.timeframes)
+        self.assertIn("1m", requests_alias[0].params.timeframes)
+        self.assertNotIn("4h", requests_alias[0].params.timeframes)
 
 
 if __name__ == '__main__':

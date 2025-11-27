@@ -89,7 +89,7 @@ class LLMStrategy(BaseStrategy):
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["BUY", "SELL", "HOLD", "CANCEL", "UPDATE_PLAN", "PARTIAL_CLOSE", "CLOSE_POSITION", "PAUSE_TRADING"]},
-                "symbol": {"type": "string"},
+                "symbol": {"type": ["string", "null"]},
                 "quantity": {"type": ["number", "null"], "minimum": 0},
                 "reason": {"type": "string"},
                 "order_id": {"type": ["string", "number", "null"]},
@@ -595,7 +595,15 @@ class LLMStrategy(BaseStrategy):
         for item in tool_items:
             try:
                 tool = item.get("tool") if isinstance(item, dict) else None
-                target_model = TOOL_PARAM_MODELS.get(tool) if tool else None
+                target_model = None
+                if tool:
+                    try:
+                        # Ensure we look up using the Enum if possible
+                        target_model = TOOL_PARAM_MODELS.get(ToolName(tool))
+                    except ValueError:
+                        # Fallback or invalid tool string
+                        target_model = TOOL_PARAM_MODELS.get(tool)
+                
                 params = item.get("params") if isinstance(item, dict) else None
                 
                 if target_model and params is not None:

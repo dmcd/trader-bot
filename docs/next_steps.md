@@ -1,7 +1,7 @@
 ## Trading Bot Next Steps
 
 ### Strategic priorities
-- Prove reliability before sizing: stabilize data/tooling, harden risk checks, and run paper sessions with telemetry replay to validate LLM/tool loop.
+- Prove reliability before sizing: stabilize data/tooling, harden risk checks, and run paper sessions with telemetry to validate LLM/tool loop.
 - Reduce prompt bloat and move to deterministic guards: let tools supply data; keep Python in charge of risk, sizing, and execution.
 
 ### Execution checklist
@@ -19,7 +19,7 @@
 
 ### Suggested immediate steps
 1) Add symbol/param allowlists and per-tool rate limits; persist tool envelopes to DB.  
-2) Implement runner-level integration test and a basic backtest harness using recorded ccxt data.  
+2) Implement runner-level integration test. 
 3) Layer deterministic overlays (min RR, slippage check vs. decision price, anti-stack rules) before execution.  
 4) Run paper sessions with telemetry review; optionally add a simple pause/HOLD control once tools are stable.  
 

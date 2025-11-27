@@ -181,6 +181,29 @@ class TestLLMValidation(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Plan cap reached", prompt_context)
 
     @patch('strategy.asyncio.get_event_loop')
+    async def test_rejection_reason_surfaces_in_prompt(self, mock_loop):
+        mock_loop.return_value.time.return_value = 1000
+        self.mock_db.get_recent_market_data.return_value = [{'price': 100}] * 50
+        self.mock_db.get_open_orders.return_value = []
+        self.mock_ta.calculate_indicators.return_value = {'bb_width': 2.0, 'rsi': 50}
+        self.strategy.last_trade_ts = 0
+        self.strategy.last_rejection_reason = "Plan cap reached for BTC/USD (2/2)"
+
+        captured_prompts = []
+
+        async def fake_invoke(prompt, timeout=30):
+            captured_prompts.append(prompt)
+            return _fake_response('{"action":"HOLD","symbol":"BTC/USD","reason":"test"}')
+
+        with patch.object(self.strategy, "_invoke_llm", fake_invoke):
+            await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000, 0)
+
+        self.assertTrue(captured_prompts)
+        joined = "\n".join(captured_prompts)
+        self.assertIn("previous order was REJECTED", joined)
+        self.assertIn("Plan cap reached for BTC/USD", joined)
+
+    @patch('strategy.asyncio.get_event_loop')
     async def test_llm_cost_guard_blocks_when_cap_hit(self, mock_loop):
         mock_loop.return_value.time.return_value = 1000
         self.mock_db.get_recent_market_data.return_value = [{'price': 100}] * 50

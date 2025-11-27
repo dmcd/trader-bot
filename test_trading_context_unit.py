@@ -48,6 +48,8 @@ class TestTradingContext(unittest.TestCase):
             target_price=21000.0,
             size=0.1,
             reason="test plan",
+            entry_order_id="ord-1",
+            entry_client_order_id="cli-1",
         )
         trace_id = self.db.log_llm_trace(
             self.session_id,

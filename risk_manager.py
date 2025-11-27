@@ -187,6 +187,7 @@ class RiskManager:
     def get_total_exposure(self, price_overrides: dict = None) -> float:
         """Return total notional exposure using marked prices."""
         exposure = 0.0
+        per_symbol_notional = {}
         for sym, data in self.positions.items():
             qty = data.get('quantity', 0) or 0.0
             curr_price = 0.0
@@ -196,6 +197,23 @@ class RiskManager:
             else:
                 curr_price = data.get('current_price', 0) or 0.0
 
-            exposure += abs(qty) * curr_price
+            notional = abs(qty) * curr_price
+            per_symbol_notional[sym] = notional
+            exposure += notional
 
-        return exposure + self.pending_buy_exposure + self.pending_sell_exposure
+        # Pending buys always consume headroom
+        exposure += self.pending_buy_exposure
+
+        # Pending sells can offset existing longs; only remainder adds exposure (short intent)
+        for sym, counts in (self.pending_orders_by_symbol or {}).items():
+            sell_notional = counts.get('sell', 0.0) or 0.0
+            if sell_notional <= 0:
+                continue
+            long_notional = per_symbol_notional.get(sym, 0.0)
+            offset = min(long_notional, sell_notional)
+            exposure -= offset
+            remainder = sell_notional - offset
+            if remainder > 0:
+                exposure += remainder
+
+        return max(0.0, exposure)

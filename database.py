@@ -694,6 +694,17 @@ class TradingDatabase:
         cursor.execute("SELECT COUNT(*) as cnt FROM trades WHERE session_id = ?", (session_id,))
         row = cursor.fetchone()
         return row['cnt'] if row else 0
+
+    def get_latest_trade_timestamp(self, session_id: int) -> Optional[str]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT timestamp FROM trades WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1", (session_id,))
+        row = cursor.fetchone()
+        return row['timestamp'] if row else None
+
+    def get_distinct_trade_symbols(self, session_id: int) -> List[str]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT DISTINCT symbol FROM trades WHERE session_id = ?", (session_id,))
+        return [row['symbol'] for row in cursor.fetchall()]
     
     def create_command(self, command: str):
         """Create a new command for the bot to execute."""
@@ -764,6 +775,8 @@ class TradingDatabase:
                 opened_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 closed_at TEXT,
                 reason TEXT,
+                entry_order_id TEXT,
+                entry_client_order_id TEXT,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
@@ -773,17 +786,21 @@ class TradingDatabase:
             cols = {row['name'] for row in cursor.fetchall()}
             if 'version' not in cols:
                 cursor.execute("ALTER TABLE trade_plans ADD COLUMN version INTEGER DEFAULT 1")
+            if 'entry_order_id' not in cols:
+                cursor.execute("ALTER TABLE trade_plans ADD COLUMN entry_order_id TEXT")
+            if 'entry_client_order_id' not in cols:
+                cursor.execute("ALTER TABLE trade_plans ADD COLUMN entry_client_order_id TEXT")
         except Exception as e:
             logger.debug(f"Could not ensure trade_plans version column: {e}")
         self.conn.commit()
 
-    def create_trade_plan(self, session_id: int, symbol: str, side: str, entry_price: float, stop_price: float, target_price: float, size: float, reason: str = "") -> int:
+    def create_trade_plan(self, session_id: int, symbol: str, side: str, entry_price: float, stop_price: float, target_price: float, size: float, reason: str = "", entry_order_id: str = None, entry_client_order_id: str = None) -> int:
         self.ensure_trade_plans_table()
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO trade_plans (session_id, symbol, side, entry_price, stop_price, target_price, size, reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, symbol, side, entry_price, stop_price, target_price, size, reason))
+            INSERT INTO trade_plans (session_id, symbol, side, entry_price, stop_price, target_price, size, reason, entry_order_id, entry_client_order_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, symbol, side, entry_price, stop_price, target_price, size, reason, entry_order_id, entry_client_order_id))
         self.conn.commit()
         return cursor.lastrowid
 

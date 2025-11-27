@@ -3,7 +3,7 @@ import atexit
 import os
 import tempfile
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from datetime import datetime, timedelta, timezone
 
 # Ensure tests never write to the production trading.db
@@ -30,7 +30,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.bot = MagicMock()
         self.runner.cost_tracker = MagicMock()
         self.runner.cost_tracker.calculate_trade_fee.return_value = 1.0
-        self.runner._apply_fill_to_session_stats = MagicMock()
+        self.runner._apply_fill_to_session_stats = Mock(return_value=None)
         self.runner.session_id = 1
 
     @patch('strategy_runner.datetime')
@@ -54,11 +54,11 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         }]
         # Simulate price_now
         self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '123', 'liquidity': 'taker'})
-        self.runner.db.update_trade_plan_status = MagicMock()
-        self.runner.db.log_trade = MagicMock()
-        self.runner.db.update_trade_plan_prices = MagicMock()
+        self.runner.db.update_trade_plan_status = Mock()
+        self.runner.db.log_trade = Mock()
+        self.runner.db.update_trade_plan_prices = Mock()
 
-        await self.runner._monitor_trade_plans(price_now=100)
+        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 100}, open_orders=[])
         self.runner.db.update_trade_plan_status.assert_called_once()
 
     async def test_headroom_cancel(self):
@@ -77,11 +77,11 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         # Simulate exposure over cap
         self.runner.risk_manager.get_total_exposure = MagicMock(return_value=1e12)
         self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '123', 'liquidity': 'taker'})
-        self.runner.db.update_trade_plan_status = MagicMock()
-        self.runner.db.log_trade = MagicMock()
-        self.runner.db.update_trade_plan_prices = MagicMock()
+        self.runner.db.update_trade_plan_status = Mock()
+        self.runner.db.log_trade = Mock()
+        self.runner.db.update_trade_plan_prices = Mock()
 
-        await self.runner._monitor_trade_plans(price_now=100)
+        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 100}, open_orders=[])
         # Ensure we evaluated exposure headroom and attempted closure path
         self.runner.risk_manager.get_total_exposure.assert_called_once()
         self.assertGreaterEqual(self.runner.db.update_trade_plan_status.call_count, 0)
@@ -100,10 +100,32 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
             'opened_at': now.isoformat(),
             'version': 1
         }]
-        self.runner.db.update_trade_plan_prices = MagicMock()
-        self.runner.bot.place_order_async = AsyncMock()
-        await self.runner._monitor_trade_plans(price_now=102)
+        self.runner.db.update_trade_plan_prices = Mock()
+        self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '123', 'liquidity': 'taker'})
+        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 102}, open_orders=[])
         self.runner.db.update_trade_plan_prices.assert_called_once()
+
+    async def test_plan_closes_when_flat_and_no_orders(self):
+        now = datetime.now(timezone.utc)
+        self.runner.db = MagicMock()
+        self.runner.db.get_open_trade_plans.return_value = [{
+            'id': 4,
+            'symbol': 'ETH/USD',
+            'side': 'SELL',
+            'entry_price': 1500,
+            'stop_price': 1550,
+            'target_price': 1400,
+            'size': 0.5,
+            'opened_at': now.isoformat(),
+            'version': 1
+        }]
+        self.runner.risk_manager.positions = {"ETH/USD": {"quantity": 0.0, "current_price": 1500}}
+        self.runner.db.update_trade_plan_status = Mock()
+        self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '123', 'liquidity': 'taker'})
+        self.runner.db.log_trade = Mock()
+
+        await self.runner._monitor_trade_plans(price_lookup={"ETH/USD": 1500}, open_orders=[])
+        self.runner.db.update_trade_plan_status.assert_called_once()
 
 
 if __name__ == '__main__':

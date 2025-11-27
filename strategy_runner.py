@@ -4,6 +4,7 @@ import os
 import signal
 import sys
 import json
+import inspect
 from datetime import datetime, timezone
 import google.generativeai as genai
 
@@ -24,7 +25,6 @@ from config import (
     MAX_DAILY_LOSS,
     MIN_TRADE_SIZE,
     LOOP_INTERVAL_SECONDS,
-    MIN_TRADE_INTERVAL_SECONDS,
     FEE_RATIO_COOLDOWN,
     MAX_TOTAL_EXPOSURE,
     ORDER_VALUE_BUFFER,
@@ -403,10 +403,11 @@ class StrategyRunner:
 
         return True
 
-    async def _monitor_trade_plans(self, price_now: float):
+    async def _monitor_trade_plans(self, price_lookup: dict, open_orders: list):
         """
-        Monitor open trade plans for stop/target hits and enforce max age/day-end flattening.
-        Currently supports single-symbol trading; uses latest price passed in.
+        Monitor open trade plans for stop/target hits and enforce max age/day-end flattening per symbol.
+        price_lookup: symbol -> latest price
+        open_orders: list of open orders from exchange
         """
         if not self.session_id:
             return
@@ -418,12 +419,21 @@ class StrategyRunner:
             if self.day_end_flatten_hour_utc is not None:
                 day_end_cutoff = now.replace(hour=self.day_end_flatten_hour_utc, minute=0, second=0, microsecond=0)
 
+            open_orders_by_symbol = {}
+            for o in open_orders or []:
+                sym = o.get('symbol')
+                if not sym:
+                    continue
+                open_orders_by_symbol.setdefault(sym, []).append(o)
+
             for plan in open_plans:
                 plan_id = plan['id']
                 side = plan['side'].upper()
                 stop = plan.get('stop_price')
                 target = plan.get('target_price')
                 size = plan.get('size') or 0.0
+                symbol = plan.get('symbol')
+                price_now = (price_lookup or {}).get(symbol)
                 entry = plan.get('entry_price') or price_now
                 version = plan.get('version') or 1
                 if not price_now or size <= 0:
@@ -431,6 +441,13 @@ class StrategyRunner:
 
                 should_close = False
                 reason = None
+
+                # Close stale plans with no position and no open orders for the symbol
+                pos_qty = (self.risk_manager.positions or {}).get(symbol, {}).get('quantity', 0.0) or 0.0
+                has_open_orders = bool(open_orders_by_symbol.get(symbol))
+                if abs(pos_qty) < 1e-9 and not has_open_orders:
+                    should_close = True
+                    reason = "Plan closed: position flat and no open orders"
 
                 # Cancel if exposure headroom exhausted
                 try:
@@ -509,7 +526,14 @@ class StrategyRunner:
                             liquidity=order_result.get('liquidity') if order_result else 'taker',
                             realized_pnl=realized,
                         )
-                        self._apply_fill_to_session_stats(order_result.get('order_id') if order_result else None, fee, realized)
+                        fill_result = self._apply_fill_to_session_stats(order_result.get('order_id') if order_result else None, fee, realized)
+                        if inspect.isawaitable(fill_result):
+                            await fill_result
+                        else:
+                            try:
+                                await fill_result  # in case a mock/coroutine slips through
+                            except TypeError:
+                                pass
                         self.db.update_trade_plan_status(plan_id, status='closed', closed_at=now_iso, reason=reason)
                     except Exception as e:
                         logger.error(f"Failed to close plan {plan_id}: {e}")
@@ -580,10 +604,17 @@ class StrategyRunner:
             start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
             start_ts_ms = int(start_of_day.timestamp() * 1000)
             
-            # 2. Fetch trades for the day
-            # Assuming BTC/USD for now as per original code
-            symbol = 'BTC/USD'
-            trades = await self.bot.get_trades_from_timestamp(symbol, start_ts_ms)
+            # 2. Fetch trades for the day across active symbols
+            try:
+                symbols = [s for s in getattr(self.bot.exchange, 'symbols', []) or [] if '/USD' in s]
+            except Exception:
+                symbols = []
+            if not symbols:
+                symbols = ['BTC/USD']
+            trades = []
+            for sym in symbols:
+                sym_trades = await self.bot.get_trades_from_timestamp(sym, start_ts_ms)
+                trades.extend(sym_trades)
             
             # 3. Rebuild Holdings and Stats
             self.holdings = {}
@@ -852,63 +883,91 @@ class StrategyRunner:
             return
 
         try:
-            # Fetch recent trades
-            trades = await self.bot.get_my_trades_async('BTC/USD', limit=20)
-            filtered_trades = []
-            for t in trades:
-                client_oid = t.get('clientOrderId') or t.get('info', {}).get('clientOrderId') or t.get('info', {}).get('client_order_id')
-                if client_oid and not str(client_oid).startswith(CLIENT_ORDER_PREFIX):
-                    continue
-                filtered_trades.append(t)
-            trades = filtered_trades
-            
-            for t in trades:
-                trade_id = str(t['id'])
-                if trade_id in self.processed_trade_ids:
-                    continue
-                
-                # Check DB for existence
-                existing = self.db.conn.execute("SELECT id FROM trades WHERE trade_id = ?", (trade_id,)).fetchone()
-                if existing:
-                    self.processed_trade_ids.add(trade_id)
-                    continue
-                
-                order_id = t.get('order')
-                symbol = t['symbol']
-                side = t['side'].upper()
-                price = t['price']
-                quantity = t['amount']
-                fee = t.get('fee', {}).get('cost', 0.0)
-                
-                # Extract liquidity if available
-                liquidity = 'unknown'
-                if 'liquidity' in t.get('info', {}):
-                    liquidity = t['info']['liquidity']
-                
-                # Get reason from local memory
-                reason = self.order_reasons.get(str(order_id), "Synced from exchange")
-                
-                # Calculate realized PnL
-                realized_pnl = self._update_holdings_and_realized(symbol, side, quantity, price, fee)
-                
-                self.db.log_trade(
-                    self.session_id,
-                    symbol,
-                    side,
-                    quantity,
-                    price,
-                    fee,
-                    reason,
-                    liquidity=liquidity,
-                    realized_pnl=realized_pnl,
-                    trade_id=trade_id,
-                    timestamp=t.get('datetime')
-                )
-                self._apply_fill_to_session_stats(order_id, fee, realized_pnl)
-                self.processed_trade_ids.add(trade_id)
-                bot_actions_logger.info(f"✅ Synced trade: {side} {quantity} {symbol} @ ${price:,.2f} (Fee: ${fee:.4f})")
-                # Mark any trade plan closed if target/stop hit (handled in monitor)
-                
+            symbols = set()
+            try:
+                symbols.update(self.db.get_distinct_trade_symbols(self.session_id) or [])
+                symbols.update({p.get('symbol') for p in self.db.get_positions(self.session_id) or [] if p.get('symbol')})
+                symbols.update({p.get('symbol') for p in self.db.get_open_trade_plans(self.session_id) or [] if p.get('symbol')})
+                symbols.update({o.get('symbol') for o in self.db.get_open_orders(self.session_id) or [] if o.get('symbol')})
+            except Exception:
+                pass
+            if not symbols:
+                symbols = {'BTC/USD'}
+
+            since_iso = self.db.get_latest_trade_timestamp(self.session_id)
+            since_ms = None
+            if since_iso:
+                try:
+                    since_dt = datetime.fromisoformat(since_iso)
+                    since_ms = int(since_dt.timestamp() * 1000) - 5000
+                except Exception:
+                    since_ms = None
+
+            for symbol in symbols:
+                cursor_since = since_ms
+                while True:
+                    trades = await self.bot.get_my_trades_async(symbol, since=cursor_since, limit=100)
+                    filtered_trades = []
+                    for t in trades:
+                        client_oid = t.get('clientOrderId') or t.get('info', {}).get('clientOrderId') or t.get('info', {}).get('client_order_id')
+                        if client_oid and not str(client_oid).startswith(CLIENT_ORDER_PREFIX):
+                            continue
+                        filtered_trades.append(t)
+                    trades = filtered_trades
+
+                    if not trades:
+                        break
+
+                    latest_ts = None
+                    for t in trades:
+                        trade_id = str(t['id'])
+                        if trade_id in self.processed_trade_ids:
+                            continue
+
+                        existing = self.db.conn.execute("SELECT id FROM trades WHERE trade_id = ?", (trade_id,)).fetchone()
+                        if existing:
+                            self.processed_trade_ids.add(trade_id)
+                            continue
+
+                        order_id = t.get('order')
+                        side = t['side'].upper()
+                        price = t['price']
+                        quantity = t['amount']
+                        fee = t.get('fee', {}).get('cost', 0.0)
+
+                        liquidity = 'unknown'
+                        if 'liquidity' in t.get('info', {}):
+                            liquidity = t['info']['liquidity']
+
+                        reason = self.order_reasons.get(str(order_id), "Synced from exchange")
+
+                        realized_pnl = self._update_holdings_and_realized(symbol, side, quantity, price, fee)
+
+                        self.db.log_trade(
+                            self.session_id,
+                            symbol,
+                            side,
+                            quantity,
+                            price,
+                            fee,
+                            reason,
+                            liquidity=liquidity,
+                            realized_pnl=realized_pnl,
+                            trade_id=trade_id,
+                            timestamp=t.get('datetime')
+                        )
+                        self._apply_fill_to_session_stats(order_id, fee, realized_pnl)
+                        self.processed_trade_ids.add(trade_id)
+                        bot_actions_logger.info(f"✅ Synced trade: {side} {quantity} {symbol} @ ${price:,.2f} (Fee: ${fee:.4f})")
+
+                        ts = t.get('timestamp')
+                        if ts is not None:
+                            latest_ts = max(latest_ts or ts, ts)
+
+                    if latest_ts is None or len(trades) < 100:
+                        break
+                    cursor_since = latest_ts + 1
+
         except Exception as e:
             logger.exception(f"Error syncing trades: {e}")
 
@@ -1154,7 +1213,7 @@ class StrategyRunner:
 
                     # 2.8 Monitor trade plans for stops/targets and max age
                     try:
-                        await self._monitor_trade_plans(price_now)
+                        await self._monitor_trade_plans(price_lookup=price_lookup, open_orders=open_orders)
                     except Exception as e:
                         logger.exception(f"Trade plan monitor error: {e}")
 
@@ -1459,7 +1518,9 @@ class StrategyRunner:
                                         stop_price,
                                         target_price,
                                         quantity,
-                                        reason
+                                        reason,
+                                        entry_order_id=order_result.get('order_id') if order_result else None,
+                                        entry_client_order_id=order_result.get('client_order_id') if order_result else None
                                     )
                                     self._open_trade_plans[plan_id] = {
                                         'symbol': symbol,

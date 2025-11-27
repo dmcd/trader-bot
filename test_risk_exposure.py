@@ -135,6 +135,36 @@ class TestRiskManager(unittest.TestCase):
         result_ok = self.rm.check_trade_allowed("ETH/USD", "BUY", 5, price=20.0)  # adds $100; still under 1000
         self.assertTrue(result_ok.allowed)
 
+    def test_pending_sells_offset_longs(self):
+        # $400 long exposure
+        self.rm.update_positions({"ETH/USD": {"quantity": 20.0, "current_price": 20.0}})
+        # Pending sell for $200 should reduce exposure to $200
+        pending_sell = [{
+            "symbol": "ETH/USD",
+            "side": "sell",
+            "price": 20.0,
+            "amount": 10.0,
+            "remaining": 10.0
+        }]
+        self.rm.update_pending_orders(pending_sell)
+
+        exposure = self.rm.get_total_exposure()
+        self.assertAlmostEqual(200.0, exposure)
+
+        # A sell that exceeds the long should leave remainder as short exposure
+        pending_short = [{
+            "symbol": "BTC/USD",
+            "side": "sell",
+            "price": 100.0,
+            "amount": 5.0,
+            "remaining": 5.0
+        }]
+        self.rm.update_positions({"BTC/USD": {"quantity": 2.0, "current_price": 100.0}})
+        self.rm.update_pending_orders(pending_short)
+        exposure_short = self.rm.get_total_exposure()
+        # Long notional 200; sell notional 500 -> exposure offsets 200 and adds 300 short
+        self.assertAlmostEqual(300.0, exposure_short)
+
     def test_pending_orders_by_symbol_tracks_count_and_notional(self):
         pending = [
             {"symbol": "BTC/USD", "side": "buy", "price": 30000.0, "amount": 0.1, "remaining": 0.05},

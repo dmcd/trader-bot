@@ -35,6 +35,9 @@ class RiskManager:
 
     def update_equity(self, current_equity: float):
         """Track drawdown off start-of-day equity (keeps loss limits consistent)."""
+        if current_equity is None:
+            return
+
         if self.start_of_day_equity is None:
             self.start_of_day_equity = current_equity
 

@@ -44,7 +44,7 @@ def setup_logging():
 
     # 1. Console Log (console.log) - Technical debug log
     # DEBUG and above, detailed format, captures everything
-    console_handler = logging.FileHandler('console.log', mode='w') # Overwrite for fresh debug log each run
+    console_handler = logging.FileHandler('console.log', mode='a') # Append to keep history
     console_handler.setLevel(logging.DEBUG)
     console_handler.setFormatter(detailed_formatter)
     logger.addHandler(console_handler)
@@ -62,7 +62,7 @@ def setup_logging():
     bot_actions_logger.setLevel(logging.INFO)
     bot_actions_logger.propagate = False  # Don't propagate to root logger
     
-    bot_handler = logging.FileHandler('bot.log', mode='w')  # Overwrite for fresh log each run
+    bot_handler = logging.FileHandler('bot.log', mode='a')  # Append to keep history
     bot_handler.setLevel(logging.INFO)
     bot_handler.setFormatter(simple_formatter)
     bot_actions_logger.addHandler(bot_handler)

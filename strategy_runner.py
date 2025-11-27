@@ -515,6 +515,11 @@ class StrategyRunner:
         
         # Get initial equity (full account value)
         initial_equity = await self.bot.get_equity_async()
+        while initial_equity is None:
+            logger.warning("Could not fetch initial equity; retrying in 5s...")
+            await asyncio.sleep(5)
+            initial_equity = await self.bot.get_equity_async()
+            
         logger.info(f"{self.exchange_name} Equity: {initial_equity}")
         
         # Create or load today's trading session (DB still used for logging/IDs)
@@ -968,6 +973,12 @@ class StrategyRunner:
                     
                     # 1. Update Equity / PnL
                     current_equity = await self.bot.get_equity_async()
+                    
+                    if current_equity is None:
+                        logger.warning("Could not fetch equity; skipping loop iteration to avoid false loss triggers.")
+                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        continue
+
                     if self.session_id is not None:
                         try:
                             self.db.log_equity_snapshot(self.session_id, current_equity)

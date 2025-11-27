@@ -298,7 +298,7 @@ class GeminiTrader(BaseTrader):
             return total_usd
         except Exception as e:
             logger.error(f"Error calculating Gemini equity: {e}")
-            return 0.0
+            return None
 
     async def get_positions_async(self):
         """Return spot balances as positions."""

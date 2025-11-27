@@ -771,6 +771,7 @@ class LLMStrategy(BaseStrategy):
                 "- Always use symbols from the Available Symbols list.\n"
                 "- Factor existing open orders into sizing/direction to avoid over-allocation or duplicate legs.\n"
                 "- You may return action=CANCEL with an order_id from the open orders list to pull a stale or unsafe order.\n"
+                "- If plan cap for a symbol is reached, do NOT place new BUY/SELL. Use UPDATE_PLAN (with plan_id/stop/target/size_factor) or CANCEL/PARTIAL_CLOSE existing plans instead.\n"
             )
 
         mode_note = ""

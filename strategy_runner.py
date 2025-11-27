@@ -1323,7 +1323,7 @@ class StrategyRunner:
                                 open_plan_count = self.db.count_open_trade_plans_for_symbol(self.session_id, symbol)
                                 if open_plan_count >= self.max_plans_per_symbol:
                                     bot_actions_logger.info(f"⛔ Trade Blocked: plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
-                                    self.strategy.on_trade_rejected("Plan cap reached")
+                                    self.strategy.on_trade_rejected(f"Plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
                                     continue
                             except Exception as e:
                                 logger.debug(f"Could not check plan cap: {e}")

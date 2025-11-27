@@ -79,3 +79,6 @@ AUTO_REPLACE_PLAN_ON_CAP = os.getenv('AUTO_REPLACE_PLAN_ON_CAP', 'false').lower(
 PLAN_MAX_PER_SYMBOL = int(os.getenv('PLAN_MAX_PER_SYMBOL', '2'))
 PLAN_MAX_AGE_MINUTES = int(os.getenv('PLAN_MAX_AGE_MINUTES', '60'))
 PLAN_TRAIL_TO_BREAKEVEN_PCT = float(os.getenv('PLAN_TRAIL_TO_BREAKEVEN_PCT', '0.01'))  # e.g., 0.01 = 1%
+
+# Order routing
+CLIENT_ORDER_PREFIX = os.getenv('CLIENT_ORDER_PREFIX', 'BOT')

@@ -43,6 +43,7 @@ from config import (
     PLAN_MAX_PER_SYMBOL,
     PLAN_MAX_AGE_MINUTES,
     PLAN_TRAIL_TO_BREAKEVEN_PCT,
+    CLIENT_ORDER_PREFIX,
 )
 
 from logger_config import setup_logging
@@ -853,6 +854,13 @@ class StrategyRunner:
         try:
             # Fetch recent trades
             trades = await self.bot.get_my_trades_async('BTC/USD', limit=20)
+            filtered_trades = []
+            for t in trades:
+                client_oid = t.get('clientOrderId') or t.get('info', {}).get('clientOrderId') or t.get('info', {}).get('client_order_id')
+                if client_oid and not str(client_oid).startswith(CLIENT_ORDER_PREFIX):
+                    continue
+                filtered_trades.append(t)
+            trades = filtered_trades
             
             for t in trades:
                 trade_id = str(t['id'])

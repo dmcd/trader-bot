@@ -1,12 +1,14 @@
 import asyncio
 import ccxt.async_support as ccxt
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from trader import BaseTrader
 from config import (
     GEMINI_EXCHANGE_API_KEY, GEMINI_EXCHANGE_SECRET,
     GEMINI_SANDBOX_API_KEY, GEMINI_SANDBOX_SECRET,
-    TRADING_MODE
+    TRADING_MODE,
+    CLIENT_ORDER_PREFIX,
 )
 
 logger = logging.getLogger(__name__)
@@ -240,7 +242,8 @@ class GeminiTrader(BaseTrader):
             logger.info(f"Placing limit order: {quantity} at ${limit_price}")
 
             # Create limit order
-            params = {}
+            client_order_id = f"{CLIENT_ORDER_PREFIX}-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{uuid.uuid4().hex[:6]}"
+            params = {"clientOrderId": client_order_id}
             if prefer_maker:
                 params['postOnly'] = True
 
@@ -257,13 +260,13 @@ class GeminiTrader(BaseTrader):
                 if prefer_maker and status in ('canceled', 'rejected'):
                     logger.warning(f"Post-only rejected ({status}), retrying as taker for {symbol}")
                     limit_price = compute_price(False)
-                    order = await self.exchange.create_limit_order(symbol, side, quantity, limit_price)
+                    order = await self.exchange.create_limit_order(symbol, side, quantity, limit_price, {"clientOrderId": client_order_id})
                     liquidity = "taker"
             except Exception as maker_err:
                 if prefer_maker:
                     logger.warning(f"Maker attempt failed ({maker_err}); retrying as taker")
                     limit_price = compute_price(False)
-                    order = await self.exchange.create_limit_order(symbol, side, quantity, limit_price)
+                    order = await self.exchange.create_limit_order(symbol, side, quantity, limit_price, {"clientOrderId": client_order_id})
                     liquidity = "taker"
                 else:
                     raise
@@ -281,7 +284,8 @@ class GeminiTrader(BaseTrader):
                 'remaining': order.get('remaining', 0),
                 'avg_fill_price': order.get('average'),
                 'liquidity': liquidity,
-                'fee': order.get('fee', {}).get('cost', 0.0) if order.get('fee') else 0.0
+                'fee': order.get('fee', {}).get('cost', 0.0) if order.get('fee') else 0.0,
+                'client_order_id': client_order_id,
             }
         except Exception as e:
             logger.error(f"Error placing Gemini order: {e}")

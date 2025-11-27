@@ -57,3 +57,23 @@ def test_clamp_payload_size_marks_truncation_when_exceeding_max_bytes():
     clamped = clamp_payload_size(payload, max_bytes=10)
     assert clamped.get("truncated") is True
     assert "note" in clamped
+
+
+def test_tool_request_disambiguates_union_types():
+    # Regression test for "get_recent_trades" being confused with "get_market_data"
+    # because MarketDataParams has defaults that match RecentTradesParams structure.
+    req = ToolRequest(
+        id="r2",
+        tool=ToolName.GET_RECENT_TRADES,
+        params={
+            "symbol": "BTC/USD",
+            "limit": 50,
+        },
+    )
+    # Should be RecentTradesParams, NOT MarketDataParams
+    assert req.tool == ToolName.GET_RECENT_TRADES
+    # RecentTradesParams does NOT have 'timeframes' or 'include_volume'
+    assert not hasattr(req.params, "timeframes")
+    assert not hasattr(req.params, "include_volume")
+    assert req.params.limit == 50
+

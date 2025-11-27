@@ -140,17 +140,36 @@ class ToolRequest(ToolBaseModel):
     tool: ToolName
     params: Union[MarketDataParams, OrderBookParams, RecentTradesParams]
 
-    @model_validator(mode="after")
-    def ensure_param_type(self) -> "ToolRequest":
-        target_model = TOOL_PARAM_MODELS.get(self.tool)
-        if not target_model:
-            raise ValueError(f"Unsupported tool: {self.tool}")
-        if not isinstance(self.params, target_model):
+    @model_validator(mode="before")
+    @classmethod
+    def validate_params(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+            
+        tool_name = data.get("tool")
+        params = data.get("params")
+        
+        if not tool_name or params is None:
+            return data
+
+        # Look up the target model class
+        try:
+            # Handle both string and Enum input for tool
+            tool_enum = ToolName(tool_name)
+            target_model = TOOL_PARAM_MODELS.get(tool_enum)
+        except ValueError:
+            # Invalid tool name, let standard validation handle it
+            return data
+
+        if target_model and isinstance(params, dict):
             try:
-                self.params = target_model.model_validate(self.params)
+                # Explicitly validate against the target model
+                validated_params = target_model.model_validate(params)
+                data["params"] = validated_params
             except Exception as exc:
-                raise ValueError(f"Invalid params for {self.tool}: {exc}") from exc
-        return self
+                raise ValueError(f"Invalid params for {tool_name}: {exc}") from exc
+                
+        return data
 
 
 class ToolResponse(ToolBaseModel):

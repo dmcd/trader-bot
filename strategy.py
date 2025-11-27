@@ -684,6 +684,7 @@ class LLMStrategy(BaseStrategy):
         context_summary = ""
         regime_flags = {}
 
+        memory_block = ""
         if symbol and trading_context:
             try:
                 context_summary = trading_context.get_context_summary(symbol, open_orders=open_orders)
@@ -693,6 +694,10 @@ class LLMStrategy(BaseStrategy):
                     if hasattr(self.db, "get_recent_ohlcv")
                 }
                 regime_flags = self._compute_regime_flags(session_id, symbol, market_data.get(symbol, {}), recent_bars)
+                if hasattr(trading_context, "get_memory_snapshot"):
+                    mem = trading_context.get_memory_snapshot()
+                    if mem:
+                        memory_block = f"MEMORY (recent plans/decisions):\n{mem}\n\n"
             except Exception as e:
                 logger.warning(f"Error getting context/regime: {e}")
         
@@ -791,6 +796,7 @@ class LLMStrategy(BaseStrategy):
             pending_exposure_budget=f"${pending_buy_exposure:,.2f}",
             max_open_orders_per_symbol=MAX_POSITIONS,
             response_instructions=response_instructions_decision,
+            memory_block=memory_block,
         )
 
         trace_id = None
@@ -823,6 +829,7 @@ class LLMStrategy(BaseStrategy):
                 pending_exposure_budget=f"${pending_buy_exposure:,.2f}",
                 max_open_orders_per_symbol=MAX_POSITIONS,
                 response_instructions=response_instructions_planner,
+                memory_block=memory_block,
             )
             try:
                 telemetry_logger.info(

@@ -409,6 +409,18 @@ class TradingDatabase:
             if "clamped" in d.lower():
                 stats["clamped"] += 1
         return stats
+
+    def get_recent_llm_traces(self, session_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+        """Return recent LLM traces (decision + execution) for memory/context."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT id, timestamp, decision_json, execution_result
+            FROM llm_traces
+            WHERE session_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (session_id, limit))
+        return [dict(row) for row in cursor.fetchall()]
     
     def log_market_data(self, session_id: int, symbol: str, price: float,
                        bid: float, ask: float, volume: float = 0.0,

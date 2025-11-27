@@ -37,6 +37,36 @@ class TestTradingContext(unittest.TestCase):
         self.assertIn("trend_pct", parsed)
         self.assertIn("win_rate_pct", parsed["session"])
 
+    def test_memory_snapshot_is_capped_and_includes_plans_and_traces(self):
+        # Create a plan and traces to populate memory
+        plan_id = self.db.create_trade_plan(
+            self.session_id,
+            symbol="BTC/USD",
+            side="BUY",
+            entry_price=20500.0,
+            stop_price=20000.0,
+            target_price=21000.0,
+            size=0.1,
+            reason="test plan",
+        )
+        trace_id = self.db.log_llm_trace(
+            self.session_id,
+            prompt="p",
+            response="r",
+            decision_json='{"action":"BUY","symbol":"BTC/USD","quantity":0.1}',
+            market_context=None,
+        )
+        self.db.update_llm_trace_execution(trace_id, {"status": "filled"})
+
+        snapshot = self.context.get_memory_snapshot(max_bytes=500, max_plans=2, max_traces=2)
+        self.assertTrue(snapshot)
+        parsed = json.loads(snapshot)
+        self.assertIn("open_plans", parsed)
+        self.assertIn("recent_decisions", parsed)
+        self.assertGreaterEqual(len(parsed["open_plans"]), 1)
+        self.assertGreaterEqual(len(parsed["recent_decisions"]), 1)
+        self.assertLessEqual(len(snapshot.encode("utf-8")), 500)
+
 
 if __name__ == "__main__":
     unittest.main()

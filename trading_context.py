@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Any
 from database import TradingDatabase
+from llm_tools import estimate_json_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,84 @@ class TradingContext:
         except Exception as exc:
             logger.debug(f"Failed to serialize context summary: {exc}")
             return ""
+
+    def get_memory_snapshot(
+        self,
+        max_bytes: int = 1200,
+        max_plans: int = 5,
+        max_traces: int = 5,
+    ) -> str:
+        """
+        Provide a small memory block with open plans and recent decisions/execution outcomes.
+        Trims entries to stay within max_bytes; returns empty string on failure.
+        """
+        memory = {"open_plans": [], "recent_decisions": []}
+
+        try:
+            plans = self.db.get_open_trade_plans(self.session_id)[:max_plans]
+            for plan in plans:
+                memory["open_plans"].append(
+                    {
+                        "id": plan.get("id"),
+                        "symbol": plan.get("symbol"),
+                        "side": plan.get("side"),
+                        "size": plan.get("size"),
+                        "entry": plan.get("entry_price"),
+                        "stop": plan.get("stop_price"),
+                        "target": plan.get("target_price"),
+                        "version": plan.get("version"),
+                        "reason": plan.get("reason"),
+                    }
+                )
+        except Exception as exc:
+            logger.debug(f"Failed to fetch open plans for memory: {exc}")
+
+        try:
+            traces = self.db.get_recent_llm_traces(self.session_id, limit=max_traces)
+            for trace in traces:
+                decision = trace.get("decision_json")
+                execution = trace.get("execution_result")
+                try:
+                    if decision:
+                        decision = json.loads(decision)
+                except Exception:
+                    pass
+                try:
+                    if execution:
+                        execution = json.loads(execution)
+                except Exception:
+                    pass
+                memory["recent_decisions"].append(
+                    {
+                        "ts": trace.get("timestamp"),
+                        "decision": decision,
+                        "execution": execution,
+                    }
+                )
+        except Exception as exc:
+            logger.debug(f"Failed to fetch LLM traces for memory: {exc}")
+
+        def _encode(mem: Dict[str, Any]) -> str:
+            try:
+                return json.dumps(mem, separators=(",", ":"))
+            except Exception:
+                return ""
+
+        encoded = _encode(memory)
+        if encoded and estimate_json_bytes(memory) <= max_bytes:
+            return encoded
+
+        # Trim decisions first, then plans until it fits or is empty
+        while memory["recent_decisions"] and estimate_json_bytes(memory) > max_bytes:
+            memory["recent_decisions"].pop()
+        while memory["open_plans"] and estimate_json_bytes(memory) > max_bytes:
+            memory["open_plans"].pop()
+
+        encoded = _encode(memory)
+        if encoded and estimate_json_bytes(memory) <= max_bytes:
+            return encoded
+
+        return ""
     
     def get_recent_performance(self) -> Dict[str, Any]:
         """Get recent performance metrics."""

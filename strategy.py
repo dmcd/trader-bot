@@ -32,6 +32,7 @@ from config import (
     LLM_MAX_SESSION_COST,
     LLM_MIN_CALL_INTERVAL_SECONDS,
     LLM_MAX_CONSECUTIVE_ERRORS,
+    AUTO_REPLACE_PLAN_ON_CAP,
     TOOL_DEFAULT_TIMEFRAMES,
     TOOL_MAX_BARS,
     TOOL_MAX_DEPTH,
@@ -437,6 +438,7 @@ class LLMStrategy(BaseStrategy):
             f"- Pending BUY exposure: ${pending_buy_exposure:,.2f}\n"
             f"- Max open orders per symbol: {MAX_POSITIONS}\n"
             f"- Plans per symbol (used/cap): {plan_counts_str}\n"
+            f"{'- Plan cap reached: you must UPDATE_PLAN/PARTIAL_CLOSE/CANCEL or rely on auto-replace if enabled.\n' if any(count >= MAX_POSITIONS for count in plan_counts.values()) else ''}"
             f"- Order cap: ${order_cap_value:.2f}\n"
             f"- Min trade size: ${MIN_TRADE_SIZE:.2f}\n"
             f"- Open orders: {open_order_count} ({open_orders_summary})"

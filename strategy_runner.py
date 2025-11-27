@@ -1322,9 +1322,25 @@ class StrategyRunner:
                             try:
                                 open_plan_count = self.db.count_open_trade_plans_for_symbol(self.session_id, symbol)
                                 if open_plan_count >= self.max_plans_per_symbol:
-                                    bot_actions_logger.info(f"⛔ Trade Blocked: plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
-                                    self.strategy.on_trade_rejected(f"Plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
-                                    continue
+                                    if AUTO_REPLACE_PLAN_ON_CAP:
+                                        try:
+                                            plans = self.db.get_open_trade_plans(self.session_id)
+                                            candidates = [p for p in plans if p.get('symbol') == symbol]
+                                            if candidates:
+                                                victim = sorted(candidates, key=lambda p: p.get('opened_at'))[0]
+                                                self.db.update_trade_plan_status(victim['id'], status='cancelled', closed_at=datetime.now(timezone.utc).isoformat(), reason="auto_replace_on_cap")
+                                                bot_actions_logger.info(f"♻️ Replaced plan {victim['id']} to make room for new {action} on {symbol}")
+                                            else:
+                                                bot_actions_logger.info(f"♻️ Auto-replace: no candidate plan found for {symbol}")
+                                        except Exception as e:
+                                            logger.warning(f"Auto-replace plan failed: {e}")
+                                            bot_actions_logger.info(f"⛔ Trade Blocked: plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
+                                            self.strategy.on_trade_rejected(f"Plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
+                                            continue
+                                    else:
+                                        bot_actions_logger.info(f"⛔ Trade Blocked: plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
+                                        self.strategy.on_trade_rejected(f"Plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
+                                        continue
                             except Exception as e:
                                 logger.debug(f"Could not check plan cap: {e}")
                             # Enforce pending exposure headroom including open orders, stacking, and per-symbol caps

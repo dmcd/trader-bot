@@ -75,3 +75,4 @@ GEMINI_OUTPUT_COST_PER_TOKEN = float(os.getenv('GEMINI_OUTPUT_COST', '0.00000030
 LLM_MAX_SESSION_COST = float(os.getenv('LLM_MAX_SESSION_COST', '10.0'))  # USD cap per session before auto HOLD
 LLM_MIN_CALL_INTERVAL_SECONDS = int(os.getenv('LLM_MIN_CALL_INTERVAL_SECONDS', '5'))  # min spacing between planner/decision calls
 LLM_MAX_CONSECUTIVE_ERRORS = int(os.getenv('LLM_MAX_CONSECUTIVE_ERRORS', '3'))  # errors before forcing HOLD
+AUTO_REPLACE_PLAN_ON_CAP = os.getenv('AUTO_REPLACE_PLAN_ON_CAP', 'false').lower() == 'true'  # replace oldest plan when cap hit

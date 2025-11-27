@@ -218,7 +218,8 @@ def load_trade_plans(session_id):
     db = TradingDatabase()
     try:
         plans = db.get_open_trade_plans(session_id)
-        return plans
+        # Defensive filter in case stale rows sneak in
+        return [p for p in plans if (p.get("status", "open") == "open")]
     finally:
         db.close()
 

@@ -70,3 +70,8 @@ GEMINI_TAKER_FEE = float(os.getenv('GEMINI_TAKER_FEE', '0.0040'))  # 0.40%
 # LLM Costs (Gemini 2.5 Flash pricing per token)
 GEMINI_INPUT_COST_PER_TOKEN = float(os.getenv('GEMINI_INPUT_COST', '0.000000075'))   # $0.075 per 1M tokens
 GEMINI_OUTPUT_COST_PER_TOKEN = float(os.getenv('GEMINI_OUTPUT_COST', '0.00000030'))  # $0.30 per 1M tokens
+
+# LLM cost/frequency guards
+LLM_MAX_SESSION_COST = float(os.getenv('LLM_MAX_SESSION_COST', '10.0'))  # USD cap per session before auto HOLD
+LLM_MIN_CALL_INTERVAL_SECONDS = int(os.getenv('LLM_MIN_CALL_INTERVAL_SECONDS', '5'))  # min spacing between planner/decision calls
+LLM_MAX_CONSECUTIVE_ERRORS = int(os.getenv('LLM_MAX_CONSECUTIVE_ERRORS', '3'))  # errors before forcing HOLD

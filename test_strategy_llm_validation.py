@@ -162,6 +162,44 @@ class TestLLMValidation(unittest.IsolatedAsyncioTestCase):
         self.assertIn("1m", requests_alias[0].params.timeframes)
         self.assertNotIn("4h", requests_alias[0].params.timeframes)
 
+    @patch('strategy.asyncio.get_event_loop')
+    async def test_llm_cost_guard_blocks_when_cap_hit(self, mock_loop):
+        mock_loop.return_value.time.return_value = 1000
+        self.mock_db.get_recent_market_data.return_value = [{'price': 100}] * 50
+        self.mock_ta.calculate_indicators.return_value = {'bb_width': 2.0, 'rsi': 50}
+        session_stats = {'total_llm_cost': 999.0}  # above default cap
+        with patch.object(self.strategy, '_get_llm_decision', new_callable=AsyncMock) as mock_llm:
+            signal = await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000, 0, session_stats=session_stats)
+            mock_llm.assert_not_called()
+            self.assertIsNotNone(signal)
+            self.assertEqual(signal.action, 'HOLD')
+
+    @patch('strategy.asyncio.get_event_loop')
+    async def test_llm_call_throttle_blocks_when_interval_short(self, mock_loop):
+        mock_loop.return_value.time.return_value = 1002
+        self.mock_db.get_recent_market_data.return_value = [{'price': 100}] * 50
+        self.mock_ta.calculate_indicators.return_value = {'bb_width': 2.0, 'rsi': 50}
+        self.strategy._last_llm_call_ts = 1000  # 2s ago, under default 5s interval
+        with patch.object(self.strategy, '_get_llm_decision', new_callable=AsyncMock) as mock_llm:
+            signal = await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000, 0)
+            mock_llm.assert_not_called()
+            self.assertIsNotNone(signal)
+            self.assertEqual(signal.action, 'HOLD')
+
+    @patch('strategy.asyncio.get_event_loop')
+    async def test_consecutive_llm_errors_force_hold(self, mock_loop):
+        mock_loop.return_value.time.return_value = 1000
+        self.mock_db.get_recent_market_data.return_value = [{'price': 100}] * 50
+        self.mock_ta.calculate_indicators.return_value = {'bb_width': 2.0, 'rsi': 50}
+        self.strategy.last_trade_ts = 0
+        with patch.object(self.strategy, '_get_llm_decision', new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = (None, None)
+            hold_signal = None
+            for _ in range(4):
+                hold_signal = await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000, 0)
+            self.assertIsNotNone(hold_signal)
+            self.assertEqual(hold_signal.action, 'HOLD')
+
 
 if __name__ == '__main__':
     unittest.main()

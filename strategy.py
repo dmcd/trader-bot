@@ -29,6 +29,9 @@ from config import (
     MIN_TRADE_SIZE,
     MAX_POSITIONS,
     MAX_SPREAD_PCT,
+    LLM_MAX_SESSION_COST,
+    LLM_MIN_CALL_INTERVAL_SECONDS,
+    LLM_MAX_CONSECUTIVE_ERRORS,
     TOOL_DEFAULT_TIMEFRAMES,
     TOOL_MAX_BARS,
     TOOL_MAX_DEPTH,
@@ -87,6 +90,8 @@ class LLMStrategy(BaseStrategy):
         # Optional tool coordinator for LLM tool requests
         self.tool_coordinator = tool_coordinator
         self.prompt_template = self._load_prompt_template()
+        self._last_llm_call_ts = 0.0
+        self._consecutive_llm_errors = 0
         self._decision_schema = {
             "type": "object",
             "properties": {
@@ -298,6 +303,18 @@ class LLMStrategy(BaseStrategy):
         symbol = list(market_data.keys())[0]
         data = market_data[symbol]
 
+        # Clock for cooldowns and LLM throttling
+        now_ts = asyncio.get_event_loop().time()
+
+        # LLM cost/frequency guards (HOLD instead of burning tokens)
+        total_llm_cost = (session_stats or {}).get('total_llm_cost', 0.0) if session_stats else 0.0
+        if total_llm_cost >= LLM_MAX_SESSION_COST:
+            logger.info(f"Skipping LLM call: session LLM cost ${total_llm_cost:.4f} exceeds cap ${LLM_MAX_SESSION_COST:.2f}")
+            return StrategySignal('HOLD', symbol, 0, 'LLM cost cap hit')
+        if self._last_llm_call_ts and (now_ts - self._last_llm_call_ts) < LLM_MIN_CALL_INTERVAL_SECONDS:
+            logger.info("Skipping LLM call: min call interval not met")
+            return StrategySignal('HOLD', symbol, 0, 'LLM call throttled')
+
         regime_flags = {}
 
         # 1. Fee Check
@@ -331,8 +348,6 @@ class LLMStrategy(BaseStrategy):
         # Use context-provided time override when available
         if context and hasattr(context, 'current_time'):
             now_ts = context.current_time
-        else:
-            now_ts = asyncio.get_event_loop().time()
             
         can_trade = not self.last_trade_ts or (now_ts - self.last_trade_ts) >= MIN_TRADE_INTERVAL_SECONDS
         priority = self._priority_signal(session_id, symbol, context)
@@ -448,6 +463,9 @@ class LLMStrategy(BaseStrategy):
         
         if decision_json:
             try:
+                # Successful call; record timing and reset error counter
+                self._last_llm_call_ts = now_ts
+                self._consecutive_llm_errors = 0
                 decision = json.loads(decision_json)
                 # Validate shape
                 try:
@@ -555,7 +573,14 @@ class LLMStrategy(BaseStrategy):
                     return StrategySignal('HOLD', symbol, 0, reason, trace_id=trace_id, regime_flags=regime_flags)
             except json.JSONDecodeError:
                 logger.error(f"Failed to parse LLM response: {decision_json}")
-        
+                self._consecutive_llm_errors += 1
+        else:
+            self._consecutive_llm_errors += 1
+
+        if self._consecutive_llm_errors >= LLM_MAX_CONSECUTIVE_ERRORS:
+            logger.info(f"LLM consecutive errors {self._consecutive_llm_errors} >= cap; returning HOLD")
+            return StrategySignal('HOLD', symbol, 0, 'LLM errors')
+
         return None
 
 

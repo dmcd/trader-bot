@@ -40,6 +40,9 @@ from config import (
     HIGH_VOL_SIZE_FACTOR,
     MED_VOL_SIZE_FACTOR,
     AUTO_REPLACE_PLAN_ON_CAP,
+    PLAN_MAX_PER_SYMBOL,
+    PLAN_MAX_AGE_MINUTES,
+    PLAN_TRAIL_TO_BREAKEVEN_PCT,
 )
 
 from logger_config import setup_logging
@@ -99,11 +102,11 @@ class StrategyRunner:
         self.order_reasons = {}  # order_id -> reason
         self.processed_trade_ids = set()
         self._open_trade_plans = {}  # plan_id -> dict
-        self.max_plan_age_minutes = 60  # TODO: move to config if desired
+        self.max_plan_age_minutes = PLAN_MAX_AGE_MINUTES
         self.day_end_flatten_hour_utc = None  # optional UTC hour to flatten plans
-        self.max_plans_per_symbol = 2
+        self.max_plans_per_symbol = PLAN_MAX_PER_SYMBOL
         self.telemetry_logger = telemetry_logger
-        self._apply_plan_trailing_pct = 0.01  # move stop to entry after 1% move in favor
+        self._apply_plan_trailing_pct = PLAN_TRAIL_TO_BREAKEVEN_PCT  # move stop to entry after move in favor
         self._pause_until = None  # timestamp (monotonic seconds) when pause expires
 
     def _emit_telemetry(self, record: dict):

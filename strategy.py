@@ -33,6 +33,7 @@ from config import (
     LLM_MIN_CALL_INTERVAL_SECONDS,
     LLM_MAX_CONSECUTIVE_ERRORS,
     AUTO_REPLACE_PLAN_ON_CAP,
+    PLAN_MAX_PER_SYMBOL,
     TOOL_DEFAULT_TIMEFRAMES,
     TOOL_MAX_BARS,
     TOOL_MAX_DEPTH,
@@ -426,7 +427,7 @@ class LLMStrategy(BaseStrategy):
                 plan_counts[sym] = plan_counts.get(sym, 0) + 1
         except Exception as exc:
             logger.debug(f"Could not fetch plan counts: {exc}")
-        plan_counts_str = ", ".join(f"{sym}:{cnt}/{MAX_POSITIONS}" for sym, cnt in plan_counts.items()) or "none"
+        plan_counts_str = ", ".join(f"{sym}:{cnt}/{PLAN_MAX_PER_SYMBOL}" for sym, cnt in plan_counts.items()) or "none"
 
         prompt_context = (
             f"- Cooldown: {spacing_flag}\n"
@@ -438,7 +439,7 @@ class LLMStrategy(BaseStrategy):
             f"- Pending BUY exposure: ${pending_buy_exposure:,.2f}\n"
             f"- Max open orders per symbol: {MAX_POSITIONS}\n"
             f"- Plans per symbol (used/cap): {plan_counts_str}\n"
-            f"{'- Plan cap reached: you must UPDATE_PLAN/PARTIAL_CLOSE/CANCEL or rely on auto-replace if enabled.\n' if any(count >= MAX_POSITIONS for count in plan_counts.values()) else ''}"
+            f"{'- Plan cap reached: you must UPDATE_PLAN/PARTIAL_CLOSE/CANCEL or rely on auto-replace if enabled.\n' if any(count >= PLAN_MAX_PER_SYMBOL for count in plan_counts.values()) else ''}"
             f"- Order cap: ${order_cap_value:.2f}\n"
             f"- Min trade size: ${MIN_TRADE_SIZE:.2f}\n"
             f"- Open orders: {open_order_count} ({open_orders_summary})"

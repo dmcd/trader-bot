@@ -163,6 +163,24 @@ class TestLLMValidation(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("4h", requests_alias[0].params.timeframes)
 
     @patch('strategy.asyncio.get_event_loop')
+    async def test_prompt_includes_plan_cap_note(self, mock_loop):
+        mock_loop.return_value.time.return_value = 1000
+        self.mock_db.get_recent_market_data.return_value = [{'price': 100}] * 50
+        self.mock_db.get_open_orders.return_value = []
+        self.mock_db.get_open_trade_plans.return_value = [
+            {"symbol": "BTC/USD"}, {"symbol": "BTC/USD"}, {"symbol": "BTC/USD"}
+        ]
+        self.mock_ta.calculate_indicators.return_value = {'bb_width': 2.0, 'rsi': 50}
+        self.strategy.last_trade_ts = 0
+
+        with patch.object(self.strategy, '_get_llm_decision', new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = None
+            await self.strategy.generate_signal(1, {'BTC/USD': {'price': 100}}, 1000, 0)
+            args, kwargs = mock_llm.call_args
+            prompt_context = args[3] if len(args) >= 4 else kwargs.get('prompt_context', '')
+            self.assertIn("Plan cap reached", prompt_context)
+
+    @patch('strategy.asyncio.get_event_loop')
     async def test_llm_cost_guard_blocks_when_cap_hit(self, mock_loop):
         mock_loop.return_value.time.return_value = 1000
         self.mock_db.get_recent_market_data.return_value = [{'price': 100}] * 50

@@ -39,6 +39,7 @@ from config import (
     MAX_SLIPPAGE_PCT,
     HIGH_VOL_SIZE_FACTOR,
     MED_VOL_SIZE_FACTOR,
+    AUTO_REPLACE_PLAN_ON_CAP,
 )
 
 from logger_config import setup_logging

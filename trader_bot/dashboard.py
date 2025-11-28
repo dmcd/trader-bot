@@ -109,7 +109,7 @@ def load_history(user_timezone):
         if rows:
             df = pd.DataFrame(rows, columns=["timestamp", "symbol", "action", "price", "quantity", "fee", "liquidity", "realized_pnl", "reason"])
             df["trade_value"] = df["price"] * df["quantity"]
-            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert(user_timezone)
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, format="ISO8601").dt.tz_convert(user_timezone)
             return df
         return pd.DataFrame()
     except Exception as e:

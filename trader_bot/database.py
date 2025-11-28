@@ -840,6 +840,49 @@ class TradingDatabase:
         """, (session_id,))
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_trade_plan_reason_by_order(self, session_id: int, order_id: str = None, client_order_id: str = None) -> Optional[str]:
+        """
+        Lookup a trade plan reason using either exchange order_id or client_order_id.
+        Returns None when not found.
+        """
+        self.ensure_trade_plans_table()
+        if not order_id and not client_order_id:
+            return None
+
+        cursor = self.conn.cursor()
+        if order_id and client_order_id:
+            cursor.execute(
+                """
+                SELECT reason FROM trade_plans
+                WHERE session_id = ? AND (entry_order_id = ? OR entry_client_order_id = ?)
+                ORDER BY opened_at DESC
+                LIMIT 1
+                """,
+                (session_id, str(order_id), str(client_order_id)),
+            )
+        elif order_id:
+            cursor.execute(
+                """
+                SELECT reason FROM trade_plans
+                WHERE session_id = ? AND entry_order_id = ?
+                ORDER BY opened_at DESC
+                LIMIT 1
+                """,
+                (session_id, str(order_id)),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT reason FROM trade_plans
+                WHERE session_id = ? AND entry_client_order_id = ?
+                ORDER BY opened_at DESC
+                LIMIT 1
+                """,
+                (session_id, str(client_order_id)),
+            )
+        row = cursor.fetchone()
+        return row["reason"] if row and row["reason"] else None
+
     def count_open_trade_plans_for_symbol(self, session_id: int, symbol: str) -> int:
         """Return number of open plans for a symbol."""
         self.ensure_trade_plans_table()

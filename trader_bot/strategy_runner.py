@@ -137,6 +137,30 @@ class StrategyRunner:
             return quantity * MED_VOL_SIZE_FACTOR
         return quantity
 
+    @staticmethod
+    def _client_order_id_from(order: dict) -> str:
+        """Extract client order id from ccxt-style order payload."""
+        if not order:
+            return ""
+        return str(
+            order.get('clientOrderId')
+            or order.get('client_order_id')
+            or order.get('client_order')
+            or order.get('info', {}).get('clientOrderId')
+            or order.get('info', {}).get('client_order_id')
+            or order.get('info', {}).get('client_order')
+            or ""
+        )
+
+    def _filter_our_orders(self, orders: list) -> list:
+        """Only keep open orders with our client id prefix."""
+        filtered = []
+        for order in orders or []:
+            client_oid = self._client_order_id_from(order)
+            if client_oid and client_oid.startswith(CLIENT_ORDER_PREFIX):
+                filtered.append(order)
+        return filtered
+
     def _passes_rr_filter(self, action: str, price: float, stop_price: float, target_price: float) -> bool:
         """Require minimum risk/reward when both stop and target are provided."""
         if not price or stop_price is None or target_price is None:
@@ -1171,6 +1195,7 @@ class StrategyRunner:
                     open_orders = []
                     try:
                         open_orders = await self.bot.get_open_orders_async()
+                        open_orders = self._filter_our_orders(open_orders)
                         self.db.replace_open_orders(self.session_id, open_orders)
                     except Exception as e:
                         logger.warning(f"Could not refresh open orders: {e}")

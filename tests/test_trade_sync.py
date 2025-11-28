@@ -163,3 +163,14 @@ async def test_sync_trades_skips_invalid_symbols():
     await runner.sync_trades_from_exchange()
 
     assert runner.bot.called_symbols == ["BTC/USD"]
+
+
+def test_filter_our_orders_only_keeps_client_prefixed():
+    runner = StrategyRunner(execute_orders=False)
+    ours = {"clientOrderId": f"{CLIENT_ORDER_PREFIX}001", "symbol": "BTC/USD"}
+    foreign = {"clientOrderId": "OTHER123", "symbol": "BTC/USD"}
+    missing = {"symbol": "BTC/USD"}
+
+    filtered = runner._filter_our_orders([ours, foreign, missing])
+
+    assert filtered == [ours]

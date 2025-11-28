@@ -950,7 +950,11 @@ class StrategyRunner:
                             plan_reason = self.db.get_trade_plan_reason_by_order(self.session_id, order_id, client_oid)
                         except Exception:
                             plan_reason = None
-                        reason = self.order_reasons.get(str(order_id)) or plan_reason or "Synced from exchange"
+                        reason = self.order_reasons.get(str(order_id)) or plan_reason
+                        if not reason:
+                            # Skip trades we cannot attribute to our client IDs/reasons
+                            self.processed_trade_ids.add(trade_id)
+                            continue
 
                         realized_pnl = self._update_holdings_and_realized(symbol, side, quantity, price, fee)
 

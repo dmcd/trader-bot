@@ -98,6 +98,7 @@ async def test_sync_trades_ignores_missing_client_ids():
     runner.bot = StubBot([trade_missing_oid, trade_with_oid])
     runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
     runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
+    runner.order_reasons = {"order-1": "LLM signal"}
 
     await runner.sync_trades_from_exchange()
 
@@ -121,6 +122,27 @@ async def test_sync_trades_uses_plan_reason_fallback():
     await runner.sync_trades_from_exchange()
 
     assert runner.db.logged_trades[0]["reason"] == "Plan reason"
+
+
+@pytest.mark.asyncio
+async def test_sync_trades_skips_unattributed_trades():
+    client_oid = f"{CLIENT_ORDER_PREFIX}zzz"
+    trade_unknown = build_trade("t-unknown", client_oid=client_oid, order_id="order-99")
+
+    runner = StrategyRunner(execute_orders=False)
+    runner.session_id = 4
+    runner.telemetry_logger = None
+    runner.db = StubDB(plan_reason=None)
+    runner.bot = StubBot([trade_unknown])
+    runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
+    runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
+    runner.order_reasons = {}  # no cached reason
+
+    await runner.sync_trades_from_exchange()
+
+    assert runner.db.logged_trades == []
+    # Ensure we don't loop forever on the same trade id
+    assert "t-unknown" in runner.processed_trade_ids
 
 
 @pytest.mark.asyncio

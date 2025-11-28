@@ -6,6 +6,7 @@ import pytest
 from trader_bot.config import CLIENT_ORDER_PREFIX
 from trader_bot.strategy_runner import StrategyRunner
 from trader_bot.trading_context import TradingContext
+from trader_bot.utils import get_client_order_id
 
 
 class StubConn:
@@ -180,6 +181,19 @@ def test_filter_our_orders_only_keeps_client_prefixed():
     filtered = runner._filter_our_orders([ours, foreign, missing])
 
     assert filtered == [ours]
+
+
+def test_get_client_order_id_variants():
+    variants = [
+        {"clientOrderId": "A"},
+        {"client_order_id": "B"},
+        {"client_order": "C"},
+        {"info": {"clientOrderId": "D"}},
+        {"info": {"client_order_id": "E"}},
+        {"info": {"client_order": "F"}},
+    ]
+    expected = ["A", "B", "C", "D", "E", "F"]
+    assert [get_client_order_id(v) for v in variants] == expected
 
 
 @pytest.mark.asyncio

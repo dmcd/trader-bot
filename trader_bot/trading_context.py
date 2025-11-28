@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from trader_bot.config import CLIENT_ORDER_PREFIX
 from trader_bot.database import TradingDatabase
 from trader_bot.llm_tools import estimate_json_bytes
+from trader_bot.utils import get_client_order_id
 
 logger = logging.getLogger(__name__)
 
@@ -21,15 +22,7 @@ class TradingContext:
         """Only include orders with our client order prefix."""
         filtered = []
         for order in open_orders or []:
-            client_oid = str(
-                order.get("clientOrderId")
-                or order.get("client_order_id")
-                or order.get("client_order")
-                or order.get("info", {}).get("clientOrderId")
-                or order.get("info", {}).get("client_order_id")
-                or order.get("info", {}).get("client_order")
-                or ""
-            )
+            client_oid = get_client_order_id(order)
             if client_oid and client_oid.startswith(CLIENT_ORDER_PREFIX):
                 filtered.append(order)
         return filtered

@@ -47,6 +47,7 @@ from trader_bot.risk_manager import RiskManager
 from trader_bot.strategy import LLMStrategy
 from trader_bot.technical_analysis import TechnicalAnalysis
 from trader_bot.trading_context import TradingContext
+from trader_bot.utils import get_client_order_id
 
 # Configure logging
 bot_actions_logger = setup_logging()
@@ -137,26 +138,11 @@ class StrategyRunner:
             return quantity * MED_VOL_SIZE_FACTOR
         return quantity
 
-    @staticmethod
-    def _client_order_id_from(order: dict) -> str:
-        """Extract client order id from ccxt-style order payload."""
-        if not order:
-            return ""
-        return str(
-            order.get('clientOrderId')
-            or order.get('client_order_id')
-            or order.get('client_order')
-            or order.get('info', {}).get('clientOrderId')
-            or order.get('info', {}).get('client_order_id')
-            or order.get('info', {}).get('client_order')
-            or ""
-        )
-
     def _filter_our_orders(self, orders: list) -> list:
         """Only keep open orders with our client id prefix."""
         filtered = []
         for order in orders or []:
-            client_oid = self._client_order_id_from(order)
+            client_oid = get_client_order_id(order)
             if client_oid and client_oid.startswith(CLIENT_ORDER_PREFIX):
                 filtered.append(order)
         return filtered
@@ -967,10 +953,9 @@ class StrategyRunner:
                     trades = await self.bot.get_my_trades_async(symbol, since=cursor_since, limit=100)
                     filtered_trades = []
                     for t in trades:
-                        client_oid = t.get('clientOrderId') or t.get('info', {}).get('clientOrderId') or t.get('info', {}).get('client_order_id')
+                        client_oid = get_client_order_id(t)
                         if not client_oid:
                             continue
-                        client_oid = str(client_oid)
                         if not client_oid.startswith(CLIENT_ORDER_PREFIX):
                             continue
                         t["_client_oid"] = client_oid
@@ -992,7 +977,7 @@ class StrategyRunner:
                             continue
 
                         order_id = t.get('order')
-                        client_oid = t.get('_client_oid') or t.get('clientOrderId') or t.get('info', {}).get('clientOrderId') or t.get('info', {}).get('client_order_id')
+                        client_oid = t.get('_client_oid') or get_client_order_id(t)
                         side = t['side'].upper()
                         price = t['price']
                         quantity = t['amount']

@@ -1,0 +1,23 @@
+Current Status:
+- Asset class: {asset_class}
+- Equity: {equity_line}
+- Market Data:
+{market_summary}
+
+Risk Constraints:
+- Max Order Value: {max_order_value}
+- Min Trade Size: {min_trade_size}
+- Max Daily Loss: {max_daily_loss}
+- Exposure headroom: {exposure_headroom}
+- Pending BUY exposure budget: {pending_exposure_budget}
+- Max pending orders per symbol: {max_open_orders_per_symbol}
+
+Available Symbols: {available_symbols}
+
+{quantity_guidance}
+Regime flags: {regime_flags}
+{context_block}{memory_block}Decide on an action for one of the available symbols.
+You may also cancel an open order if it is stale or unsafe.
+
+{response_instructions}
+{prompt_context_block}{rules_block}{mode_note}{rejection_note}

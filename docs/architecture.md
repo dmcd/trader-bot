@@ -62,18 +62,18 @@ sequenceDiagram
 ```
 
 ## Responsibilities (by module)
-- [`strategy_runner.py`](components/strategy_runner.md): main loop; wires exchange, risk, TA, cost tracking, tool coordinator; enforces spacing, slippage, liquidity, RR, plan monitoring; owns telemetry and session stats cache.
-- [`strategy.py` / `LLMStrategy`](components/strategy.md): builds planner+decision prompts, normalizes tool requests, clamps stop/target band, sizes within exposure/order caps, and tracks cooldown/break-glass/fee regimes.
-- [`trading_context.py`](components/trading_context.md): maintains the structured context surfaced to the LLM (positions, open orders, summaries) and supports regime flags.
-- [`data_fetch_coordinator.py`](components/strategy_runner.md#flow): validates tool requests, caches OHLCV/books/trades, and normalizes payloads with byte-size clamping before returning to the LLM.
-- [`risk_manager.py`](components/risk_manager.md): order value/min size, exposure caps, position count caps, pending order exposure tracking, and daily loss guard (percent & absolute) seeded from persisted equity.
-- [`gemini_trader.py`](components/gemini_trader.md): ccxt adapter with sandbox precision backfill, ticker/order book fetch, limit order placement with post-only retry, positions/open orders/equity sync, trade history fetch.
-- [`database.py`](components/database.md): SQLite schema and helpers for sessions, trades, prompts/traces, OHLCV, equity, positions/open orders, commands, and trade plans; caches session stats for restart resilience.
-- [`technical_analysis.py`](components/technical_analysis.md): RSI/MACD/Bollinger/SMA calculations and formatted signals for context or regime flags.
-- [`cost_tracker.py`](components/cost_tracker.md): calculates trading fees per exchange and LLM token costs; derives net PnL.
-- [`dashboard.py`](components/dashboard.md): Streamlit UI for monitoring session stats, trade history, exposure, logs, and issuing control commands (stop/close-all).
+- [`trader_bot/strategy_runner.py`](components/strategy_runner.md): main loop; wires exchange, risk, TA, cost tracking, tool coordinator; enforces spacing, slippage, liquidity, RR, plan monitoring; owns telemetry and session stats cache.
+- [`trader_bot/strategy.py` / `LLMStrategy`](components/strategy.md): builds planner+decision prompts, normalizes tool requests, clamps stop/target band, sizes within exposure/order caps, and tracks cooldown/break-glass/fee regimes.
+- [`trader_bot/trading_context.py`](components/trading_context.md): maintains the structured context surfaced to the LLM (positions, open orders, summaries) and supports regime flags.
+- [`trader_bot/data_fetch_coordinator.py`](components/strategy_runner.md#flow): validates tool requests, caches OHLCV/books/trades, and normalizes payloads with byte-size clamping before returning to the LLM.
+- [`trader_bot/risk_manager.py`](components/risk_manager.md): order value/min size, exposure caps, position count caps, pending order exposure tracking, and daily loss guard (percent & absolute) seeded from persisted equity.
+- [`trader_bot/gemini_trader.py`](components/gemini_trader.md): ccxt adapter with sandbox precision backfill, ticker/order book fetch, limit order placement with post-only retry, positions/open orders/equity sync, trade history fetch.
+- [`trader_bot/database.py`](components/database.md): SQLite schema and helpers for sessions, trades, prompts/traces, OHLCV, equity, positions/open orders, commands, and trade plans; caches session stats for restart resilience.
+- [`trader_bot/technical_analysis.py`](components/technical_analysis.md): RSI/MACD/Bollinger/SMA calculations and formatted signals for context or regime flags.
+- [`trader_bot/cost_tracker.py`](components/cost_tracker.md): calculates trading fees per exchange and LLM token costs; derives net PnL.
+- [`trader_bot/dashboard.py`](components/dashboard.md): Streamlit UI for monitoring session stats, trade history, exposure, logs, and issuing control commands (stop/close-all).
 
 ## Data & Telemetry
 - SQLite (`trading.db`) stores sessions, trades, LLM calls/traces, OHLCV, equity snapshots, positions, open orders, commands, and trade plans; session stats cached for warm restarts.
 - Logs: `bot.log` (user-facing decisions), `console.log` (debug), `telemetry.log` (JSON prompts/responses/tool traces, execution outcomes).
-- Prompt artifacts: `llm_prompt_template.txt` drives both planner and decision prompts with context/rule blocks.
+- Prompt artifacts: `trader_bot/llm_prompt_template.txt` drives both planner and decision prompts with context/rule blocks.

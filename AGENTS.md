@@ -3,20 +3,20 @@
 ## Project Structure & Module Organization
 
 ### Core Components
-- **`strategy_runner.py`**: The main orchestration loop. Handles data fetching, risk checks, order placement, and logging.
-- **`strategy.py`**: Contains the `LLMStrategy` class, which interfaces with Gemini 2.5 Flash for decision making.
-- **`risk_manager.py`**: Enforces safety limits (daily loss, max order value, exposure caps).
-- **`cost_tracker.py`**: Tracks trading fees and LLM token usage.
-- **`trading_context.py`**: Manages context for the LLM (open orders, market data summary).
-- **`database.py`**: SQLite database interface for persisting state and logs.
-- **`technical_analysis.py`**: Calculates indicators (RSI, MACD, Bollinger Bands).
+- **`trader_bot/strategy_runner.py`**: The main orchestration loop. Handles data fetching, risk checks, order placement, and logging.
+- **`trader_bot/strategy.py`**: Contains the `LLMStrategy` class, which interfaces with Gemini 2.5 Flash for decision making.
+- **`trader_bot/risk_manager.py`**: Enforces safety limits (daily loss, max order value, exposure caps).
+- **`trader_bot/cost_tracker.py`**: Tracks trading fees and LLM token usage.
+- **`trader_bot/trading_context.py`**: Manages context for the LLM (open orders, market data summary).
+- **`trader_bot/database.py`**: SQLite database interface for persisting state and logs.
+- **`trader_bot/technical_analysis.py`**: Calculates indicators (RSI, MACD, Bollinger Bands).
 
 ### Venue Adapters
-- **`gemini_trader.py`**: Adapter for Gemini Exchange (using `ccxt`). Handles sandbox precision fixes.
-- **`config.py`**: Central configuration for API keys, limits, and trading mode.
+- **`trader_bot/gemini_trader.py`**: Adapter for Gemini Exchange (using `ccxt`). Handles sandbox precision fixes.
+- **`trader_bot/config.py`**: Central configuration for API keys, limits, and trading mode.
 
 ### Interfaces
-- **`dashboard.py`**: Streamlit dashboard for monitoring and manual control.
+- **`trader_bot/dashboard.py`**: Streamlit dashboard for monitoring and manual control.
 - **`run.sh`**: Helper script to launch the strategy loop and dashboard together.
 
 ### Data and Logs
@@ -29,9 +29,9 @@
 
 - **Install dependencies**: `pip install -r requirements.txt`
 - **Run tests**: `python -m pytest`
-- **Run specific test**: `python -m pytest test_technical_analysis_unit.py`
-- **Run strategy loop**: `python strategy_runner.py`
-- **Run dashboard**: `streamlit run dashboard.py`
+- **Run specific test**: `python -m pytest tests/test_technical_analysis_unit.py`
+- **Run strategy loop**: `python -m trader_bot.strategy_runner`
+- **Run dashboard**: `python -m streamlit run trader_bot/dashboard.py`
 - **Launch everything**: `./run.sh`
 
 ## Coding Style & Naming Conventions
@@ -46,7 +46,7 @@
 ## Testing Guidelines
 
 - **Framework**: `pytest`.
-- **Location**: Place new tests in `test_*.py` files.
+- **Location**: Place new tests in `tests/test_*.py` files.
 - **Scope**: Name tests for behavior (e.g., `test_stop_target_clamping_when_price_moves`).
 - **Regression**: Always run the full suite (`python -m pytest`) before pushing changes, especially for risk or sizing logic.
 

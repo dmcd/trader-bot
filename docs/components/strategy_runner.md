@@ -1,6 +1,6 @@
 # Strategy Runner
 
-The main orchestration loop (`strategy_runner.py`) pulls market data, asks the LLM for actions, enforces risk, and routes orders.
+The main orchestration loop (`trader_bot/strategy_runner.py`) pulls market data, asks the LLM for actions, enforces risk, and routes orders.
 
 ## Flow
 - Initializes exchange, DB, cost tracker, risk manager, and strategy.

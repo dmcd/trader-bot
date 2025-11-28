@@ -66,12 +66,20 @@ If you prefer to run components individually:
 
 1.  **Strategy Loop** (The brain):
     ```bash
-    python strategy_runner.py
+    python -m trader_bot.strategy_runner
     ```
 2.  **Dashboard** (The UI):
     ```bash
-    streamlit run dashboard.py
+    python -m streamlit run trader_bot/dashboard.py
     ```
+
+### Project Layout
+
+- `trader_bot/`: Core package (strategy runner, LLM strategy, risk manager, exchange adapter, dashboard, prompts).
+- `tests/`: Pytest suite and shared fixtures.
+- `docs/`: Architecture and per-component docs.
+- `run.sh`: Helper launcher that starts the runner and dashboard together.
+- Runtime artifacts: `trading.db`, `bot.log`, `telemetry.log`, `console.log` in the repo root.
 
 ## 📚 Documentation
 

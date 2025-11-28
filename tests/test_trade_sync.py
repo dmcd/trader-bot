@@ -1,9 +1,11 @@
 import asyncio
+import json
 
 import pytest
 
 from trader_bot.config import CLIENT_ORDER_PREFIX
 from trader_bot.strategy_runner import StrategyRunner
+from trader_bot.trading_context import TradingContext
 
 
 class StubConn:
@@ -207,3 +209,40 @@ async def test_reconcile_open_orders_removes_stale():
     await runner._reconcile_open_orders()
 
     assert runner.db.replaced == [{"order_id": "live-1", "clientOrderId": f"{CLIENT_ORDER_PREFIX}111", "symbol": "BTC/USD"}]
+
+
+def test_trading_context_filters_foreign_open_orders():
+    class CtxDB(StubDB):
+        def get_session_stats(self, session_id):
+            return {
+                "created_at": "2024-01-01T00:00:00",
+                "date": "2024-01-01",
+                "starting_balance": 0,
+                "net_pnl": 0,
+                "total_fees": 0,
+                "total_llm_cost": 0,
+                "total_trades": 0,
+            }
+
+        def get_recent_trades(self, session_id, limit=50):
+            return []
+
+        def get_recent_market_data(self, session_id, symbol, limit=20, before_timestamp=None):
+            return [{"price": 100}, {"price": 100}]
+
+        def get_positions(self, session_id):
+            return []
+
+        def get_open_orders(self, session_id):
+            return []
+
+    db = CtxDB()
+    ctx = TradingContext(db, session_id=1)
+    ours = {"clientOrderId": f"{CLIENT_ORDER_PREFIX}xyz", "symbol": "BTC/USD", "amount": 1, "price": 100}
+    foreign = {"clientOrderId": "OTHER999", "symbol": "BTC/USD", "amount": 1, "price": 100}
+
+    summary = ctx.get_context_summary("BTC/USD", open_orders=[ours, foreign])
+    parsed = json.loads(summary)
+
+    assert len(parsed["open_orders"]) == 1
+    assert parsed["open_orders"][0]["symbol"] == "BTC/USD"

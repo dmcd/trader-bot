@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List
 
+from trader_bot.config import CLIENT_ORDER_PREFIX
 from trader_bot.database import TradingDatabase
 from trader_bot.llm_tools import estimate_json_bytes
 
@@ -14,6 +15,24 @@ class TradingContext:
     def __init__(self, db: TradingDatabase, session_id: int):
         self.db = db
         self.session_id = session_id
+
+    @staticmethod
+    def _filter_our_orders(open_orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Only include orders with our client order prefix."""
+        filtered = []
+        for order in open_orders or []:
+            client_oid = str(
+                order.get("clientOrderId")
+                or order.get("client_order_id")
+                or order.get("client_order")
+                or order.get("info", {}).get("clientOrderId")
+                or order.get("info", {}).get("client_order_id")
+                or order.get("info", {}).get("client_order")
+                or ""
+            )
+            if client_oid and client_oid.startswith(CLIENT_ORDER_PREFIX):
+                filtered.append(order)
+        return filtered
     
     def get_context_summary(self, symbol: str, open_orders: List[Dict[str, Any]] = None) -> str:
         """
@@ -73,6 +92,7 @@ class TradingContext:
         positions = self.db.get_positions(self.session_id)
         if open_orders is None:
             open_orders = self.db.get_open_orders(self.session_id)
+        open_orders = self._filter_our_orders(open_orders)
 
         positions_summary = []
         total_exposure = 0.0

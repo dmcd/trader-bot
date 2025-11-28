@@ -910,8 +910,12 @@ class StrategyRunner:
                     filtered_trades = []
                     for t in trades:
                         client_oid = t.get('clientOrderId') or t.get('info', {}).get('clientOrderId') or t.get('info', {}).get('client_order_id')
-                        if client_oid and not str(client_oid).startswith(CLIENT_ORDER_PREFIX):
+                        if not client_oid:
                             continue
+                        client_oid = str(client_oid)
+                        if not client_oid.startswith(CLIENT_ORDER_PREFIX):
+                            continue
+                        t["_client_oid"] = client_oid
                         filtered_trades.append(t)
                     trades = filtered_trades
 
@@ -930,6 +934,7 @@ class StrategyRunner:
                             continue
 
                         order_id = t.get('order')
+                        client_oid = t.get('_client_oid') or t.get('clientOrderId') or t.get('info', {}).get('clientOrderId') or t.get('info', {}).get('client_order_id')
                         side = t['side'].upper()
                         price = t['price']
                         quantity = t['amount']

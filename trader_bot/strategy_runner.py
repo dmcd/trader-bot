@@ -161,6 +161,37 @@ class StrategyRunner:
                 filtered.append(order)
         return filtered
 
+    async def _reconcile_open_orders(self):
+        """
+        Refresh open order snapshot using live exchange data and drop any DB orders
+        that no longer exist on the venue.
+        """
+        if not self.session_id:
+            return
+        try:
+            exchange_orders = await self.bot.get_open_orders_async()
+            exchange_orders = self._filter_our_orders(exchange_orders)
+        except Exception as e:
+            logger.warning(f"Could not fetch open orders for reconciliation: {e}")
+            return
+
+        try:
+            db_orders = self.db.get_open_orders(self.session_id)
+        except Exception as e:
+            logger.warning(f"Could not load open orders from DB for reconciliation: {e}")
+            db_orders = []
+
+        db_ids = {str(o.get('order_id')) for o in db_orders if o.get('order_id')}
+        exch_ids = {str(o.get('order_id') or o.get('id')) for o in exchange_orders if o.get('order_id') or o.get('id')}
+        stale = db_ids - exch_ids
+        if stale:
+            bot_actions_logger.info(f"🧹 Removed {len(stale)} stale open orders not on exchange")
+
+        try:
+            self.db.replace_open_orders(self.session_id, exchange_orders)
+        except Exception as e:
+            logger.warning(f"Could not refresh open orders snapshot: {e}")
+
     def _passes_rr_filter(self, action: str, price: float, stop_price: float, target_price: float) -> bool:
         """Require minimum risk/reward when both stop and target are provided."""
         if not price or stop_price is None or target_price is None:
@@ -604,7 +635,9 @@ class StrategyRunner:
         
         # Initialize trading context
         self.context = TradingContext(self.db, self.session_id)
-        
+        # Drop any stale open orders lingering from prior runs
+        await self._reconcile_open_orders()
+
         # Initialize session stats with persistence awareness
         logger.info("Initializing session stats...")
         cached_stats = self.db.get_session_stats_cache(self.session_id)

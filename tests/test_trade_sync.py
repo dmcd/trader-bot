@@ -60,6 +60,7 @@ class StubBot:
     def __init__(self, trades):
         self.trades = trades
         self.called_symbols = []
+        self.open_orders = []
 
     async def get_my_trades_async(self, symbol, since=None, limit=None):
         # Return trades once, then empty to stop paging
@@ -68,6 +69,9 @@ class StubBot:
             return []
         trades, self.trades = self.trades, None
         return trades
+
+    async def get_open_orders_async(self):
+        return self.open_orders
 
 
 def build_trade(trade_id, client_oid=None, order_id="order-1", side="buy", price=100.0, amount=1.0, fee=0.0):
@@ -174,3 +178,32 @@ def test_filter_our_orders_only_keeps_client_prefixed():
     filtered = runner._filter_our_orders([ours, foreign, missing])
 
     assert filtered == [ours]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_open_orders_removes_stale():
+    runner = StrategyRunner(execute_orders=False)
+    runner.session_id = 5
+    runner.telemetry_logger = None
+
+    class ReconDB(StubDB):
+        def __init__(self):
+            super().__init__()
+            self.replaced = None
+
+        def get_open_orders(self, session_id):
+            return [
+                {"order_id": "live-1", "symbol": "BTC/USD"},
+                {"order_id": "stale-1", "symbol": "BTC/USD"},
+            ]
+
+        def replace_open_orders(self, session_id, orders):
+            self.replaced = orders
+
+    runner.db = ReconDB()
+    runner.bot = StubBot(trades=[])
+    runner.bot.open_orders = [{"order_id": "live-1", "clientOrderId": f"{CLIENT_ORDER_PREFIX}111", "symbol": "BTC/USD"}]
+
+    await runner._reconcile_open_orders()
+
+    assert runner.db.replaced == [{"order_id": "live-1", "clientOrderId": f"{CLIENT_ORDER_PREFIX}111", "symbol": "BTC/USD"}]

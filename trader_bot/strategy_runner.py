@@ -891,6 +891,7 @@ class StrategyRunner:
                 symbols.update({o.get('symbol') for o in self.db.get_open_orders(self.session_id) or [] if o.get('symbol')})
             except Exception:
                 pass
+            symbols = {s for s in symbols if isinstance(s, str) and '/' in s}
             if not symbols:
                 symbols = {'BTC/USD'}
 

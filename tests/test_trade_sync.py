@@ -59,9 +59,11 @@ class StubDB:
 class StubBot:
     def __init__(self, trades):
         self.trades = trades
+        self.called_symbols = []
 
     async def get_my_trades_async(self, symbol, since=None, limit=None):
         # Return trades once, then empty to stop paging
+        self.called_symbols.append(symbol)
         if self.trades is None:
             return []
         trades, self.trades = self.trades, None
@@ -119,3 +121,23 @@ async def test_sync_trades_uses_plan_reason_fallback():
     await runner.sync_trades_from_exchange()
 
     assert runner.db.logged_trades[0]["reason"] == "Plan reason"
+
+
+@pytest.mark.asyncio
+async def test_sync_trades_skips_invalid_symbols():
+    runner = StrategyRunner(execute_orders=False)
+    runner.session_id = 3
+    runner.telemetry_logger = None
+
+    class SymbolDB(StubDB):
+        def get_distinct_trade_symbols(self, session_id):
+            return ["USD", "BTC/USD"]
+
+    runner.db = SymbolDB()
+    runner.bot = StubBot([])
+    runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
+    runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
+
+    await runner.sync_trades_from_exchange()
+
+    assert runner.bot.called_symbols == ["BTC/USD"]

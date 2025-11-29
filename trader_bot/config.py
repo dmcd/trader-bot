@@ -44,6 +44,7 @@ MARKET_DATA_RETENTION_MINUTES = int(os.getenv('MARKET_DATA_RETENTION_MINUTES', '
 LLM_TRACE_RETENTION_DAYS = int(os.getenv('LLM_TRACE_RETENTION_DAYS', '7'))  # days of full prompt/response traces to retain
 COMMAND_RETENTION_DAYS = int(os.getenv('COMMAND_RETENTION_DAYS', '7'))  # days to keep executed/cancelled commands
 DASHBOARD_REFRESH_SECONDS = int(os.getenv('DASHBOARD_REFRESH_SECONDS', '5'))  # Streamlit auto-refresh cadence
+SANDBOX_IGNORE_INITIAL_POSITIONS = os.getenv('SANDBOX_IGNORE_INITIAL_POSITIONS', 'true').lower() == 'true'  # Hide sandbox airdrop inventory from exposure calcs/prompts
 
 # Market microstructure guards
 MAX_SPREAD_PCT = float(os.getenv('MAX_SPREAD_PCT', '0.20'))  # Skip trading if spread exceeds this % of mid

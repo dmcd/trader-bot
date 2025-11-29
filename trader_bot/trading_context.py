@@ -16,6 +16,7 @@ class TradingContext:
     def __init__(self, db: TradingDatabase, session_id: int):
         self.db = db
         self.session_id = session_id
+        self.position_baseline: Dict[str, float] = {}
 
     @staticmethod
     def _filter_our_orders(open_orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -26,6 +27,31 @@ class TradingContext:
             if client_oid and client_oid.startswith(CLIENT_ORDER_PREFIX):
                 filtered.append(order)
         return filtered
+
+    def set_position_baseline(self, baseline: Dict[str, float]):
+        """Record baseline positions to hide sandbox airdrops from LLM context."""
+        if not baseline:
+            return
+        for sym, qty in baseline.items():
+            self.position_baseline[sym] = qty or 0.0
+
+    @staticmethod
+    def _net_quantity_for_session(quantity: float, baseline_qty: float) -> float:
+        """
+        Remove baseline inventory so exposure reflects only positions opened/closed
+        during the session. Baseline defines a neutral band between 0 and baseline.
+        """
+        quantity = quantity or 0.0
+        baseline_qty = baseline_qty or 0.0
+
+        if baseline_qty >= 0:
+            if quantity >= 0:
+                return max(0.0, quantity - baseline_qty)
+            return quantity
+
+        if quantity <= 0:
+            return min(0.0, quantity - baseline_qty)
+        return quantity
     
     def get_context_summary(self, symbol: str, open_orders: List[Dict[str, Any]] = None) -> str:
         """
@@ -89,6 +115,7 @@ class TradingContext:
 
         positions_summary = []
         total_exposure = 0.0
+        baseline_map = self.position_baseline or {}
         for pos in positions[:max_positions]:
             sym = pos['symbol']
             qty = pos['quantity']
@@ -102,15 +129,20 @@ class TradingContext:
             if not avg_price or not current_price:
                 continue
 
-            cost_basis = qty * avg_price
-            current_value = qty * current_price
+            baseline_qty = baseline_map.get(sym, 0.0)
+            session_qty = self._net_quantity_for_session(qty, baseline_qty)
+            if abs(session_qty) < 1e-9:
+                continue
+
+            cost_basis = session_qty * avg_price
+            current_value = session_qty * current_price
             unrealized_pnl = current_value - cost_basis
-            total_exposure += current_value
+            total_exposure += abs(current_value)
 
             positions_summary.append(
                 {
                     "symbol": sym,
-                    "qty": round(qty, 8),
+                    "qty": round(session_qty, 8),
                     "avg": avg_price,
                     "px": current_price,
                     "unrealized": unrealized_pnl,

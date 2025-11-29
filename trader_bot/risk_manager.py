@@ -21,7 +21,7 @@ class RiskCheckResult:
     reason: str = ""
 
 class RiskManager:
-    def __init__(self, bot=None):
+    def __init__(self, bot=None, ignore_baseline_positions: bool = False):
         self.bot = bot # Optional, mostly for position checks if needed
         self.daily_loss = 0.0
         self.start_of_day_equity = None
@@ -31,6 +31,9 @@ class RiskManager:
         self.pending_orders_by_symbol = {}  # symbol -> {'buy': notional, 'sell': notional, 'count_buy': int, 'count_sell': int}
         self.correlation_buckets = CORRELATION_BUCKETS
         self.bucket_max_positions = BUCKET_MAX_POSITIONS
+        self.ignore_baseline_positions = ignore_baseline_positions
+        # Baseline positions seen at session start (used to ignore sandbox airdrops)
+        self.position_baseline: dict[str, float] = {}
 
     def seed_start_of_day(self, start_equity: float):
         """Persist start-of-day equity so restarts keep loss limits consistent."""
@@ -56,6 +59,19 @@ class RiskManager:
         positions: dict of {symbol: {'quantity': float, 'current_price': float}}
         """
         self.positions = positions
+        if self.ignore_baseline_positions and positions:
+            for sym, data in positions.items():
+                if sym not in self.position_baseline:
+                    qty = data.get('quantity', 0.0) or 0.0
+                    self.position_baseline[sym] = qty
+
+    def set_position_baseline(self, baseline: dict):
+        """Set or extend the baseline positions that should be ignored for exposure."""
+        if not baseline:
+            return
+        # Do not overwrite existing baselines so restarts retain the initial snapshot
+        for sym, qty in baseline.items():
+            self.position_baseline.setdefault(sym, qty or 0.0)
 
     def update_pending_orders(self, pending_orders: list, price_lookup: dict = None):
         """
@@ -218,6 +234,25 @@ class RiskManager:
                 return members
         return None
 
+    def _net_quantity_for_exposure(self, quantity: float, baseline_qty: float) -> float:
+        """Apply sandbox baseline so initial airdrop inventory doesn't consume exposure."""
+        if not self.ignore_baseline_positions:
+            return quantity
+
+        quantity = quantity or 0.0
+        baseline_qty = baseline_qty or 0.0
+
+        # Baseline long: ignore exposure until we exceed baseline; shorts count fully
+        if baseline_qty >= 0:
+            if quantity >= 0:
+                return max(0.0, quantity - baseline_qty)
+            return quantity
+
+        # Baseline short: ignore exposure within [baseline, 0]; long flips count fully
+        if quantity <= 0:
+            return min(0.0, quantity - baseline_qty)
+        return quantity
+
     def get_total_exposure(self, price_overrides: dict = None) -> float:
         """Return total notional exposure using marked prices."""
         exposure = 0.0
@@ -231,7 +266,9 @@ class RiskManager:
             else:
                 curr_price = data.get('current_price', 0) or 0.0
 
-            notional = abs(qty) * curr_price
+            baseline_qty = self.position_baseline.get(sym, 0.0) if self.position_baseline else 0.0
+            qty_for_exposure = self._net_quantity_for_exposure(qty, baseline_qty)
+            notional = abs(qty_for_exposure) * curr_price
             per_symbol_notional[sym] = notional
             exposure += notional
 

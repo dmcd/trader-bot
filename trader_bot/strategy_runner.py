@@ -43,6 +43,7 @@ from trader_bot.config import (
     PLAN_TRAIL_TO_BREAKEVEN_PCT,
     PRIORITY_LOOKBACK_MIN,
     PRIORITY_MOVE_PCT,
+    SANDBOX_IGNORE_INITIAL_POSITIONS,
     BOT_VERSION,
     TRADE_SYNC_CUTOFF_MINUTES,
     TRADING_MODE,
@@ -95,8 +96,9 @@ class StrategyRunner:
             logger.warning(f"Unknown ACTIVE_EXCHANGE '{ACTIVE_EXCHANGE}', defaulting to GEMINI")
             self.bot = GeminiTrader()
             self.exchange_name = 'GEMINI'
-        
-        self.risk_manager = RiskManager(self.bot)
+        self.sandbox_ignore_positions = TRADING_MODE == 'PAPER' and SANDBOX_IGNORE_INITIAL_POSITIONS
+        self._sandbox_position_baseline = {}
+        self.risk_manager = RiskManager(self.bot, ignore_baseline_positions=self.sandbox_ignore_positions)
         self.running = False
         self.execute_orders = execute_orders
         
@@ -449,6 +451,29 @@ class StrategyRunner:
             min_top_of_book_notional=MIN_TOP_OF_BOOK_NOTIONAL,
         )
 
+    def _capture_sandbox_position_baseline(self, positions: list | None):
+        """
+        Record the initial sandbox inventory so exposure snapshots only reflect
+        positions opened/closed during this session.
+        """
+        if not self.sandbox_ignore_positions or not positions:
+            return
+
+        updated = False
+        for pos in positions:
+            sym = pos.get('symbol')
+            if not sym:
+                continue
+            qty = pos.get('quantity', 0.0) or 0.0
+            if sym not in self._sandbox_position_baseline:
+                self._sandbox_position_baseline[sym] = qty
+                updated = True
+
+        if updated:
+            self.risk_manager.set_position_baseline(self._sandbox_position_baseline)
+            if self.context and hasattr(self.context, "set_position_baseline"):
+                self.context.set_position_baseline(self._sandbox_position_baseline)
+
     def _prefer_maker(self, symbol: str) -> bool:
         """Determine maker intent based on overrides, else default."""
         if not symbol:
@@ -722,6 +747,7 @@ class StrategyRunner:
         # No need to reconcile_exchange_state in the old way; we just trust the exchange now.
         # But we might want to log initial positions to DB for debugging.
         live_positions = await self.bot.get_positions_async()
+        self._capture_sandbox_position_baseline(live_positions)
         self.db.replace_positions(self.session_id, live_positions)
         
         self.daily_loss_pct = MAX_DAILY_LOSS_PERCENT
@@ -1075,6 +1101,7 @@ class StrategyRunner:
                     # Refresh live positions each loop for accurate exposure snapshots
                     try:
                         live_positions = await self.bot.get_positions_async()
+                        self._capture_sandbox_position_baseline(live_positions)
                         self.db.replace_positions(self.session_id, live_positions)
                     except Exception as e:
                         logger.warning(f"Could not refresh positions: {e}")

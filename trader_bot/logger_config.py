@@ -44,7 +44,7 @@ def setup_logging():
 
     # 1. Console Log (console.log) - Technical debug log
     # DEBUG and above, detailed format, captures everything
-    console_handler = logging.FileHandler('console.log', mode='a') # Append to keep history
+    console_handler = logging.FileHandler('console.log', mode='w') # Clear log on startup
     console_handler.setLevel(logging.DEBUG)
     console_handler.setFormatter(detailed_formatter)
     logger.addHandler(console_handler)

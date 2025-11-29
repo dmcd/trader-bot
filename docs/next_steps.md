@@ -29,8 +29,6 @@
   - [x] Rate-limit tool requests per symbol/timeframe combo and deduplicate across planner turns; log tool thrash metrics.
   - [x] Track LLM cost burn rate vs. session budget and feed it into prompts plus dashboard alerts.
 - Product & UX
-  - [ ] Expand dashboard with controls: pause/resume, lower caps, flatten positions, cancel all, toggle maker/taker policy.
-  - [ ] Add “what changed since last loop” panel (price deltas, exposure shifts, new plans/orders, errors).
   - [ ] Add integration test that runs StrategyRunner against a stub exchange + stub LLM to verify spacing, slippage, and risk gates.
   - [ ] Property tests for tool payload clamps (json size) and timeframe normalization; regression tests for plan trail-to-breakeven logic.
   - [ ] Backfill metrics validation: reconcile DB session stats vs. equity snapshots and report drift beyond threshold.

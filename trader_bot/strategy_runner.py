@@ -67,6 +67,7 @@ from trader_bot.services.command_processor import CommandProcessor
 from trader_bot.services.portfolio_tracker import PortfolioTracker
 from trader_bot.services.plan_monitor import PlanMonitor, PlanMonitorConfig
 from trader_bot.services.health_manager import HealthCircuitManager
+from trader_bot.services.trade_action_handler import TradeActionHandler
 from trader_bot.technical_analysis import TechnicalAnalysis
 from trader_bot.trading_context import TradingContext
 from trader_bot.utils import get_client_order_id
@@ -128,6 +129,19 @@ class StrategyRunner:
         )
         self.portfolio_tracker = PortfolioTracker(self.db, logger=logger)
         self.holdings = self.portfolio_tracker.holdings
+        self.action_handler = TradeActionHandler(
+            db=self.db,
+            bot=self.bot,
+            risk_manager=self.risk_manager,
+            cost_tracker=self.cost_tracker,
+            portfolio_tracker=self.portfolio_tracker,
+            prefer_maker=self._prefer_maker,
+            health_manager=self.health_manager,
+            emit_telemetry=self._emit_telemetry,
+            log_execution_trace=self._log_execution_trace,
+            actions_logger=bot_actions_logger,
+            logger=logger,
+        )
         self.maker_preference_default = MAKER_PREFERENCE_DEFAULT
         self.maker_preference_overrides = MAKER_PREFERENCE_OVERRIDES or {}
         # Seed a default stats container so background tasks don't crash before initialization completes
@@ -142,6 +156,8 @@ class StrategyRunner:
             ohlcv_provider=self.bot.fetch_ohlcv,
             tool_coordinator=None,  # set post-connect when exchange is ready
         )
+        # Wire action handler rejection callback once strategy exists
+        self.action_handler.on_trade_rejected = getattr(self.strategy, "on_trade_rejected", None)
         
         # Trade syncing state
         self.order_reasons = {}  # order_id -> reason
@@ -458,55 +474,19 @@ class StrategyRunner:
             logger.warning(f"Could not refresh open orders snapshot: {e}")
 
     def _passes_rr_filter(self, action: str, price: float, stop_price: float, target_price: float) -> bool:
-        """Require minimum risk/reward when both stop and target are provided."""
-        if not price or stop_price is None or target_price is None:
-            return True
-        if action == 'BUY':
-            risk = price - stop_price
-            reward = target_price - price
-        else:
-            risk = stop_price - price
-            reward = price - target_price
-        if risk <= 0 or reward <= 0:
-            return False
-        rr = reward / risk
-        return rr >= MIN_RR
-
-    def _compute_slippage_cap(self, market_data_point: dict) -> float:
-        """Derive a slippage cap that tightens on thin books or wide spreads."""
-        cap = MAX_SLIPPAGE_PCT
-        if not market_data_point:
-            return cap
-
-        spread_pct = market_data_point.get("spread_pct")
-        bid = market_data_point.get("bid")
-        ask = market_data_point.get("ask")
-        bid_size = market_data_point.get("bid_size")
-        ask_size = market_data_point.get("ask_size")
-
-        top_notional = None
-        if bid and ask and bid_size and ask_size:
-            top_notional = min(bid * bid_size, ask * ask_size)
-
-        if top_notional is not None:
-            if top_notional < MIN_TOP_OF_BOOK_NOTIONAL:
-                cap *= 0.25
-            elif top_notional < MIN_TOP_OF_BOOK_NOTIONAL * 2:
-                cap *= 0.5
-
-        if spread_pct is not None and spread_pct > 0:
-            factor = max(0.3, min(1.0, MAX_SPREAD_PCT / max(spread_pct, 1e-9)))
-            cap *= factor
-
-        return max(cap, MAX_SLIPPAGE_PCT * 0.1)
+        """Delegate RR filter to action handler for compatibility."""
+        return self.action_handler.passes_rr_filter(action, price, stop_price, target_price, min_rr=MIN_RR)
 
     def _slippage_within_limit(self, decision_price: float, latest_price: float, market_data_point: dict = None):
-        """Return (allowed, move_pct) based on dynamic slippage cap."""
-        if not decision_price or not latest_price:
-            return True, 0.0
-        move_pct = abs(latest_price - decision_price) / decision_price * 100
-        cap = self._compute_slippage_cap(market_data_point or {})
-        return move_pct <= cap, move_pct
+        """Delegate slippage cap check to action handler for compatibility."""
+        return self.action_handler.slippage_within_limit(
+            decision_price,
+            latest_price,
+            market_data_point or {},
+            max_slippage_pct=MAX_SLIPPAGE_PCT,
+            max_spread_pct=MAX_SPREAD_PCT,
+            min_top_of_book_notional=MIN_TOP_OF_BOOK_NOTIONAL,
+        )
 
     def _prefer_maker(self, symbol: str) -> bool:
         """Determine maker intent based on overrides, else default."""
@@ -525,175 +505,49 @@ class StrategyRunner:
         pending_data: dict,
         position_qty: float,
     ) -> bool:
-        """
-        Prevent stacking same-direction risk when we already have a position and
-        pending orders/plans on the symbol.
-        """
-        if action != 'BUY':
-            return False
-        if position_qty <= 0:
-            return False
-        pending_same_side = (pending_data.get('count_buy', 0) or 0) > 0
-        has_plans = open_plan_count > 0
-        return pending_same_side or has_plans
+        """Delegate stacking guard to action handler for compatibility."""
+        return self.action_handler.stacking_block(action, open_plan_count, pending_data, position_qty)
 
     async def _handle_update_plan(self, signal, telemetry_record, trace_id):
-        """Handle UPDATE_PLAN intents."""
+        """Handle UPDATE_PLAN intents via action handler."""
         plan_id = getattr(signal, 'plan_id', None)
         stop_price = getattr(signal, 'stop_price', None)
         target_price = getattr(signal, 'target_price', None)
         reason = getattr(signal, 'reason', '') or 'Update plan'
-        if not plan_id:
-            telemetry_record["status"] = "update_plan_missing_id"
-            self._emit_telemetry(telemetry_record)
-            return
-        try:
-            self.db.update_trade_plan_prices(plan_id, stop_price=stop_price, target_price=target_price, reason=reason)
-            telemetry_record["status"] = "plan_updated"
-            self._log_execution_trace(trace_id, telemetry_record)
-            self._emit_telemetry(telemetry_record)
-            bot_actions_logger.info(f"✏️ Plan {plan_id} updated: stop={stop_price}, target={target_price}")
-        except Exception as e:
-            telemetry_record["status"] = "plan_update_error"
-            telemetry_record["error"] = str(e)
-            self._log_execution_trace(trace_id, telemetry_record)
-            self._emit_telemetry(telemetry_record)
-            logger.error(f"Plan update failed: {e}")
+        result = await self.action_handler.handle_update_plan(plan_id, stop_price, target_price, reason, trace_id)
+        if result is not None:
+            telemetry_record.update(result)
 
     async def _handle_partial_close(self, signal, telemetry_record, trace_id, market_data, current_exposure):
-        """Handle PARTIAL_CLOSE intents."""
+        """Handle PARTIAL_CLOSE intents via action handler."""
         plan_id = getattr(signal, 'plan_id', None)
         close_fraction = getattr(signal, 'close_fraction', None) or 0.0
         symbol = signal.symbol
-        if not plan_id or close_fraction <= 0 or close_fraction > 1:
-            telemetry_record["status"] = "partial_close_invalid"
-            telemetry_record["error"] = "invalid plan_id or fraction"
-            self._emit_telemetry(telemetry_record)
-            return
-        try:
-            open_plans = self.db.get_open_trade_plans(self.session_id)
-            plan = next((p for p in open_plans if p.get('id') == plan_id), None)
-        except Exception:
-            plan = None
-        if not plan:
-            telemetry_record["status"] = "partial_close_missing_plan"
-            self._emit_telemetry(telemetry_record)
-            return
-        plan_side = plan.get('side', 'BUY').upper()
-        plan_size = plan.get('size', 0.0) or 0.0
-        close_qty = max(0.0, plan_size * close_fraction)
-        if close_qty <= 0:
-            telemetry_record["status"] = "partial_close_zero_qty"
-            self._emit_telemetry(telemetry_record)
-            return
-        flatten_action = 'SELL' if plan_side == 'BUY' else 'BUY'
         price = market_data.get(symbol, {}).get('price') if market_data else None
-        qty_for_risk = self._apply_order_value_buffer(close_qty, price or 0)
-        risk_result = self.risk_manager.check_trade_allowed(symbol, flatten_action, qty_for_risk, price or 0)
-        if not risk_result.allowed:
-            telemetry_record["status"] = "partial_close_blocked"
-            telemetry_record["risk_reason"] = risk_result.reason
-            self.strategy.on_trade_rejected(risk_result.reason)
-            self._emit_telemetry(telemetry_record)
-            return
-        bot_actions_logger.info(f"🔻 Partial close {close_fraction*100:.0f}% of plan {plan_id}: {flatten_action} {qty_for_risk} {symbol}")
-        try:
-            prefer_maker = self._prefer_maker(symbol)
-            order_result = await self.bot.place_order_async(symbol, flatten_action, qty_for_risk, prefer_maker=prefer_maker)
-            liquidity_tag = order_result.get('liquidity', 'taker') if order_result else 'taker'
-            fee = self.cost_tracker.calculate_trade_fee(symbol, qty_for_risk, price or 0, flatten_action, liquidity=liquidity_tag)
-            realized = self._update_holdings_and_realized(symbol, flatten_action, qty_for_risk, price or 0, fee)
-            self.db.log_trade(
-                self.session_id,
-                symbol,
-                flatten_action,
-                qty_for_risk,
-                price or 0,
-                fee,
-                f"Partial close plan {plan_id} ({close_fraction*100:.0f}%)",
-                liquidity=order_result.get('liquidity') if order_result else 'taker',
-                realized_pnl=realized,
-            )
-            self._apply_fill_to_session_stats(order_result.get('order_id') if order_result else None, fee, realized)
-            remaining_size = max(plan_size - close_qty, 0.0)
-            try:
-                partial_reason = f"Partial close {close_fraction*100:.0f}%"
-                if remaining_size <= 1e-9:
-                    self.db.update_trade_plan_status(
-                        plan_id,
-                        status='closed',
-                        closed_at=datetime.now(timezone.utc).isoformat(),
-                        reason=partial_reason,
-                    )
-                else:
-                    self.db.update_trade_plan_size(plan_id, size=remaining_size, reason=partial_reason)
-            except Exception as exc:
-                logger.debug(f"Could not update plan size after partial close: {exc}")
-            telemetry_record["status"] = "partial_close_executed"
-            telemetry_record["order_result"] = order_result
-        except Exception as e:
-            telemetry_record["status"] = "partial_close_error"
-            telemetry_record["error"] = str(e)
-            logger.error(f"Partial close failed: {e}")
-        self._log_execution_trace(trace_id, telemetry_record)
-        self._emit_telemetry(telemetry_record)
+        result = await self.action_handler.handle_partial_close(
+            session_id=self.session_id,
+            plan_id=plan_id,
+            close_fraction=close_fraction,
+            symbol=symbol,
+            price=price,
+            current_exposure=current_exposure,
+            trace_id=trace_id,
+        )
+        if result is not None:
+            telemetry_record.update(result)
 
     async def _handle_close_position(self, signal, telemetry_record, trace_id, market_data):
-        """Handle CLOSE_POSITION intents by flattening current holdings for symbol."""
+        """Handle CLOSE_POSITION intents via action handler."""
         symbol = signal.symbol
-        qty = 0.0
         price = market_data.get(symbol, {}).get('price') if market_data else None
-        try:
-            positions = self.db.get_positions(self.session_id)
-            for pos in positions:
-                if pos.get('symbol') == symbol:
-                    qty = pos.get('quantity', 0.0) or 0.0
-                    break
-        except Exception:
-            qty = 0.0
-        if qty <= 0:
-            telemetry_record["status"] = "close_position_none"
-            self._emit_telemetry(telemetry_record)
-            return
-        action = 'SELL' if qty > 0 else 'BUY'
-        qty_abs = abs(qty)
-        qty_buffered = self._apply_order_value_buffer(qty_abs, price or 0)
-        if qty_buffered <= 0:
-            telemetry_record["status"] = "close_position_zero_after_buffer"
-            self._emit_telemetry(telemetry_record)
-            return
-        risk_result = self.risk_manager.check_trade_allowed(symbol, action, qty_buffered, price or 0)
-        if not risk_result.allowed:
-            telemetry_record["status"] = "close_position_blocked"
-            telemetry_record["risk_reason"] = risk_result.reason
-            self._emit_telemetry(telemetry_record)
-            return
-        try:
-            prefer_maker = self._prefer_maker(symbol)
-            order_result = await self.bot.place_order_async(symbol, action, qty_buffered, prefer_maker=prefer_maker)
-            liquidity_tag = order_result.get('liquidity', 'taker') if order_result else 'taker'
-            fee = self.cost_tracker.calculate_trade_fee(symbol, qty_buffered, price or 0, action, liquidity=liquidity_tag)
-            realized = self._update_holdings_and_realized(symbol, action, qty_buffered, price or 0, fee)
-            self.db.log_trade(
-                self.session_id,
-                symbol,
-                action,
-                qty_buffered,
-                price or 0,
-                fee,
-                f"Close position request ({qty})",
-                liquidity=order_result.get('liquidity') if order_result else 'taker',
-                realized_pnl=realized,
-            )
-            self._apply_fill_to_session_stats(order_result.get('order_id') if order_result else None, fee, realized)
-            telemetry_record["status"] = "close_position_executed"
-            telemetry_record["order_result"] = order_result
-        except Exception as e:
-            telemetry_record["status"] = "close_position_error"
-            telemetry_record["error"] = str(e)
-            logger.error(f"Close position failed: {e}")
-        self._log_execution_trace(trace_id, telemetry_record)
-        self._emit_telemetry(telemetry_record)
+        result = await self.action_handler.handle_close_position(
+            session_id=self.session_id,
+            symbol=symbol,
+            price=price,
+            trace_id=trace_id,
+        )
+        if result is not None:
+            telemetry_record.update(result)
 
     async def _handle_signal(self, signal, market_data, open_orders, current_equity, current_exposure):
         """Helper for tests to exercise action handling paths."""
@@ -752,47 +606,16 @@ class StrategyRunner:
                 logger.debug(f"OHLCV fetch failed for {symbol} {tf}: {e}")
 
     def _apply_order_value_buffer(self, quantity: float, price: float):
-        """Trim quantity so the notional sits under the order cap minus buffer."""
-        adjusted_qty, overage = self.risk_manager.apply_order_value_buffer(quantity, price)
-        if adjusted_qty < quantity:
-            original_value = quantity * price
-            adjusted_value = adjusted_qty * price
-            bot_actions_logger.info(
-                f"✂️ Trimmed order from ${original_value:.2f} to ${adjusted_value:.2f} "
-                f"to stay under ${MAX_ORDER_VALUE - ORDER_VALUE_BUFFER:.2f} cap"
-            )
-        return adjusted_qty
+        """Delegate order value buffer to action handler for compatibility."""
+        return self.action_handler.apply_order_value_buffer(quantity, price)
 
     def _liquidity_ok(self, market_data_point: dict) -> bool:
-        """Simple microstructure filters using spread and top-of-book depth."""
-        if not market_data_point:
-            return True
-
-        spread_pct = market_data_point.get('spread_pct')
-        bid = market_data_point.get('bid')
-        ask = market_data_point.get('ask')
-        bid_size = market_data_point.get('bid_size')
-        ask_size = market_data_point.get('ask_size')
-
-        if spread_pct is None and bid and ask:
-            mid = (bid + ask) / 2
-            if mid:
-                spread_pct = ((ask - bid) / mid) * 100
-
-        if spread_pct is not None and spread_pct > MAX_SPREAD_PCT:
-            bot_actions_logger.info(f"⏸️ Skipping trade: spread {spread_pct:.3f}% > cap {MAX_SPREAD_PCT:.3f}%")
-            return False
-
-        if bid and ask and bid_size and ask_size:
-            # Use the weaker side as liquidity floor
-            min_notional = min(bid * bid_size, ask * ask_size)
-            if min_notional < MIN_TOP_OF_BOOK_NOTIONAL:
-                bot_actions_logger.info(
-                    f"⏸️ Skipping trade: top-of-book notional ${min_notional:.2f} < ${MIN_TOP_OF_BOOK_NOTIONAL:.2f} floor"
-                )
-                return False
-
-        return True
+        """Delegate liquidity check to action handler for compatibility."""
+        return self.action_handler.liquidity_ok(
+            market_data_point,
+            max_spread_pct=MAX_SPREAD_PCT,
+            min_top_of_book_notional=MIN_TOP_OF_BOOK_NOTIONAL,
+        )
 
     async def _monitor_trade_plans(self, price_lookup: dict, open_orders: list):
         """Delegate to the standalone PlanMonitor service."""

@@ -22,6 +22,7 @@ def _cleanup_db_path():
             pass
 
 from trader_bot.strategy_runner import StrategyRunner
+from trader_bot.services.trade_action_handler import TradeActionHandler
 from trader_bot.services.plan_monitor import PlanMonitorConfig
 
 
@@ -37,6 +38,21 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self._refresh_monitor_bindings()
 
     def _refresh_monitor_bindings(self):
+        # Rebind action handler to ensure it uses latest fakes/mocks
+        self.runner.action_handler = TradeActionHandler(
+            db=self.runner.db,
+            bot=self.runner.bot,
+            risk_manager=self.runner.risk_manager,
+            cost_tracker=self.runner.cost_tracker,
+            portfolio_tracker=self.runner.portfolio_tracker,
+            prefer_maker=self.runner._prefer_maker,
+            health_manager=self.runner.health_manager,
+            emit_telemetry=self.runner._emit_telemetry,
+            log_execution_trace=self.runner._log_execution_trace,
+            on_trade_rejected=self.runner.strategy.on_trade_rejected,
+            actions_logger=getattr(self.runner.strategy, "logger", None),
+            logger=None,
+        )
         self.runner.plan_monitor.refresh_bindings(
             bot=self.runner.bot,
             db=self.runner.db,
@@ -316,6 +332,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner._update_holdings_and_realized = Mock(return_value=0.0)
         self.runner._apply_fill_to_session_stats = Mock()
         self.runner.risk_manager.check_trade_allowed = Mock(return_value=SimpleNamespace(allowed=True, reason=None))
+        self._refresh_monitor_bindings()
 
         signal = SimpleNamespace(plan_id=10, close_fraction=0.5, symbol="BTC/USD", action="PARTIAL_CLOSE", reason="test")
         telemetry_record = {}
@@ -340,6 +357,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner._update_holdings_and_realized = Mock(return_value=0.0)
         self.runner._apply_fill_to_session_stats = Mock()
         self.runner.risk_manager.check_trade_allowed = Mock(return_value=SimpleNamespace(allowed=True, reason=None))
+        self._refresh_monitor_bindings()
 
         signal = SimpleNamespace(plan_id=11, close_fraction=1.0, symbol="ETH/USD", action="PARTIAL_CLOSE", reason="test")
         telemetry_record = {}

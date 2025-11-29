@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock
 
 from trader_bot.strategy_runner import StrategyRunner
+from trader_bot.services.trade_action_handler import TradeActionHandler
 
 # Ensure tests never write to the production trading.db
 _fd, _db_path = tempfile.mkstemp(prefix="trader-bot-test-", suffix=".db")
@@ -50,6 +51,21 @@ class TestActionHandling(unittest.IsolatedAsyncioTestCase):
         self.runner.risk_manager.update_positions({})
         self.runner.risk_manager.update_pending_orders([])
         self.runner.risk_manager.check_trade_allowed = MagicMock(return_value=MagicMock(allowed=True, reason=""))
+        # Rebind action handler to use test doubles
+        self.runner.action_handler = TradeActionHandler(
+            db=self.runner.db,
+            bot=self.runner.bot,
+            risk_manager=self.runner.risk_manager,
+            cost_tracker=self.runner.cost_tracker,
+            portfolio_tracker=self.runner.portfolio_tracker,
+            prefer_maker=self.runner._prefer_maker,
+            health_manager=self.runner.health_manager,
+            emit_telemetry=self.runner._emit_telemetry,
+            log_execution_trace=self.runner._log_execution_trace,
+            on_trade_rejected=self.runner.strategy.on_trade_rejected,
+            actions_logger=self.runner.strategy.logger if hasattr(self.runner.strategy, "logger") else None,
+            logger=None,
+        )
 
     async def test_update_plan_handling(self):
         signal = MagicMock()

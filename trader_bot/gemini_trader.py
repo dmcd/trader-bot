@@ -313,9 +313,6 @@ class GeminiTrader(BaseTrader):
         if not self.connected:
             return []
 
-        # Optional sandbox-only age filter for stale balances; currently unused
-        cutoff_time = None
-
         try:
             balance = await self.exchange.fetch_balance()
             positions = []
@@ -325,24 +322,6 @@ class GeminiTrader(BaseTrader):
                     # Represent USD as USD/USD for consistency
                     symbol = f"{currency}/USD" if currency != 'USD' else 'USD'
                     
-                    # Apply sandbox filter
-                    if self.sandbox and cutoff_time and symbol != 'USD':
-                        try:
-                            # Fetch last trade to check age
-                            trades = await self.get_my_trades_async(symbol, limit=1)
-                            if not trades:
-                                logger.info(f"Sandbox: Ignoring {symbol} (no recent trades found)")
-                                continue
-                            
-                            last_trade_ts = trades[0]['timestamp']
-                            last_trade_time = datetime.fromtimestamp(last_trade_ts / 1000, timezone.utc)
-                            
-                            if last_trade_time < cutoff_time:
-                                logger.info(f"Sandbox: Ignoring {symbol} (last trade {last_trade_time} < {cutoff_time})")
-                                continue
-                        except Exception as e:
-                            logger.warning(f"Sandbox: Could not verify age of {symbol}, keeping it. Error: {e}")
-
                     positions.append({
                         'symbol': symbol,
                         'quantity': total,

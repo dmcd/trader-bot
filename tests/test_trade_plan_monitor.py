@@ -122,10 +122,11 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
             'version': 1,
             'regime_flags': {'volatility': 'low'},
         }]
+        self.runner.risk_manager.positions = {"BTC/USD": {"quantity": 0.2, "current_price": 100}}
         self.runner.db.update_trade_plan_prices = Mock()
         self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '999', 'liquidity': 'taker'})
 
-        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 101}, open_orders=[])
+        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 102}, open_orders=[])
 
         self.runner.db.update_trade_plan_prices.assert_called_once()
         args, kwargs = self.runner.db.update_trade_plan_prices.call_args
@@ -151,6 +152,52 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 99}, open_orders=[])
         # High-vol trailing should be tighter; if stop already above entry, it should still trail to breakeven when rule met
         self.runner.db.update_trade_plan_prices.assert_called_once()
+
+    async def test_trailing_tightens_breakeven_in_high_vol(self):
+        now = datetime.now(timezone.utc)
+        self.runner.db = MagicMock()
+        self.runner.risk_manager.positions = {"BTC/USD": {"quantity": 0.1, "current_price": 100}}
+        self.runner.db.get_open_trade_plans.return_value = [{
+            'id': 12,
+            'symbol': 'BTC/USD',
+            'side': 'BUY',
+            'entry_price': 100,
+            'stop_price': 95,
+            'target_price': 110,
+            'size': 0.1,
+            'opened_at': now.isoformat(),
+            'version': 1,
+            'volatility': 'high',
+        }]
+        self.runner.db.update_trade_plan_prices = Mock()
+        self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': 'tight', 'liquidity': 'taker'})
+
+        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 100.8}, open_orders=[])
+
+        self.runner.db.update_trade_plan_prices.assert_called_once()
+
+    async def test_trailing_waits_longer_on_low_vol(self):
+        now = datetime.now(timezone.utc)
+        self.runner.db = MagicMock()
+        self.runner.risk_manager.positions = {"BTC/USD": {"quantity": 0.1, "current_price": 100}}
+        self.runner.db.get_open_trade_plans.return_value = [{
+            'id': 13,
+            'symbol': 'BTC/USD',
+            'side': 'BUY',
+            'entry_price': 100,
+            'stop_price': 95,
+            'target_price': 110,
+            'size': 0.1,
+            'opened_at': now.isoformat(),
+            'version': 1,
+            'volatility': 'low',
+        }]
+        self.runner.db.update_trade_plan_prices = Mock()
+        self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': 'wide', 'liquidity': 'taker'})
+
+        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 101.0}, open_orders=[])
+
+        self.runner.db.update_trade_plan_prices.assert_not_called()
 
     async def test_trails_stop_to_breakeven_for_buy(self):
         now = datetime.now(timezone.utc)

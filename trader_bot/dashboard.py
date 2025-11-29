@@ -539,8 +539,6 @@ with tab_live:
         logs = load_logs()
         log_text = "".join(logs)
         st.text_area("Log Output", log_text, height=900, disabled=True)
-        time.sleep(5)
-        st.rerun()
 
 with tab_health:
     st.subheader("🚦 System Health")

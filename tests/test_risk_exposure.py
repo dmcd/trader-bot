@@ -14,6 +14,8 @@ class TestRiskManager(unittest.TestCase):
         self.orig_min_trade_size = rm_module.MIN_TRADE_SIZE
         self.orig_order_value_buffer = rm_module.ORDER_VALUE_BUFFER
         self.orig_max_positions = rm_module.MAX_POSITIONS
+        self.orig_buckets = rm_module.CORRELATION_BUCKETS
+        self.orig_bucket_limit = rm_module.BUCKET_MAX_POSITIONS
 
         rm_module.MAX_ORDER_VALUE = 500.0
         rm_module.MAX_TOTAL_EXPOSURE = 1000.0
@@ -22,6 +24,8 @@ class TestRiskManager(unittest.TestCase):
         rm_module.MIN_TRADE_SIZE = 1.0
         rm_module.ORDER_VALUE_BUFFER = 1.0
         rm_module.MAX_POSITIONS = 3
+        rm_module.CORRELATION_BUCKETS = {"majors": ["BTC/USD", "ETH/USD"]}
+        rm_module.BUCKET_MAX_POSITIONS = 1
 
         self.rm = RiskManager()
         # Seed start of day equity so percent checks work
@@ -35,6 +39,8 @@ class TestRiskManager(unittest.TestCase):
         rm_module.MIN_TRADE_SIZE = self.orig_min_trade_size
         rm_module.ORDER_VALUE_BUFFER = self.orig_order_value_buffer
         rm_module.MAX_POSITIONS = self.orig_max_positions
+        rm_module.CORRELATION_BUCKETS = self.orig_buckets
+        rm_module.BUCKET_MAX_POSITIONS = self.orig_bucket_limit
 
     def test_invalid_price_or_quantity_rejected(self):
         result = self.rm.check_trade_allowed("BHP", "BUY", 0, 100.0)
@@ -205,6 +211,14 @@ class TestRiskManager(unittest.TestCase):
         result = self.rm.check_trade_allowed("AAA", "BUY", 1, price=10.0)
         self.assertFalse(result.allowed)
         self.assertIn("Open order cap", result.reason)
+
+    def test_correlation_bucket_blocks_new_symbol(self):
+        # Existing position in BTC within the bucket
+        self.rm.update_positions({"BTC/USD": {"quantity": 1.0, "current_price": 100.0}})
+        # Attempt to buy ETH (same bucket) should be blocked by bucket max positions = 1
+        result = self.rm.check_trade_allowed("ETH/USD", "BUY", 1.0, price=100.0)
+        self.assertFalse(result.allowed)
+        self.assertIn("Correlation bucket limit", result.reason)
 
 
 if __name__ == "__main__":

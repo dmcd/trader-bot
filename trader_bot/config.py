@@ -121,3 +121,19 @@ def _parse_maker_overrides(raw: str):
             result[key] = False
     return result
 MAKER_PREFERENCE_OVERRIDES = _parse_maker_overrides(os.getenv('MAKER_PREFERENCE_OVERRIDES', ''))
+
+# Correlation buckets (semicolon-separated groups of comma symbols)
+def _parse_correlation_buckets(raw: str):
+    buckets = {}
+    for idx, bucket in enumerate(raw.split(';')):
+        if not bucket.strip():
+            continue
+        parts = [sym.strip().upper() for sym in bucket.split(',') if sym.strip()]
+        if not parts:
+            continue
+        key = f"bucket_{idx+1}"
+        buckets[key] = parts
+    return buckets
+
+CORRELATION_BUCKETS = _parse_correlation_buckets(os.getenv('CORRELATION_BUCKETS', 'BTC/USD,ETH/USD;SOL/USD,ADA/USD'))
+BUCKET_MAX_POSITIONS = int(os.getenv('BUCKET_MAX_POSITIONS', '2'))

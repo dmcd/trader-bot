@@ -9,6 +9,8 @@ from trader_bot.config import (
     MAX_TOTAL_EXPOSURE,
     MIN_TRADE_SIZE,
     ORDER_VALUE_BUFFER,
+    CORRELATION_BUCKETS,
+    BUCKET_MAX_POSITIONS,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,8 @@ class RiskManager:
         self.pending_buy_exposure = 0.0  # Notional of outstanding buy orders
         self.pending_sell_exposure = 0.0  # Notional of outstanding sell orders (short intent)
         self.pending_orders_by_symbol = {}  # symbol -> {'buy': notional, 'sell': notional, 'count_buy': int, 'count_sell': int}
+        self.correlation_buckets = CORRELATION_BUCKETS
+        self.bucket_max_positions = BUCKET_MAX_POSITIONS
 
     def seed_start_of_day(self, start_equity: float):
         """Persist start-of-day equity so restarts keep loss limits consistent."""
@@ -182,7 +186,37 @@ class RiskManager:
                 logger.warning(f"Risk Reject: {msg}")
                 return RiskCheckResult(False, msg)
 
+            # Correlation bucket guard: block same-direction adds when bucket already loaded
+            bucket = self._get_bucket(symbol)
+            if bucket:
+                bucket_syms = set(bucket)
+                # Count active positions and pending buys in the same bucket
+                active_bucket = {
+                    sym for sym, data in (self.positions or {}).items()
+                    if sym in bucket_syms and abs(data.get('quantity', 0) or 0.0) > 1e-9
+                }
+                pending_bucket = {
+                    sym for sym, data in (self.pending_orders_by_symbol or {}).items()
+                    if sym in bucket_syms and (data.get('count_buy', 0) > 0)
+                }
+                # Exclude current symbol if we already have a position; focus on stacking new symbols in bucket
+                bucket_count = len(active_bucket.union(pending_bucket))
+                already_active = symbol in active_bucket
+                if not already_active and bucket_count >= self.bucket_max_positions:
+                    msg = f"Correlation bucket limit reached for {symbol} ({bucket_count}/{self.bucket_max_positions})"
+                    logger.warning(f"Risk Reject: {msg}")
+                    return RiskCheckResult(False, msg)
+
         return RiskCheckResult(True, "Trade allowed")
+
+    def _get_bucket(self, symbol: str):
+        if not symbol or not self.correlation_buckets:
+            return None
+        sym_up = symbol.upper()
+        for _, members in self.correlation_buckets.items():
+            if sym_up in members:
+                return members
+        return None
 
     def get_total_exposure(self, price_overrides: dict = None) -> float:
         """Return total notional exposure using marked prices."""

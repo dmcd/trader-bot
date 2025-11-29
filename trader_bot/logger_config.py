@@ -48,10 +48,13 @@ def setup_logging():
         or "pytest" in sys.modules
     )
 
+    log_dir = "logs/test" if test_mode else "."
+    os.makedirs(log_dir, exist_ok=True)
+
     # 1. Console Log (console*.log) - Technical debug log
     # DEBUG and above, detailed format, captures everything
     log_filename = "console_test.log" if test_mode else "console.log"
-    console_handler = logging.FileHandler(log_filename, mode='w') # Clear log on startup
+    console_handler = logging.FileHandler(os.path.join(log_dir, log_filename), mode='w') # Clear log on startup
     console_handler.setLevel(logging.DEBUG)
     console_handler.setFormatter(detailed_formatter)
     logger.addHandler(console_handler)
@@ -70,7 +73,7 @@ def setup_logging():
     bot_actions_logger.propagate = False  # Don't propagate to root logger
     
     bot_log_filename = "bot_test.log" if test_mode else "bot.log"
-    bot_handler = logging.FileHandler(bot_log_filename, mode='w')  # Overwrite on startup
+    bot_handler = logging.FileHandler(os.path.join(log_dir, bot_log_filename), mode='w')  # Overwrite on startup
     bot_handler.setLevel(logging.INFO)
     bot_handler.setFormatter(simple_formatter)
     bot_actions_logger.addHandler(bot_handler)
@@ -81,7 +84,7 @@ def setup_logging():
     telemetry_logger.propagate = False
     # Reset telemetry log each startup to keep sessions isolated
     telemetry_log_filename = "telemetry_test.log" if test_mode else "telemetry.log"
-    telemetry_handler = logging.FileHandler(telemetry_log_filename, mode='w')
+    telemetry_handler = logging.FileHandler(os.path.join(log_dir, telemetry_log_filename), mode='w')
     telemetry_handler.setLevel(logging.INFO)
     telemetry_handler.setFormatter(logging.Formatter('%(message)s'))
     telemetry_logger.addHandler(telemetry_handler)

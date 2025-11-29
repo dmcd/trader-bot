@@ -735,6 +735,7 @@ class StrategyRunner:
             for plan in open_plans:
                 plan_id = plan['id']
                 side = plan['side'].upper()
+                regime_flags = plan.get('regime_flags') or {}
                 stop = plan.get('stop_price')
                 target = plan.get('target_price')
                 size = plan.get('size') or 0.0

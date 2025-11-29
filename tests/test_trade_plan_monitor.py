@@ -106,6 +106,30 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 102}, open_orders=[])
         self.runner.db.update_trade_plan_prices.assert_called_once()
 
+    async def test_trailing_stop_uses_regime_flags_when_no_volatility(self):
+        now = datetime.now(timezone.utc)
+        self.runner.db = MagicMock()
+        self.runner.db.get_open_trade_plans.return_value = [{
+            'id': 7,
+            'symbol': 'BTC/USD',
+            'side': 'BUY',
+            'entry_price': 100,
+            'stop_price': 90,
+            'target_price': 115,
+            'size': 0.2,
+            'opened_at': now.isoformat(),
+            'version': 1,
+            'regime_flags': {'volatility': 'low'},
+        }]
+        self.runner.db.update_trade_plan_prices = Mock()
+        self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '999', 'liquidity': 'taker'})
+
+        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 101}, open_orders=[])
+
+        self.runner.db.update_trade_plan_prices.assert_called_once()
+        args, kwargs = self.runner.db.update_trade_plan_prices.call_args
+        self.assertEqual(kwargs.get("stop_price"), 100)
+
     async def test_trailing_stop_tightens_on_high_vol(self):
         now = datetime.now(timezone.utc)
         self.runner.db = MagicMock()

@@ -39,6 +39,8 @@ class TestActionHandling(unittest.IsolatedAsyncioTestCase):
             'opened_at': '2025-01-01T00:00:00'
         }]
         self.runner.db.update_trade_plan_prices = MagicMock()
+        self.runner.db.update_trade_plan_size = MagicMock()
+        self.runner.db.update_trade_plan_status = MagicMock()
         self.runner.db.log_trade = MagicMock()
         self.runner._apply_fill_to_session_stats = MagicMock()
         self.runner._update_holdings_and_realized = MagicMock(return_value=0.0)
@@ -73,6 +75,25 @@ class TestActionHandling(unittest.IsolatedAsyncioTestCase):
         signal.regime_flags = {}
         await self.runner._handle_signal(signal=signal, market_data={'BTC/USD': {'price': 100}}, open_orders=[], current_equity=1000, current_exposure=0)
         self.runner.db.log_trade.assert_called_once()
+        self.runner.db.update_trade_plan_size.assert_called_once()
+        args, kwargs = self.runner.db.update_trade_plan_size.call_args
+        self.assertAlmostEqual(kwargs.get('size'), 0.1)
+
+    async def test_partial_close_fully_closes_plan(self):
+        signal = MagicMock()
+        signal.action = 'PARTIAL_CLOSE'
+        signal.symbol = 'BTC/USD'
+        signal.plan_id = 1
+        signal.close_fraction = 1.0
+        signal.reason = 'exit'
+        signal.trace_id = None
+        signal.regime_flags = {}
+
+        await self.runner._handle_signal(signal=signal, market_data={'BTC/USD': {'price': 100}}, open_orders=[], current_equity=1000, current_exposure=0)
+
+        self.runner.db.update_trade_plan_status.assert_called_once()
+        args, kwargs = self.runner.db.update_trade_plan_status.call_args
+        self.assertEqual(kwargs.get('status'), 'closed')
 
     async def test_close_position_handling(self):
         self.runner.db.get_positions.return_value = [{'symbol': 'BTC/USD', 'quantity': 0.2, 'avg_price': 100}]

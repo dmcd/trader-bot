@@ -881,6 +881,19 @@ class TradingDatabase:
         """, (stop_price, target_price, reason, plan_id))
         self.conn.commit()
 
+    def update_trade_plan_size(self, plan_id: int, size: float, reason: str = None):
+        """Update plan size after partial closes and bump version."""
+        self.ensure_trade_plans_table()
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE trade_plans
+            SET size = ?,
+                version = version + 1,
+                reason = COALESCE(?, reason)
+            WHERE id = ?
+        """, (size, reason, plan_id))
+        self.conn.commit()
+
     def update_trade_plan_status(self, plan_id: int, status: str, closed_at: str = None, reason: str = None):
         self.ensure_trade_plans_table()
         cursor = self.conn.cursor()

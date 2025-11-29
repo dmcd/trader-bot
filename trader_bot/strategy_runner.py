@@ -559,6 +559,20 @@ class StrategyRunner:
                 realized_pnl=realized,
             )
             self._apply_fill_to_session_stats(order_result.get('order_id') if order_result else None, fee, realized)
+            remaining_size = max(plan_size - close_qty, 0.0)
+            try:
+                partial_reason = f"Partial close {close_fraction*100:.0f}%"
+                if remaining_size <= 1e-9:
+                    self.db.update_trade_plan_status(
+                        plan_id,
+                        status='closed',
+                        closed_at=datetime.now(timezone.utc).isoformat(),
+                        reason=partial_reason,
+                    )
+                else:
+                    self.db.update_trade_plan_size(plan_id, size=remaining_size, reason=partial_reason)
+            except Exception as exc:
+                logger.debug(f"Could not update plan size after partial close: {exc}")
             telemetry_record["status"] = "partial_close_executed"
             telemetry_record["order_result"] = order_result
         except Exception as e:

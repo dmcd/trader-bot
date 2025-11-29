@@ -10,6 +10,11 @@ import tempfile
 
 # Flag that we are under pytest so logger_config can direct logs to test files
 os.environ.setdefault("PYTEST_RUNNING", "1")
+# Test-safe defaults to avoid long sleeps and hard stops during pytest
+os.environ.setdefault("TRADING_MODE", "PAPER")
+os.environ.setdefault("LOOP_INTERVAL_SECONDS", "1")
+os.environ.setdefault("EXCHANGE_PAUSE_SECONDS", "1")
+os.environ.setdefault("TOOL_PAUSE_SECONDS", "1")
 
 _cleanup_target = None
 

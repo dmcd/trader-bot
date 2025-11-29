@@ -64,6 +64,7 @@ from trader_bot.logger_config import setup_logging
 from trader_bot.risk_manager import RiskManager
 from trader_bot.strategy import LLMStrategy
 from trader_bot.services.command_processor import CommandProcessor
+from trader_bot.services.portfolio_tracker import PortfolioTracker
 from trader_bot.services.plan_monitor import PlanMonitor, PlanMonitorConfig
 from trader_bot.services.health_manager import HealthCircuitManager
 from trader_bot.technical_analysis import TechnicalAnalysis
@@ -104,8 +105,6 @@ class StrategyRunner:
         self.context = None
         self.session = None
         self.data_fetch_coordinator = None
-        # Simple in-memory holdings tracker for realized PnL
-        self.holdings = {}  # symbol -> {'qty': float, 'avg_cost': float}
         # Track estimated fees per order so we can reconcile with actual fills
         self._estimated_fees = {}  # order_id -> estimated fee
         self._kill_switch = False
@@ -127,15 +126,12 @@ class StrategyRunner:
             actions_logger=bot_actions_logger,
             logger=logger,
         )
+        self.portfolio_tracker = PortfolioTracker(self.db, logger=logger)
+        self.holdings = self.portfolio_tracker.holdings
         self.maker_preference_default = MAKER_PREFERENCE_DEFAULT
         self.maker_preference_overrides = MAKER_PREFERENCE_OVERRIDES or {}
         # Seed a default stats container so background tasks don't crash before initialization completes
-        self.session_stats = {
-            'total_trades': 0,
-            'gross_pnl': 0.0,
-            'total_fees': 0.0,
-            'total_llm_cost': 0.0,
-        }
+        self.session_stats = self.portfolio_tracker.session_stats
         
         # Initialize Strategy
         self.strategy = LLMStrategy(
@@ -403,88 +399,12 @@ class StrategyRunner:
         except Exception as e:
             logger.debug(f"Could not update LLM trace {trace_id}: {e}")
 
-    def _extract_fee_cost(self, fee_field: Any) -> float:
-        """Normalize fee representations (dict, list, scalar) to a float cost."""
-        if fee_field is None:
-            return 0.0
-        if isinstance(fee_field, dict):
-            try:
-                return float(fee_field.get('cost') or 0.0)
-            except (TypeError, ValueError):
-                return 0.0
-        if isinstance(fee_field, (list, tuple)):
-            total = 0.0
-            for entry in fee_field:
-                total += self._extract_fee_cost(entry)
-            return total
-        try:
-            return float(fee_field)
-        except (TypeError, ValueError):
-            logger.debug(f"Unknown fee format during rebuild: {fee_field}")
-            return 0.0
-
-    def _normalize_exchange_trade(self, trade: dict) -> tuple[str, str, float, float, float] | None:
-        """Ensure required fields exist and types are sane for rebuild steps."""
-        if not isinstance(trade, dict):
-            logger.warning("Skipping malformed trade during rebuild: not a dict")
-            return None
-        try:
-            symbol = trade.get('symbol')
-            side_raw = trade.get('side')
-            quantity = trade.get('amount')
-            price = trade.get('price')
-            if not symbol or side_raw is None or quantity is None or price is None:
-                logger.warning("Skipping malformed trade during rebuild: missing required fields")
-                return None
-            try:
-                side = str(side_raw).upper()
-                quantity_val = float(quantity)
-                price_val = float(price)
-            except (TypeError, ValueError) as exc:
-                logger.warning(f"Skipping malformed trade during rebuild: {exc}")
-                return None
-            if quantity_val <= 0 or price_val <= 0:
-                logger.warning("Skipping malformed trade during rebuild: non-positive quantity or price")
-                return None
-            fee_cost = self._extract_fee_cost(trade.get('fee'))
-            return symbol, side, quantity_val, price_val, fee_cost
-        except Exception as exc:
-            logger.warning(f"Skipping malformed trade during rebuild: {exc}")
-            return None
-
     def _apply_exchange_trades_for_rebuild(self, trades: list) -> dict:
-        """
-        Rebuild holdings and session stats from a list of exchange trades.
-        Malformed entries are skipped with warnings instead of breaking the rebuild.
-        """
-        self.holdings = {}
-        self.session_stats = {
-            'total_trades': 0,
-            'gross_pnl': 0.0,
-            'total_fees': 0.0,
-            'total_llm_cost': 0.0
-        }
-        skipped = 0
-        for trade in trades or []:
-            normalized = self._normalize_exchange_trade(trade)
-            if not normalized:
-                skipped += 1
-                continue
-            symbol, side, quantity, price, fee_cost = normalized
-            try:
-                realized = self._update_holdings_and_realized(symbol, side, quantity, price, fee_cost)
-            except Exception as exc:
-                logger.warning(f"Could not apply trade during rebuild for {symbol}: {exc}")
-                skipped += 1
-                continue
-
-            self.session_stats['total_trades'] += 1
-            self.session_stats['total_fees'] += fee_cost
-            self.session_stats['gross_pnl'] += realized
-
-        if skipped:
-            logger.warning(f"Skipped {skipped} malformed trades while rebuilding stats")
-        return self.session_stats
+        """Delegate trade replay to portfolio tracker (kept for compatibility)."""
+        self.portfolio_tracker.set_session(self.session_id)
+        stats = self.portfolio_tracker.apply_exchange_trades_for_rebuild(trades)
+        self.session_stats = self.portfolio_tracker.session_stats
+        return stats
 
     def _apply_volatility_sizing(self, quantity: float, regime_flags: dict) -> float:
         """Scale quantity based on volatility regime."""
@@ -935,6 +855,7 @@ class StrategyRunner:
         # Create or load today's trading session (DB still used for logging/IDs)
         self.session_id = self.db.get_or_create_session(starting_balance=initial_equity, bot_version=BOT_VERSION)
         self.session = self.db.get_session(self.session_id)
+        self.portfolio_tracker.set_session(self.session_id)
         # In PAPER mode, reset starting_balance baseline to current equity to avoid mismatch against old sandbox inventories
         if TRADING_MODE == 'PAPER' and self.session.get('starting_balance') != initial_equity:
             try:
@@ -960,12 +881,13 @@ class StrategyRunner:
         logger.info("Initializing session stats...")
         cached_stats = self.db.get_session_stats_cache(self.session_id)
         if cached_stats:
-            self.session_stats = {
+            self.portfolio_tracker.session_stats = {
                 'total_trades': cached_stats.get('total_trades', 0),
                 'gross_pnl': cached_stats.get('gross_pnl', 0.0),
                 'total_fees': cached_stats.get('total_fees', 0.0),
                 'total_llm_cost': cached_stats.get('total_llm_cost', 0.0),
             }
+            self.session_stats = self.portfolio_tracker.session_stats
             logger.info(f"Loaded session stats from cache: {self.session_stats}")
             # If cache is stale vs DB trades, rebuild
             db_trade_count = self.db.get_trade_count(self.session_id)
@@ -992,6 +914,7 @@ class StrategyRunner:
             # Load LLM costs from DB (since exchange doesn't track this)
             db_stats = self.db.get_session_stats(self.session_id)
             self.session_stats['total_llm_cost'] = db_stats.get('total_llm_cost', 0.0)
+            self.portfolio_tracker.session_stats = self.session_stats
             self.db.set_session_stats_cache(self.session_id, self.session_stats)
             logger.info(f"Session Stats Rebuilt: {self.session_stats}")
 
@@ -1038,78 +961,27 @@ class StrategyRunner:
     # reconcile_exchange_state removed as we trust exchange data directly now
 
     def _update_holdings_and_realized(self, symbol: str, action: str, quantity: float, price: float, fee: float) -> float:
-        """
-        Maintain in-memory holdings to compute realized PnL per trade.
-        Realized PnL is fee-exclusive so costs are handled exactly once in aggregates.
-        """
-        pos = self.holdings.get(symbol, {'qty': 0.0, 'avg_cost': 0.0})
-        qty = pos['qty']
-        avg_cost = pos['avg_cost']
-        realized = 0.0
-
-        if action == 'BUY':
-            new_qty = qty + quantity
-            new_avg = ((qty * avg_cost) + (quantity * price)) / new_qty if new_qty > 0 else 0.0
-            self.holdings[symbol] = {'qty': new_qty, 'avg_cost': new_avg}
-            realized = 0.0
-        else:  # SELL
-            realized = (price - avg_cost) * quantity
-            new_qty = max(0.0, qty - quantity)
-            self.holdings[symbol] = {'qty': new_qty, 'avg_cost': avg_cost if new_qty > 0 else 0.0}
-
+        """Delegate holdings/PnL updates to portfolio tracker (kept for compatibility)."""
+        realized = self.portfolio_tracker.update_holdings_and_realized(symbol, action, quantity, price, fee)
+        self.session_stats = self.portfolio_tracker.session_stats
         return realized
 
     def _apply_trade_to_holdings(self, symbol: str, action: str, quantity: float, price: float):
-        """Update holdings without computing realized PnL (used for replay)."""
-        pos = self.holdings.get(symbol, {'qty': 0.0, 'avg_cost': 0.0})
-        qty = pos['qty']
-        avg_cost = pos['avg_cost']
-
-        if action == 'BUY':
-            new_qty = qty + quantity
-            new_avg = ((qty * avg_cost) + (quantity * price)) / new_qty if new_qty > 0 else 0.0
-            self.holdings[symbol] = {'qty': new_qty, 'avg_cost': new_avg}
-        else:
-            new_qty = max(0.0, qty - quantity)
-            self.holdings[symbol] = {'qty': new_qty, 'avg_cost': avg_cost if new_qty > 0 else 0.0}
+        """Delegate to portfolio tracker."""
+        self.portfolio_tracker.apply_trade_to_holdings(symbol, action, quantity, price)
+        self.session_stats = self.portfolio_tracker.session_stats
 
     def _load_holdings_from_db(self):
-        """Rebuild holdings from historical trades for this session."""
-        trades = self.db.get_trades_for_session(self.session_id)
-        self.holdings = {}
-        for t in trades:
-            self._apply_trade_to_holdings(
-                t['symbol'],
-                t['action'],
-                t['quantity'],
-                t['price']
-            )
+        """Rebuild holdings via portfolio tracker."""
+        self.portfolio_tracker.set_session(self.session_id)
+        self.portfolio_tracker.load_holdings_from_db()
+        self.session_stats = self.portfolio_tracker.session_stats
 
     def _apply_fill_to_session_stats(self, order_id: str, actual_fee: float, realized_pnl: float):
-        """
-        Reconcile session stats with an executed trade.
-        If we estimated a fee earlier, we still book the actual fee but drop the estimate marker.
-        """
-        if not self.session_stats:
-            self.session_stats = {
-                'total_trades': 0,
-                'gross_pnl': 0.0,
-                'total_fees': 0.0,
-                'total_llm_cost': 0.0,
-            }
-
-        if order_id:
-            order_key = str(order_id)
-            if order_key in self._estimated_fees:
-                self._estimated_fees.pop(order_key, None)
-        fee_delta = actual_fee
-        self.session_stats['total_trades'] += 1
-        self.session_stats['total_fees'] += fee_delta
-        self.session_stats['gross_pnl'] += realized_pnl
-        try:
-            self.db.set_session_stats_cache(self.session_id, self.session_stats)
-        except Exception as e:
-            logger.warning(f"Failed to persist session stats cache: {e}")
+        """Delegate session accounting to portfolio tracker (kept for compatibility)."""
+        self.portfolio_tracker.set_session(self.session_id)
+        self.portfolio_tracker.apply_fill_to_session_stats(order_id, actual_fee, realized_pnl, estimated_fee_map=self._estimated_fees)
+        self.session_stats = self.portfolio_tracker.session_stats
 
     def _sanity_check_equity_vs_stats(self, current_equity: float):
         """Compare estimated net PnL vs equity delta; log if off by >10%."""
@@ -1146,48 +1018,10 @@ class StrategyRunner:
             logger.debug(f"Equity sanity check failed: {e}")
 
     async def _rebuild_session_stats_from_trades(self, current_equity: float = None):
-        """Recompute session_stats from recorded trades and update cache."""
-        trades = self.db.get_trades_for_session(self.session_id)
-        self.holdings = {}
-        self.session_stats = {
-            'total_trades': 0,
-            'gross_pnl': 0.0,
-            'total_fees': 0.0,
-            'total_llm_cost': 0.0,
-        }
-        for t in trades:
-            try:
-                fee_cost = self._extract_fee_cost(t.get('fee'))
-                realized = self._update_holdings_and_realized(
-                    t['symbol'],
-                    t['action'],
-                    t['quantity'],
-                    t['price'],
-                    fee_cost,
-                )
-                self.session_stats['total_trades'] += 1
-                self.session_stats['total_fees'] += fee_cost
-                self.session_stats['gross_pnl'] += realized
-            except Exception as exc:
-                logger.warning(f"Skipping trade during stats rebuild due to error: {exc}")
-
-        # Pull LLM costs from session row
-        db_stats = self.db.get_session_stats(self.session_id)
-        self.session_stats['total_llm_cost'] = db_stats.get('total_llm_cost', 0.0)
-        self.db.set_session_stats_cache(self.session_id, self.session_stats)
+        """Recompute session_stats from recorded trades and update cache via portfolio tracker."""
+        self.portfolio_tracker.set_session(self.session_id)
+        self.session_stats = self.portfolio_tracker.rebuild_session_stats_from_trades(current_equity)
         logger.info(f"Session stats rebuilt from trades: {self.session_stats}")
-        # Mirror stats into sessions table
-        try:
-            self.db.update_session_totals(
-                self.session_id,
-                total_trades=self.session_stats['total_trades'],
-                total_fees=self.session_stats['total_fees'],
-                total_llm_cost=self.session_stats['total_llm_cost'],
-                net_pnl=self.session_stats['gross_pnl'] - self.session_stats['total_fees'] - self.session_stats['total_llm_cost'],
-            )
-        except Exception as e:
-            logger.warning(f"Could not update session totals: {e}")
-        # Sanity check vs equity delta when provided
         if current_equity is not None:
             self._sanity_check_equity_vs_stats(current_equity)
 

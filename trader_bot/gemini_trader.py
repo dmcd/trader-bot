@@ -316,12 +316,6 @@ class GeminiTrader(BaseTrader):
         try:
             balance = await self.exchange.fetch_balance()
             positions = []
-            
-            # Sandbox filtering: ignore positions not traded in the last 24 hours
-            cutoff_time = None
-            if self.sandbox:
-                cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
-                logger.info(f"Sandbox mode: filtering positions older than {cutoff_time}")
 
             for currency, total in balance.get('total', {}).items():
                 if total and total != 0:

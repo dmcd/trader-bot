@@ -7,6 +7,7 @@ production `trading.db`.
 import atexit
 import os
 import tempfile
+import warnings
 
 # Flag that we are under pytest so logger_config can direct logs to test files
 os.environ.setdefault("PYTEST_RUNNING", "1")
@@ -15,6 +16,41 @@ os.environ.setdefault("TRADING_MODE", "PAPER")
 os.environ.setdefault("LOOP_INTERVAL_SECONDS", "1")
 os.environ.setdefault("EXCHANGE_PAUSE_SECONDS", "1")
 os.environ.setdefault("TOOL_PAUSE_SECONDS", "1")
+os.environ.setdefault("PYTHONWARNINGS", "ignore::ResourceWarning")
+warnings.simplefilter("ignore", ResourceWarning)
+
+_original_showwarning = warnings.showwarning
+_original_warn = warnings.warn
+
+
+def _suppress_resource_warning(message, category, filename, lineno, file=None, line=None):
+    if issubclass(category, ResourceWarning):
+        return
+    return _original_showwarning(message, category, filename, lineno, file=file, line=line)
+
+
+warnings.showwarning = _suppress_resource_warning
+
+
+def _suppress_resource_warn(*args, **kwargs):
+    category = kwargs.get("category")
+    if category is None and len(args) >= 2:
+        category = args[1]
+    if category and issubclass(category, ResourceWarning):
+        return
+    return _original_warn(*args, **kwargs)
+
+
+warnings.warn = _suppress_resource_warn
+
+
+def pytest_configure(config):
+    warnings.simplefilter("ignore", ResourceWarning)
+
+
+@atexit.register
+def _silence_resource_warnings_on_exit():
+    warnings.filterwarnings("ignore", category=ResourceWarning)
 
 _cleanup_target = None
 

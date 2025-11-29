@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock
+
 import pytest
 
 from trader_bot.strategy_runner import StrategyRunner
@@ -44,3 +46,17 @@ def test_tool_circuit_breaker_trips_and_recovers(runner):
     runner._record_tool_success()
     states = {row["key"]: row["value"] for row in runner.db.get_health_state()}
     assert states.get("tool_circuit") == "ok"
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_stops_loop(runner):
+    runner.initialize = AsyncMock()
+    runner.cleanup = AsyncMock()
+    runner._kill_switch = True
+
+    await runner.run_loop(max_loops=1)
+
+    runner.initialize.assert_awaited()
+    runner.cleanup.assert_awaited()
+    assert runner.running is False
+    assert runner.shutdown_reason == "kill switch"

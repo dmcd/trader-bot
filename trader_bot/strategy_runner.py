@@ -1592,6 +1592,12 @@ class StrategyRunner:
             loops = 0
             
             while self.running:
+                if self._kill_switch:
+                    if not self.shutdown_reason:
+                        self._set_shutdown_reason("kill switch")
+                    bot_actions_logger.info("🛑 Kill switch active; exiting main loop.")
+                    self.running = False
+                    break
                 try:
                     if max_loops is not None and loops >= max_loops:
                         break
@@ -1820,9 +1826,11 @@ class StrategyRunner:
 
                     # Kill switch check
                     if self._kill_switch:
-                        bot_actions_logger.info("🛑 Kill switch active; not trading.")
-                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
-                        continue
+                        if not self.shutdown_reason:
+                            self._set_shutdown_reason("kill switch")
+                        bot_actions_logger.info("🛑 Kill switch active; exiting main loop.")
+                        self.running = False
+                        break
 
                     # Slippage guard: if latest price moved >2% from decision price, skip execution
                     decision_price = market_data.get(primary_symbol, {}).get('price')

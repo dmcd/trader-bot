@@ -88,3 +88,4 @@ For a deeper dive into how the bot works, check out the documentation:
 *   [**Repository Guidelines**](AGENTS.md): Structure, commands, and conventions.
 *   [**Component Docs**](docs/components/README.md): Per-component deep dives (strategy runner, risk manager, exchange adapter, dashboard, etc.).
 *   [**Architecture Overview**](docs/architecture.md): High-level system layout and data flows.
+*   [**Domain Model**](docs/domain_model.md): Entities, relationships, and persistence model with diagrams.

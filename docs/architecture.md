@@ -77,3 +77,4 @@ sequenceDiagram
 - SQLite (`trading.db`) stores sessions, trades, LLM calls/traces, OHLCV, equity snapshots, positions, open orders, commands, and trade plans; session stats cached for warm restarts.
 - Logs: `bot.log` (user-facing decisions), `console.log` (debug), `telemetry.log` (JSON prompts/responses/tool traces, execution outcomes).
 - Prompt artifacts: `trader_bot/llm_prompt_template.txt` drives both planner and decision prompts with context/rule blocks.
+- See also: [Domain Model](domain_model.md) for entity relationships and persistence layout.

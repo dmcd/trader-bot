@@ -8,6 +8,8 @@ import atexit
 import os
 import tempfile
 
+# Flag that we are under pytest so logger_config can direct logs to test files
+os.environ.setdefault("PYTEST_RUNNING", "1")
 
 _cleanup_target = None
 

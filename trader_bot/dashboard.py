@@ -553,13 +553,15 @@ with tab_costs:
         total_costs = total_fees + total_llm_cost
         cost_ratio = (total_costs / abs(gross_pnl) * 100) if gross_pnl else None
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         c1.metric("Total Fees", f"${total_fees:.2f}")
         c2.metric("LLM Costs", f"${total_llm_cost:.4f}")
-        c3.metric("Total Costs", f"${total_costs:.2f}")
+        c3.metric("Total Costs", f"${total_costs:.2f}", f"{cost_ratio:.1f}% of gross" if cost_ratio is not None else None)
+
+        c4, c5, c6 = st.columns(3)
         c4.metric("Net PnL", f"${net_pnl:,.2f}")
-        if cost_ratio is not None:
-            c3.markdown(f"<div style='margin-top:-8px;'>{format_ratio_badge(cost_ratio)}</div>", unsafe_allow_html=True)
+        c5.metric("Gross PnL", f"${gross_pnl:,.2f}")
+        c6.metric("Total Trades", session_stats.get('total_trades', 0))
 
         burn_stats = get_llm_burn_stats(session_stats)
         if burn_stats:

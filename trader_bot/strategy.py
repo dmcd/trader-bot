@@ -701,7 +701,7 @@ class LLMStrategy(BaseStrategy):
         return _LLMResponse(text, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
 
     def _log_llm_usage(self, session_id: int, response: Any, response_text: str):
-        """Record token usage and partial response to DB."""
+        """Record token usage (as reported by provider) and partial response to DB."""
         if not session_id:
             return
         try:
@@ -709,6 +709,7 @@ class LLMStrategy(BaseStrategy):
             input_tokens = None
             output_tokens = None
 
+            # Prefer provider-reported usage as the single source of truth
             if hasattr(response, "usage_metadata"):
                 usage = response.usage_metadata
                 input_tokens = getattr(usage, "prompt_token_count", None)
@@ -720,6 +721,20 @@ class LLMStrategy(BaseStrategy):
                 output_tokens = output_tokens if output_tokens is not None else getattr(usage, "completion_tokens", None)
 
             if input_tokens is None or output_tokens is None:
+                # Provider did not supply usage; skip cost accrual rather than guessing
+                try:
+                    telemetry_logger.info(
+                        json.dumps(
+                            {
+                                "type": "llm_usage_missing",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "session_id": session_id,
+                                "note": "provider returned no token usage; cost not accrued",
+                            }
+                        )
+                    )
+                except Exception:
+                    logger.debug("Failed to log missing usage telemetry")
                 return
 
             cost = self.cost_tracker.calculate_llm_cost(input_tokens, output_tokens)

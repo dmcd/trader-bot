@@ -649,6 +649,15 @@ class TradingDatabase:
         """, (total_trades, total_fees, total_llm_cost, net_pnl, session_id))
         self.conn.commit()
 
+    def update_session_starting_balance(self, session_id: int, starting_balance: float):
+        """Reset starting balance for a session (useful in PAPER to avoid stale baselines)."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE sessions SET starting_balance = ? WHERE id = ?",
+            (starting_balance, session_id),
+        )
+        self.conn.commit()
+
     def replace_positions(self, session_id: int, positions: List[Dict[str, Any]]):
         """Replace stored positions snapshot for the session."""
         cursor = self.conn.cursor()

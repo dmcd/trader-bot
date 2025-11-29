@@ -906,6 +906,14 @@ class StrategyRunner:
         # Create or load today's trading session (DB still used for logging/IDs)
         self.session_id = self.db.get_or_create_session(starting_balance=initial_equity, bot_version=BOT_VERSION)
         self.session = self.db.get_session(self.session_id)
+        # In PAPER mode, reset starting_balance baseline to current equity to avoid mismatch against old sandbox inventories
+        if TRADING_MODE == 'PAPER' and self.session.get('starting_balance') != initial_equity:
+            try:
+                self.db.update_session_starting_balance(self.session_id, initial_equity)
+                self.session['starting_balance'] = initial_equity
+                logger.info(f"Sandbox Mode: Reset starting_balance to current equity ${initial_equity:,.2f}")
+            except Exception as e:
+                logger.warning(f"Could not reset starting_balance for sandbox: {e}")
         
         # Clear any old pending commands from previous sessions
         self.db.clear_old_commands()
@@ -1099,6 +1107,8 @@ class StrategyRunner:
 
     def _sanity_check_equity_vs_stats(self, current_equity: float):
         """Compare estimated net PnL vs equity delta; log if off by >10%."""
+        if TRADING_MODE == 'PAPER':
+            return
         if current_equity is None or self.session is None:
             return
         try:

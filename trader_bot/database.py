@@ -56,6 +56,18 @@ class TradingDatabase:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS processed_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                trade_id TEXT NOT NULL,
+                client_order_id TEXT,
+                recorded_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(session_id, trade_id),
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        """)
         
         # LLM calls table
         cursor.execute("""
@@ -314,6 +326,29 @@ class TradingDatabase:
         cursor.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
+
+    def get_processed_trade_ids(self, session_id: int) -> set[str]:
+        """Return trade_ids already seen for this session."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT trade_id FROM processed_trades WHERE session_id = ?", (session_id,))
+        return {row["trade_id"] for row in cursor.fetchall() if row["trade_id"]}
+
+    def record_processed_trade_ids(self, session_id: int, entries: List[tuple[str, Optional[str]]]):
+        """Persist processed trade ids to avoid reprocessing across restarts."""
+        if not entries:
+            return
+        payload = [(session_id, trade_id, client_oid) for trade_id, client_oid in entries if trade_id]
+        if not payload:
+            return
+        cursor = self.conn.cursor()
+        cursor.executemany(
+            """
+            INSERT OR IGNORE INTO processed_trades (session_id, trade_id, client_order_id)
+            VALUES (?, ?, ?)
+            """,
+            payload,
+        )
+        self.conn.commit()
     
     def log_trade(self, session_id: int, symbol: str, action: str, 
                   quantity: float, price: float, fee: float, reason: str = "", liquidity: str = "unknown", realized_pnl: float = 0.0, trade_id: str = None, timestamp: str = None):

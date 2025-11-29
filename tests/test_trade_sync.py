@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 import pytest
 
 from trader_bot.config import CLIENT_ORDER_PREFIX
+from trader_bot.database import TradingDatabase
 from trader_bot.strategy_runner import StrategyRunner
 from trader_bot.trading_context import TradingContext
 from trader_bot.utils import get_client_order_id
@@ -317,3 +318,39 @@ def test_trading_context_filters_foreign_open_orders():
 
     assert len(parsed["open_orders"]) == 1
     assert parsed["open_orders"][0]["symbol"] == "BTC/USD"
+
+
+@pytest.mark.asyncio
+async def test_processed_trade_ids_persist_across_runs(tmp_path):
+    db_path = tmp_path / "dedupe.db"
+    db = TradingDatabase(db_path=str(db_path))
+    session_id = db.get_or_create_session(starting_balance=0.0, bot_version="test-dedupe")
+
+    orphan_trade = build_trade("t-repeat", client_oid=f"{CLIENT_ORDER_PREFIX}repeat", order_id="order-repeat")
+
+    runner = StrategyRunner(execute_orders=False)
+    runner.session_id = session_id
+    runner.telemetry_logger = None
+    runner.db = db
+    runner.bot = StubBot([orphan_trade])
+    runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
+    runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
+    runner.order_reasons = {}
+
+    await runner.sync_trades_from_exchange()
+
+    assert db.get_trade_count(session_id) == 0
+    assert "t-repeat" in db.get_processed_trade_ids(session_id)
+
+    runner2 = StrategyRunner(execute_orders=False)
+    runner2.session_id = session_id
+    runner2.telemetry_logger = None
+    runner2.db = db
+    runner2.bot = StubBot([orphan_trade])
+    runner2._update_holdings_and_realized = lambda *args, **kwargs: 0.0
+    runner2._apply_fill_to_session_stats = lambda *args, **kwargs: None
+    runner2.order_reasons = {"order-repeat": "Recovered reason"}
+
+    await runner2.sync_trades_from_exchange()
+
+    assert db.get_trade_count(session_id) == 0

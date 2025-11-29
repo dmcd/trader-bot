@@ -11,7 +11,7 @@
 
 ## Risk & Safety Gaps
 - [x] Exposure calculations depend on prices in stored positions, but `GeminiTrader.get_positions_async` returns positions with `avg_price=None` and no live pricing. Until another lookup fills prices, `risk_manager.get_total_exposure` can undercount exposure and allow oversizing.
-- [ ] Trade sync deduplication (`trader_bot/strategy_runner.py:1138-1237`) keeps `processed_trade_ids` only in memory. After restarts the same fills can be re-logged and PnL inflated because on-disk dedup relies on raw SQL checks against `trades.trade_id` and skips client order attribution for anything missing `_client_oid`.
+- [x] Trade sync deduplication (`trader_bot/strategy_runner.py:1138-1237`) keeps `processed_trade_ids` only in memory. After restarts the same fills can be re-logged and PnL inflated because on-disk dedup relies on raw SQL checks against `trades.trade_id` and skips client order attribution for anything missing `_client_oid`.
 - [ ] `_capture_ohlcv` runs every loop for four timeframes with no retention or throttling, so `ohlcv_bars` and prompts can grow unbounded and slow SQLite/telemetry.
 - [ ] Kill-switch behavior sets `_kill_switch` but keeps the loop running (`trader_bot/strategy_runner.py:1370-1395`, 1840-1857), continuing to log/loop indefinitely instead of exiting cleanly or surfacing an operator signal.
 

@@ -1350,6 +1350,14 @@ class StrategyRunner:
         if not self.session_id:
             return
 
+        new_processed: set[tuple[str, str | None]] = set()
+        if not self.processed_trade_ids:
+            try:
+                persisted_ids = self.db.get_processed_trade_ids(self.session_id)
+                self.processed_trade_ids.update(persisted_ids or set())
+            except Exception as exc:
+                logger.debug(f"Could not load processed trade ids: {exc}")
+
         try:
             symbols = set()
             try:
@@ -1393,6 +1401,7 @@ class StrategyRunner:
 
                     latest_ts = None
                     for t in trades:
+                        client_oid = t.get('_client_oid') or get_client_order_id(t)
                         trade_id = str(t['id'])
                         if trade_id in self.processed_trade_ids:
                             continue
@@ -1400,6 +1409,7 @@ class StrategyRunner:
                         existing = self.db.conn.execute("SELECT id FROM trades WHERE trade_id = ?", (trade_id,)).fetchone()
                         if existing:
                             self.processed_trade_ids.add(trade_id)
+                            new_processed.add((trade_id, client_oid))
                             continue
 
                         ts_ms = t.get('timestamp')
@@ -1407,10 +1417,10 @@ class StrategyRunner:
                             trade_dt = datetime.fromtimestamp(ts_ms / 1000, timezone.utc)
                             if trade_dt < cutoff_dt:
                                 self.processed_trade_ids.add(trade_id)
+                                new_processed.add((trade_id, client_oid))
                                 continue
 
                         order_id = t.get('order')
-                        client_oid = t.get('_client_oid') or get_client_order_id(t)
                         side = t['side'].upper()
                         price = t['price']
                         quantity = t['amount']
@@ -1436,6 +1446,7 @@ class StrategyRunner:
                         if not reason:
                             # Skip trades we cannot attribute to our client IDs/reasons
                             self.processed_trade_ids.add(trade_id)
+                            new_processed.add((trade_id, client_oid))
                             continue
 
                         realized_pnl = self._update_holdings_and_realized(symbol, side, quantity, price, fee)
@@ -1455,6 +1466,7 @@ class StrategyRunner:
                         )
                         self._apply_fill_to_session_stats(order_id, fee, realized_pnl)
                         self.processed_trade_ids.add(trade_id)
+                        new_processed.add((trade_id, client_oid))
                         bot_actions_logger.info(f"✅ Synced trade: {side} {quantity} {symbol} @ ${price:,.2f} (Fee: ${fee:.4f})")
 
                         ts = t.get('timestamp')
@@ -1467,6 +1479,12 @@ class StrategyRunner:
 
         except Exception as e:
             logger.exception(f"Error syncing trades: {e}")
+        finally:
+            if new_processed:
+                try:
+                    self.db.record_processed_trade_ids(self.session_id, new_processed)
+                except Exception as exc:
+                    logger.debug(f"Could not persist processed trade ids: {exc}")
 
     async def cleanup(self):
         """Cleanup and close connection."""

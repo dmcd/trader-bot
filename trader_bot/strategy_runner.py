@@ -5,6 +5,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -45,6 +46,8 @@ from trader_bot.config import (
     EXCHANGE_PAUSE_SECONDS,
     TOOL_ERROR_THRESHOLD,
     TOOL_PAUSE_SECONDS,
+    TICKER_MAX_AGE_SECONDS,
+    TICKER_MAX_LATENCY_MS,
 )
 from trader_bot.cost_tracker import CostTracker
 from trader_bot.data_fetch_coordinator import DataFetchCoordinator
@@ -103,6 +106,8 @@ class StrategyRunner:
         self.exchange_pause_seconds = EXCHANGE_PAUSE_SECONDS
         self.tool_error_threshold = TOOL_ERROR_THRESHOLD
         self.tool_pause_seconds = TOOL_PAUSE_SECONDS
+        self.ticker_max_age_ms = TICKER_MAX_AGE_SECONDS * 1000
+        self.ticker_max_latency_ms = TICKER_MAX_LATENCY_MS
         self._exchange_health = "ok"
         self._tool_health = "ok"
         
@@ -234,6 +239,37 @@ class StrategyRunner:
             self._tool_error_streak = 0
             self._tool_health = "ok"
             self._record_health_state("tool_circuit", "ok", {"note": "recovered"})
+
+    def _is_stale_market_data(self, data: dict) -> tuple[bool, dict]:
+        """Return (stale, detail) using latency and age thresholds."""
+        if not data:
+            return True, {"reason": "empty"}
+        detail: dict[str, Any] = {}
+        now_mono = self._monotonic()
+        latency_ms = data.get("_latency_ms")
+        if latency_ms is not None:
+            detail["latency_ms"] = latency_ms
+        fetched_mono = data.get("_fetched_monotonic")
+        age_ms = None
+        if fetched_mono is not None:
+            age_ms = max(0.0, (now_mono - fetched_mono) * 1000)
+        ts_field = data.get("timestamp") or data.get("ts")
+        if ts_field is not None:
+            ts_ms = ts_field if ts_field > 1e12 else ts_field * 1000
+            wall_age = max(0.0, (time.time() * 1000) - ts_ms)
+            age_ms = age_ms if age_ms is not None else wall_age
+            detail["data_age_ms"] = wall_age
+        if age_ms is None and fetched_mono is not None:
+            age_ms = max(0.0, (now_mono - fetched_mono) * 1000)
+        if age_ms is not None:
+            detail["age_ms"] = age_ms
+        if latency_ms is not None and latency_ms > self.ticker_max_latency_ms:
+            detail["reason"] = "latency"
+            return True, detail
+        if age_ms is not None and age_ms > self.ticker_max_age_ms:
+            detail["reason"] = "age"
+            return True, detail
+        return False, detail
 
     def _log_execution_trace(self, trace_id: int, execution_result: dict):
         """Attach execution outcome to LLM trace when available."""
@@ -1306,6 +1342,7 @@ class StrategyRunner:
                     
                     # Determine which symbol to fetch based on exchange
                     symbol = 'BTC/USD'
+                    ticker_started = self._monotonic()
                     try:
                         data = await self.bot.get_market_data_async(symbol)
                     except Exception as e:
@@ -1314,13 +1351,27 @@ class StrategyRunner:
                         exchange_error_seen = True
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
+                    ticker_ended = self._monotonic()
                     market_data[symbol] = data
+                    if data is not None:
+                        data["_latency_ms"] = (ticker_ended - ticker_started) * 1000
+                        data["_fetched_monotonic"] = ticker_ended
+                        data["fetched_at"] = datetime.now(timezone.utc).isoformat()
                     price_now = data.get('price') if data else None
                     if not data:
                         self._record_exchange_failure("get_market_data_async", "empty")
                         exchange_error_seen = True
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
+
+                    stale, freshness_detail = self._is_stale_market_data(data)
+                    if stale:
+                        bot_actions_logger.info("⏸️ Skipping loop: market data stale or too latent")
+                        self._record_health_state("market_data", "stale", freshness_detail)
+                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        continue
+                    else:
+                        self._record_health_state("market_data", "ok", freshness_detail)
 
                     # Log market data to database
                     if data and self.session_id:

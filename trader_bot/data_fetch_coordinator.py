@@ -174,21 +174,21 @@ class DataFetchCoordinator:
             if cached:
                 results["timeframes"][tf] = cached
                 continue
-            pending.append(
-                (
-                    tf,
-                    asyncio.create_task(
-                        self._fetch_ohlcv(params.symbol, tf, limit)
-                    ),
-                )
-            )
+            pending.append((tf, asyncio.create_task(self._fetch_ohlcv(params.symbol, tf, limit))))
 
         for tf, task in pending:
+            started = time.time()
             try:
                 data = await task
                 if not data:
                     raise ValueError("Empty OHLCV response")
                 shaped = normalize_candles(data, tf, params.limit, self.max_bars)
+                ended = time.time()
+                shaped["meta"] = {
+                    "fetched_at": ended,
+                    "latency_ms": (ended - started) * 1000,
+                    "data_age_ms": None,
+                }
                 self._cache_set(f"ohlcv:{params.symbol}:{tf}:{limit}", shaped)
                 results["timeframes"][tf] = shaped
             except Exception as exc:
@@ -198,6 +198,13 @@ class DataFetchCoordinator:
                     trades_raw = await self._fetch_recent_trades(params.symbol, limit)
                     fallback = self._build_candles_from_trades(trades_raw, tf, limit)
                     shaped = normalize_candles(fallback, tf, params.limit, self.max_bars)
+                    ended = time.time()
+                    shaped["meta"] = {
+                        "fetched_at": ended,
+                        "latency_ms": (ended - started) * 1000,
+                        "data_age_ms": None,
+                        "fallback": True,
+                    }
                     self._cache_set(f"ohlcv:{params.symbol}:{tf}:{limit}", shaped)
                     results["timeframes"][tf] = shaped
                 except Exception as inner_exc:
@@ -206,6 +213,7 @@ class DataFetchCoordinator:
         return results
 
     async def fetch_order_book(self, params: OrderBookParams) -> Dict[str, Any]:
+        started = time.time()
         depth = min(params.depth, self.max_depth)
         cache_key = f"order_book:{params.symbol}:{depth}"
         cached = self._cache_get(cache_key)
@@ -213,10 +221,22 @@ class DataFetchCoordinator:
             return cached
         raw = await self._fetch_order_book(params.symbol, depth)
         shaped = normalize_order_book(raw, params.depth, self.max_depth)
+        ended = time.time()
+        meta = shaped.get("meta", {})
+        meta["fetched_at"] = time.time()
+        meta["latency_ms"] = (ended - started) * 1000
+        ts = raw.get("timestamp") or raw.get("ts")
+        if ts is not None:
+            now_ms = time.time() * 1000
+            meta["data_age_ms"] = max(0, now_ms - (ts if ts > 1e12 else ts * 1000))
+        else:
+            meta["data_age_ms"] = None
+        shaped["meta"] = meta
         self._cache_set(cache_key, shaped)
         return shaped
 
     async def fetch_recent_trades(self, params: RecentTradesParams) -> Dict[str, Any]:
+        started = time.time()
         limit = min(params.limit, self.max_trades)
         cache_key = f"trades:{params.symbol}:{limit}"
         cached = self._cache_get(cache_key)
@@ -224,6 +244,11 @@ class DataFetchCoordinator:
             return cached
         raw = await self._fetch_recent_trades(params.symbol, limit)
         shaped = normalize_trades(raw, params.limit, self.max_trades)
+        ended = time.time()
+        shaped["meta"] = {
+            "fetched_at": time.time(),
+            "latency_ms": (ended - started) * 1000,
+        }
         self._cache_set(cache_key, shaped)
         return shaped
 

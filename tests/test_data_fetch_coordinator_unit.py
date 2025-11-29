@@ -136,3 +136,16 @@ async def test_fallback_trades_to_candles_when_ohlcv_empty():
     assert tf_data["returned"] == 2 or tf_data["returned"] == 1
     # Ensure trades fallback was used when OHLCV empty
     assert exchange.trade_calls > 0
+
+
+@pytest.mark.asyncio
+async def test_order_book_meta_includes_freshness(monkeypatch):
+    exchange = StubExchange()
+    monkeypatch.setattr("time.time", lambda: 100.0)
+    coordinator = DataFetchCoordinator(exchange, cache_ttl_seconds=0)
+    params = OrderBookParams(symbol="BTC/USD", depth=5)
+    shaped = await coordinator.fetch_order_book(params)
+    assert "meta" in shaped
+    meta = shaped["meta"]
+    assert meta.get("latency_ms") >= 0
+    assert meta.get("data_age_ms") is not None

@@ -29,6 +29,9 @@ EXCHANGE_ERROR_THRESHOLD = int(os.getenv('EXCHANGE_ERROR_THRESHOLD', '3'))  # co
 EXCHANGE_PAUSE_SECONDS = int(os.getenv('EXCHANGE_PAUSE_SECONDS', '60'))  # pause duration after exchange circuit trips
 TOOL_ERROR_THRESHOLD = int(os.getenv('TOOL_ERROR_THRESHOLD', '3'))  # consecutive tool failures before auto-pause
 TOOL_PAUSE_SECONDS = int(os.getenv('TOOL_PAUSE_SECONDS', '60'))  # pause duration after tool circuit trips
+TICKER_MAX_AGE_SECONDS = int(os.getenv('TICKER_MAX_AGE_SECONDS', '15'))  # stale ticker window
+TICKER_MAX_LATENCY_MS = int(os.getenv('TICKER_MAX_LATENCY_MS', '5000'))  # warn/skip when ticker fetch latency exceeds this
+TOOL_DATA_MAX_AGE_SECONDS = int(os.getenv('TOOL_DATA_MAX_AGE_SECONDS', '60'))  # mark tool payloads stale beyond this age
 
 # Cadence & spacing
 LOOP_INTERVAL_SECONDS = int(os.getenv('LOOP_INTERVAL_SECONDS', '300'))  # main loop sleep (default 5 min)

@@ -6,7 +6,15 @@ from trader_bot.services.command_processor import CommandResult
 from trader_bot.services.strategy_orchestrator import StrategyOrchestrator
 
 
-def _build_orchestrator(record_cb=lambda *_: None, risk_manager=None, health_manager=None, plan_monitor=None, command_processor=None):
+def _build_orchestrator(
+    record_cb=lambda *_: None,
+    risk_manager=None,
+    health_manager=None,
+    plan_monitor=None,
+    command_processor=None,
+    logger=None,
+    actions_logger=None,
+):
     return StrategyOrchestrator(
         command_processor=command_processor or MagicMock(),
         plan_monitor=plan_monitor or MagicMock(),
@@ -14,13 +22,13 @@ def _build_orchestrator(record_cb=lambda *_: None, risk_manager=None, health_man
         health_manager=health_manager or MagicMock(),
         record_operational_metrics=record_cb,
         loop_interval_seconds=0.1,
-        logger=MagicMock(),
-        actions_logger=MagicMock(),
+        logger=logger or MagicMock(),
+        actions_logger=actions_logger or MagicMock(),
     )
 
 
 @pytest.mark.asyncio
-async def test_start_and_cleanup_sequence_runs_hooks():
+async def test_start_and_cleanup_sequence_runs_hooks(fake_logger):
     events = []
 
     async def initializer():
@@ -29,7 +37,7 @@ async def test_start_and_cleanup_sequence_runs_hooks():
     async def cleanup():
         events.append("cleanup")
 
-    orchestrator = _build_orchestrator()
+    orchestrator = _build_orchestrator(logger=fake_logger, actions_logger=fake_logger)
     await orchestrator.start(initializer)
     assert orchestrator.running is True
 
@@ -39,9 +47,9 @@ async def test_start_and_cleanup_sequence_runs_hooks():
 
 
 @pytest.mark.asyncio
-async def test_enforce_risk_budget_triggers_shutdown_and_kill_switch():
+async def test_enforce_risk_budget_triggers_shutdown_and_kill_switch(fake_logger):
     risk_manager = SimpleNamespace(start_of_day_equity=1000.0, daily_loss=200.0)
-    orchestrator = _build_orchestrator(risk_manager=risk_manager)
+    orchestrator = _build_orchestrator(risk_manager=risk_manager, logger=fake_logger, actions_logger=fake_logger)
     close_positions = AsyncMock()
     shutdown_reasons = []
 
@@ -64,10 +72,10 @@ async def test_enforce_risk_budget_triggers_shutdown_and_kill_switch():
 
 
 @pytest.mark.asyncio
-async def test_process_commands_passthrough_and_stop_request():
+async def test_process_commands_passthrough_and_stop_request(fake_logger):
     command_processor = MagicMock()
     command_processor.process = AsyncMock(return_value=CommandResult(stop_requested=True, shutdown_reason="manual stop"))
-    orchestrator = _build_orchestrator(command_processor=command_processor)
+    orchestrator = _build_orchestrator(command_processor=command_processor, logger=fake_logger, actions_logger=fake_logger)
 
     async def noop():
         return None
@@ -81,7 +89,7 @@ async def test_process_commands_passthrough_and_stop_request():
     command_processor.process.assert_awaited_once()
 
 
-def test_emit_health_and_operational_metrics():
+def test_emit_health_and_operational_metrics(fake_logger):
     health_manager = MagicMock()
     health_manager.is_stale_market_data.return_value = (False, {"latency_ms": 10})
     metrics = []
@@ -89,7 +97,12 @@ def test_emit_health_and_operational_metrics():
     def record_metrics(exposure, equity):
         metrics.append((exposure, equity))
 
-    orchestrator = _build_orchestrator(record_cb=record_metrics, health_manager=health_manager)
+    orchestrator = _build_orchestrator(
+        record_cb=record_metrics,
+        health_manager=health_manager,
+        logger=fake_logger,
+        actions_logger=fake_logger,
+    )
     ok, detail = orchestrator.emit_market_health({"price": 100})
     orchestrator.emit_operational_metrics(5.0, 10.0)
 

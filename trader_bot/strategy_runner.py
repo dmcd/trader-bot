@@ -87,7 +87,6 @@ if GEMINI_API_KEY:
 class StrategyRunner:
     def __init__(self, execute_orders: bool = True):
         # Only instantiate the bot for the active exchange
-        # Only instantiate the bot for the active exchange
         if ACTIVE_EXCHANGE == 'GEMINI':
             self.bot = GeminiTrader()
             self.exchange_name = 'GEMINI'

@@ -500,6 +500,9 @@ class LLMStrategy(BaseStrategy):
             open_orders=open_orders,
             headroom=headroom,
             pending_buy_exposure=pending_buy_exposure,
+            can_trade=can_trade,
+            spacing_flag=spacing_flag,
+            plan_counts=plan_counts,
         )
         trace_id = None
         decision_json = None
@@ -867,7 +870,7 @@ class LLMStrategy(BaseStrategy):
         except Exception:
             return trimmed[: max(0, budget // 2)]
 
-    async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0):
+    async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0, can_trade: bool = True, spacing_flag: str = "", plan_counts: dict = None):
         """Asks the configured LLM for a trading decision and logs full prompt/response; returns (decision_json, trace_id)."""
         if not self._llm_ready:
             return None, None
@@ -1113,6 +1116,41 @@ class LLMStrategy(BaseStrategy):
             decision_prompt += "\n\nTOOL RESPONSES (JSON):\n"
             decision_prompt += json.dumps([r.model_dump() for r in tool_responses], default=str) + "\n"
             decision_prompt += "TOOL RESPONSES ABOVE ARE THE SOURCE OF TRUTH. If any inline snapshot conflicts, prefer tool_responses.\n"
+
+        # Explicitly surface data freshness and microstructure detail when available
+        freshness_notes = []
+        for sym, data in market_data.items():
+            if not data:
+                continue
+            parts = []
+            if data.get("_latency_ms") is not None:
+                parts.append(f"latency_ms={data.get('_latency_ms'):.0f}")
+            if data.get("_fetched_monotonic") is not None:
+                parts.append(f"fetched_at={getattr(data, 'fetched_at', '')}")
+            if data.get("spread_pct") is not None:
+                parts.append(f"spread_pct={data.get('spread_pct'):.3f}")
+            if data.get("bid_size") and data.get("ask_size") and data.get("bid") and data.get("ask"):
+                top_notional = min(data.get("bid") * data.get("bid_size"), data.get("ask") * data.get("ask_size"))
+                parts.append(f"top_notional=${top_notional:,.2f}")
+            if parts:
+                freshness_notes.append(f"{sym}: " + ", ".join(parts))
+        if freshness_notes:
+            decision_prompt += "\nDATA_QUALITY:\n- " + "\n- ".join(freshness_notes) + "\n"
+
+        # Flag plan cap/cooldown status
+        cooldown_note = ""
+        if not can_trade and priority_flag != "true":
+            cooldown_note = f"cooldown active ({spacing_flag})"
+        plan_counts = plan_counts or {}
+        plan_cap_note = ""
+        if any(count >= PLAN_MAX_PER_SYMBOL for count in plan_counts.values()):
+            plan_cap_note = "plan cap reached on at least one symbol"
+        if cooldown_note or plan_cap_note:
+            decision_prompt += "\nCONSTRAINTS:\n"
+            if cooldown_note:
+                decision_prompt += f"- {cooldown_note}\n"
+            if plan_cap_note:
+                decision_prompt += f"- {plan_cap_note}\n"
 
         decision_prompt = self._enforce_prompt_budget(decision_prompt, budget=LLM_DECISION_BYTE_BUDGET)
 

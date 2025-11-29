@@ -384,6 +384,89 @@ class StrategyRunner:
         except Exception as e:
             logger.debug(f"Could not update LLM trace {trace_id}: {e}")
 
+    def _extract_fee_cost(self, fee_field: Any) -> float:
+        """Normalize fee representations (dict, list, scalar) to a float cost."""
+        if fee_field is None:
+            return 0.0
+        if isinstance(fee_field, dict):
+            try:
+                return float(fee_field.get('cost') or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+        if isinstance(fee_field, (list, tuple)):
+            total = 0.0
+            for entry in fee_field:
+                total += self._extract_fee_cost(entry)
+            return total
+        try:
+            return float(fee_field)
+        except (TypeError, ValueError):
+            logger.debug(f"Unknown fee format during rebuild: {fee_field}")
+            return 0.0
+
+    def _normalize_exchange_trade(self, trade: dict) -> tuple[str, str, float, float, float] | None:
+        """Ensure required fields exist and types are sane for rebuild steps."""
+        if not isinstance(trade, dict):
+            logger.warning("Skipping malformed trade during rebuild: not a dict")
+            return None
+        try:
+            symbol = trade.get('symbol')
+            side_raw = trade.get('side')
+            quantity = trade.get('amount')
+            price = trade.get('price')
+            if not symbol or side_raw is None or quantity is None or price is None:
+                logger.warning("Skipping malformed trade during rebuild: missing required fields")
+                return None
+            try:
+                side = str(side_raw).upper()
+                quantity_val = float(quantity)
+                price_val = float(price)
+            except (TypeError, ValueError) as exc:
+                logger.warning(f"Skipping malformed trade during rebuild: {exc}")
+                return None
+            if quantity_val <= 0 or price_val <= 0:
+                logger.warning("Skipping malformed trade during rebuild: non-positive quantity or price")
+                return None
+            fee_cost = self._extract_fee_cost(trade.get('fee'))
+            return symbol, side, quantity_val, price_val, fee_cost
+        except Exception as exc:
+            logger.warning(f"Skipping malformed trade during rebuild: {exc}")
+            return None
+
+    def _apply_exchange_trades_for_rebuild(self, trades: list) -> dict:
+        """
+        Rebuild holdings and session stats from a list of exchange trades.
+        Malformed entries are skipped with warnings instead of breaking the rebuild.
+        """
+        self.holdings = {}
+        self.session_stats = {
+            'total_trades': 0,
+            'gross_pnl': 0.0,
+            'total_fees': 0.0,
+            'total_llm_cost': 0.0
+        }
+        skipped = 0
+        for trade in trades or []:
+            normalized = self._normalize_exchange_trade(trade)
+            if not normalized:
+                skipped += 1
+                continue
+            symbol, side, quantity, price, fee_cost = normalized
+            try:
+                realized = self._update_holdings_and_realized(symbol, side, quantity, price, fee_cost)
+            except Exception as exc:
+                logger.warning(f"Could not apply trade during rebuild for {symbol}: {exc}")
+                skipped += 1
+                continue
+
+            self.session_stats['total_trades'] += 1
+            self.session_stats['total_fees'] += fee_cost
+            self.session_stats['gross_pnl'] += realized
+
+        if skipped:
+            logger.warning(f"Skipped {skipped} malformed trades while rebuilding stats")
+        return self.session_stats
+
     def _apply_volatility_sizing(self, quantity: float, regime_flags: dict) -> float:
         """Scale quantity based on volatility regime."""
         if not regime_flags or quantity <= 0:
@@ -1006,29 +1089,7 @@ class StrategyRunner:
                 trades.extend(sym_trades)
             
             # 3. Rebuild Holdings and Stats
-            self.holdings = {}
-            self.session_stats = {
-                'total_trades': 0,
-                'gross_pnl': 0.0,
-                'total_fees': 0.0,
-                'total_llm_cost': 0.0 # Will fetch from DB
-            }
-            
-            for t in trades:
-                 # Rebuild holdings
-                 symbol = t['symbol']
-                 side = t['side'].upper()
-                 quantity = t['amount']
-                 price = t['price']
-                 fee = t.get('fee', {}).get('cost', 0.0)
-                 
-                 # Update holdings and calculate realized PnL for this trade
-                 realized = self._update_holdings_and_realized(symbol, side, quantity, price, fee)
-                 
-                 # Update session stats
-                 self.session_stats['total_trades'] += 1
-                 self.session_stats['total_fees'] += fee
-                 self.session_stats['gross_pnl'] += realized
+            self._apply_exchange_trades_for_rebuild(trades)
 
             # Load LLM costs from DB (since exchange doesn't track this)
             db_stats = self.db.get_session_stats(self.session_id)
@@ -1189,16 +1250,20 @@ class StrategyRunner:
             'total_llm_cost': 0.0,
         }
         for t in trades:
-            realized = self._update_holdings_and_realized(
-                t['symbol'],
-                t['action'],
-                t['quantity'],
-                t['price'],
-                t.get('fee', 0.0) or 0.0
-            )
-            self.session_stats['total_trades'] += 1
-            self.session_stats['total_fees'] += t.get('fee', 0.0) or 0.0
-            self.session_stats['gross_pnl'] += realized
+            try:
+                fee_cost = self._extract_fee_cost(t.get('fee'))
+                realized = self._update_holdings_and_realized(
+                    t['symbol'],
+                    t['action'],
+                    t['quantity'],
+                    t['price'],
+                    fee_cost,
+                )
+                self.session_stats['total_trades'] += 1
+                self.session_stats['total_fees'] += fee_cost
+                self.session_stats['gross_pnl'] += realized
+            except Exception as exc:
+                logger.warning(f"Skipping trade during stats rebuild due to error: {exc}")
 
         # Pull LLM costs from session row
         db_stats = self.db.get_session_stats(self.session_id)

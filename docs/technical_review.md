@@ -7,7 +7,7 @@
 - [x] `trader_bot/risk_manager.py:92-105` only applies the order value buffer when the order already exceeds `MAX_ORDER_VALUE`. Orders just under the cap are not trimmed to `MAX_ORDER_VALUE - ORDER_VALUE_BUFFER` despite the log messaging, so we can exceed the intended safety buffer.
 - [x] `trader_bot/database.py:268-272` adds a unique index on `sessions(bot_version)`, forcing a single session per version. New runs overwrite the same session rather than creating per-day/per-run rows, breaking daily loss accounting and making historical session analysis impossible.
 - [x] `trader_bot/strategy_runner.py:1692-1786` treats `_apply_fill_to_session_stats` as potentially awaitable even though it always returns `None`. This is a code smell that hides async/sync confusion and makes error handling around session stats brittle.
-- [ ] `trader_bot/strategy_runner.py:240-321` rebuilds holdings and stats from exchange trades but does not handle fee fields or errors defensively; malformed trades can zero holdings and stats without alerts.
+- [x] `trader_bot/strategy_runner.py:240-321` rebuilds holdings and stats from exchange trades but does not handle fee fields or errors defensively; malformed trades can zero holdings and stats without alerts.
 
 ## Risk & Safety Gaps
 - [ ] Exposure calculations depend on prices in stored positions, but `GeminiTrader.get_positions_async` returns positions with `avg_price=None` and no live pricing. Until another lookup fills prices, `risk_manager.get_total_exposure` can undercount exposure and allow oversizing.

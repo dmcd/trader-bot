@@ -27,7 +27,7 @@
   - [x] Add per-turn byte budget and trimming (plans, orders, trades, memory); include change-log deltas instead of full snapshots.
   - [x] Expose data freshness, spread/depth, and headroom explicitly in prompts; flag when plan caps or cooldowns block actions.
   - [x] Rate-limit tool requests per symbol/timeframe combo and deduplicate across planner turns; log tool thrash metrics.
-  - [ ] Track LLM cost burn rate vs. session budget and feed it into prompts plus dashboard alerts.
+  - [x] Track LLM cost burn rate vs. session budget and feed it into prompts plus dashboard alerts.
 - Product & UX
   - [ ] Expand dashboard with controls: pause/resume, lower caps, flatten positions, cancel all, toggle maker/taker policy.
   - [ ] Add “what changed since last loop” panel (price deltas, exposure shifts, new plans/orders, errors).

@@ -356,6 +356,16 @@ class LLMStrategy(BaseStrategy):
 
         # LLM cost/frequency guards (HOLD instead of burning tokens)
         total_llm_cost = (session_stats or {}).get('total_llm_cost', 0.0) if session_stats else 0.0
+        burn_stats = None
+        try:
+            if session_stats is not None:
+                burn_stats = self.cost_tracker.calculate_llm_burn(
+                    total_llm_cost=total_llm_cost,
+                    session_started=session_stats.get('created_at') or session_stats.get('date'),
+                    budget=LLM_MAX_SESSION_COST,
+                )
+        except Exception:
+            burn_stats = None
         if total_llm_cost >= LLM_MAX_SESSION_COST:
             logger.info(f"Skipping LLM call: session LLM cost ${total_llm_cost:.4f} exceeds cap ${LLM_MAX_SESSION_COST:.2f}")
             return StrategySignal('HOLD', symbol, 0, 'LLM cost cap hit')
@@ -475,6 +485,7 @@ class LLMStrategy(BaseStrategy):
             logger.debug(f"Could not fetch plan counts: {exc}")
         plan_counts_str = ", ".join(f"{sym}:{cnt}/{PLAN_MAX_PER_SYMBOL}" for sym, cnt in plan_counts.items()) or "none"
 
+        llm_cost_note = self._format_llm_burn_note(burn_stats)
         prompt_context = (
             f"- Cooldown: {spacing_flag}\n"
             f"- Priority signal allowed: {priority_flag}\n"
@@ -490,6 +501,8 @@ class LLMStrategy(BaseStrategy):
             f"- Min trade size: ${MIN_TRADE_SIZE:.2f}\n"
             f"- Open orders: {open_order_count} ({open_orders_summary})"
         )
+        if llm_cost_note:
+            prompt_context += f"\n- LLM budget: {llm_cost_note}"
 
         decision_result = await self._get_llm_decision(
             session_id,
@@ -503,6 +516,7 @@ class LLMStrategy(BaseStrategy):
             can_trade=can_trade,
             spacing_flag=spacing_flag,
             plan_counts=plan_counts,
+            burn_stats=burn_stats,
         )
         trace_id = None
         decision_json = None
@@ -663,6 +677,29 @@ class LLMStrategy(BaseStrategy):
                 return ""
 
         return self.prompt_template.format_map(_SafeDict(**kwargs))
+
+    @staticmethod
+    def _format_llm_burn_note(burn_stats: Dict[str, Any] | None) -> str:
+        if not burn_stats or not hasattr(burn_stats, "get"):
+            return ""
+        spent = burn_stats.get("total_llm_cost", 0.0)
+        budget = burn_stats.get("budget", 0.0) or 0.0
+        pct = burn_stats.get("pct_of_budget", 0.0) * 100
+        burn_rate = burn_stats.get("burn_rate_per_hour", 0.0)
+        remaining = burn_stats.get("remaining_budget", 0.0)
+        hours_to_cap = burn_stats.get("hours_to_cap")
+
+        if hours_to_cap is None:
+            eta_str = "no burn yet"
+        elif hours_to_cap > 48:
+            eta_str = "gt 2d runway"
+        else:
+            eta_str = f"~{hours_to_cap:.1f}h runway"
+
+        return (
+            f"LLM spend ${spent:.4f}/${budget:.2f} ({pct:.1f}%), "
+            f"burn ${burn_rate:.4f}/hr, rem ${remaining:.2f}, {eta_str}"
+        )
 
     async def _invoke_llm(self, prompt: str, timeout: int = 30):
         """Invoke the LLM with a timeout."""
@@ -870,7 +907,7 @@ class LLMStrategy(BaseStrategy):
         except Exception:
             return trimmed[: max(0, budget // 2)]
 
-    async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0, can_trade: bool = True, spacing_flag: str = "", plan_counts: dict = None):
+    async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0, can_trade: bool = True, spacing_flag: str = "", plan_counts: dict = None, burn_stats: Dict[str, Any] | None = None):
         """Asks the configured LLM for a trading decision and logs full prompt/response; returns (decision_json, trace_id)."""
         if not self._llm_ready:
             return None, None
@@ -926,6 +963,7 @@ class LLMStrategy(BaseStrategy):
         
         is_crypto = ACTIVE_EXCHANGE == 'GEMINI' and any('/' in symbol for symbol in available_symbols)
 
+        llm_cost_note = self._format_llm_burn_note(burn_stats)
         prompt_context_block = ""
         rules_block = ""
         if prompt_context:
@@ -1021,6 +1059,7 @@ class LLMStrategy(BaseStrategy):
             max_open_orders_per_symbol=MAX_POSITIONS,
             response_instructions=response_instructions_decision,
             memory_block=memory_block,
+            llm_cost_note=llm_cost_note,
         )
 
         trace_id = None
@@ -1054,6 +1093,7 @@ class LLMStrategy(BaseStrategy):
                 max_open_orders_per_symbol=MAX_POSITIONS,
                 response_instructions=response_instructions_planner,
                 memory_block=memory_block,
+                llm_cost_note=llm_cost_note,
             )
             try:
                 telemetry_logger.info(

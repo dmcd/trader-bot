@@ -1,5 +1,6 @@
 import logging
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional, Union
 
 from trader_bot.config import (
     GEMINI_INPUT_COST_PER_TOKEN,
@@ -95,4 +96,59 @@ class CostTracker:
             'net_pnl': net_pnl,
             'cost_ratio': (total_fees + total_llm_cost) / abs(gross_pnl) if gross_pnl != 0 else 0,
             'profitable': net_pnl > 0
+        }
+
+    def calculate_llm_burn(
+        self,
+        total_llm_cost: float,
+        session_started: Optional[Union[str, datetime]],
+        budget: float,
+        now: Optional[datetime] = None,
+        min_window_minutes: float = 5.0,
+    ) -> Dict[str, Any]:
+        """Compute burn rate vs budget using session start time.
+
+        Returns elapsed hours, burn rate per hour, percent of budget used,
+        remaining budget, and projected hours to cap (None when idle).
+        """
+
+        now_dt = now or datetime.now(timezone.utc)
+
+        start_dt: Optional[datetime] = None
+        if isinstance(session_started, datetime):
+            start_dt = session_started
+        elif isinstance(session_started, str) and session_started:
+            try:
+                start_dt = datetime.fromisoformat(session_started)
+            except ValueError:
+                try:
+                    start_dt = datetime.fromisoformat(session_started.replace("Z", "+00:00"))
+                except Exception:
+                    start_dt = None
+
+        if start_dt is None:
+            start_dt = now_dt
+
+        # Normalize naive datetimes to UTC to avoid negative deltas
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=timezone.utc)
+
+        elapsed_seconds = max((now_dt - start_dt).total_seconds(), 0)
+        min_window_seconds = max(min_window_minutes * 60.0, 1.0)
+        normalized_seconds = max(elapsed_seconds, min_window_seconds)
+        elapsed_hours = normalized_seconds / 3600.0
+
+        burn_rate_per_hour = (total_llm_cost or 0.0) / elapsed_hours
+        pct_of_budget = (total_llm_cost / budget) if budget else 0.0
+        remaining = max((budget or 0.0) - (total_llm_cost or 0.0), 0.0)
+        hours_to_cap = (remaining / burn_rate_per_hour) if burn_rate_per_hour > 0 else None
+
+        return {
+            "elapsed_hours": elapsed_hours,
+            "burn_rate_per_hour": burn_rate_per_hour,
+            "pct_of_budget": pct_of_budget,
+            "remaining_budget": remaining,
+            "budget": budget,
+            "hours_to_cap": hours_to_cap,
+            "total_llm_cost": total_llm_cost or 0.0,
         }

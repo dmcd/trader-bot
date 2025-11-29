@@ -10,6 +10,14 @@ class TestLLMStrategy(IsolatedAsyncioTestCase):
         self.mock_db = MagicMock()
         self.mock_ta = MagicMock()
         self.mock_cost_tracker = MagicMock()
+        self.mock_cost_tracker.calculate_llm_burn.return_value = {
+            "total_llm_cost": 0.0,
+            "budget": 0.0,
+            "pct_of_budget": 0.0,
+            "burn_rate_per_hour": 0.0,
+            "remaining_budget": 0.0,
+            "hours_to_cap": None,
+        }
         if hasattr(LLMStrategy, "_prompt_template_cache"):
             delattr(LLMStrategy, "_prompt_template_cache")
         self.strategy = LLMStrategy(self.mock_db, self.mock_ta, self.mock_cost_tracker)

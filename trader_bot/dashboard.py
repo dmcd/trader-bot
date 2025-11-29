@@ -9,10 +9,19 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
-from trader_bot.config import LOOP_INTERVAL_SECONDS, BOT_VERSION
+from trader_bot.config import (
+    ACTIVE_EXCHANGE,
+    BOT_VERSION,
+    LOOP_INTERVAL_SECONDS,
+    LLM_MAX_SESSION_COST,
+    LLM_PROVIDER,
+)
+from trader_bot.cost_tracker import CostTracker
 from trader_bot.database import TradingDatabase
 
 # --- Helper Functions ---
+
+cost_tracker = CostTracker(ACTIVE_EXCHANGE, llm_provider=LLM_PROVIDER)
 
 def format_ratio_badge(ratio):
     if ratio is None:
@@ -255,6 +264,17 @@ def load_trade_plans(session_id):
     finally:
         db.close()
 
+
+def get_llm_burn_stats(session_stats):
+    if not session_stats:
+        return None
+    try:
+        start = session_stats.get("created_at") or session_stats.get("date")
+        total = session_stats.get("total_llm_cost", 0.0) or 0.0
+        return cost_tracker.calculate_llm_burn(total, start, budget=LLM_MAX_SESSION_COST)
+    except Exception:
+        return None
+
 def load_health_state():
     db = TradingDatabase()
     try:
@@ -417,7 +437,25 @@ with tab_live:
                 c1.markdown(f"<div style='margin-top:-8px;'>{fee_badge}</div>", unsafe_allow_html=True)
             if cost_badge:
                 c3.markdown(f"<div style='margin-top:-8px;'>{cost_badge}</div>", unsafe_allow_html=True)
-            
+
+            burn_stats = get_llm_burn_stats(session_stats)
+            if burn_stats:
+                burn_rate = burn_stats.get("burn_rate_per_hour", 0.0)
+                pct_budget = burn_stats.get("pct_of_budget", 0.0) * 100
+                hours_to_cap = burn_stats.get("hours_to_cap")
+                remaining_budget = burn_stats.get("remaining_budget", 0.0)
+                eta_text = "idle" if hours_to_cap is None else f"~{hours_to_cap:.1f}h to cap"
+
+                b1, b2 = st.columns(2)
+                b1.metric("LLM Burn Rate", f"${burn_rate:.4f}/hr", f"{pct_budget:.1f}% of budget")
+                b2.metric("LLM Budget Remaining", f"${remaining_budget:.2f}", eta_text)
+
+                if pct_budget >= 80 or (hours_to_cap is not None and hours_to_cap < 2):
+                    st.warning(
+                        f"LLM budget is {pct_budget:.1f}% used; {eta_text}. Consider widening loop spacing or trimming tool calls.",
+                        icon="⚠️",
+                    )
+
             st.markdown("---")
             s1, s2, s3, s4 = st.columns(4)
             avg_spacing = trade_spacing.get("avg_seconds")

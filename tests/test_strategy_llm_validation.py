@@ -1,6 +1,7 @@
 import asyncio
 import json
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from trader_bot.strategy import LLMStrategy
@@ -11,6 +12,14 @@ class TestLLMValidation(unittest.IsolatedAsyncioTestCase):
         self.mock_db = MagicMock()
         self.mock_ta = MagicMock()
         self.mock_cost_tracker = MagicMock()
+        self.mock_cost_tracker.calculate_llm_burn.return_value = {
+            "total_llm_cost": 0.0,
+            "budget": 0.0,
+            "pct_of_budget": 0.0,
+            "burn_rate_per_hour": 0.0,
+            "remaining_budget": 0.0,
+            "hours_to_cap": None,
+        }
         if hasattr(LLMStrategy, "_prompt_template_cache"):
             delattr(LLMStrategy, "_prompt_template_cache")
         self.strategy = LLMStrategy(self.mock_db, self.mock_ta, self.mock_cost_tracker)
@@ -202,6 +211,42 @@ class TestLLMValidation(unittest.IsolatedAsyncioTestCase):
         joined = "\n".join(captured_prompts)
         self.assertIn("previous order was REJECTED", joined)
         self.assertIn("Plan cap reached for BTC/USD", joined)
+
+    @patch('trader_bot.strategy.asyncio.get_event_loop')
+    async def test_prompt_includes_llm_burn_note(self, mock_loop):
+        mock_loop.return_value.time.return_value = 1000
+        self.mock_db.get_recent_market_data.return_value = [{'price': 100}] * 50
+        self.mock_ta.calculate_indicators.return_value = {'bb_width': 2.0, 'rsi': 50}
+        self.strategy.last_trade_ts = 0
+
+        burn_snapshot = {
+            "total_llm_cost": 2.0,
+            "budget": 10.0,
+            "pct_of_budget": 0.2,
+            "burn_rate_per_hour": 1.0,
+            "remaining_budget": 8.0,
+            "hours_to_cap": 8.0,
+        }
+        self.mock_cost_tracker.calculate_llm_burn.return_value = burn_snapshot
+
+        captured_prompts = []
+
+        async def fake_invoke(prompt, timeout=30):
+            captured_prompts.append(prompt)
+            return _fake_response('{"action":"HOLD","symbol":"BTC/USD","reason":"burn"}')
+
+        with patch.object(self.strategy, "_invoke_llm", fake_invoke):
+            await self.strategy.generate_signal(
+                1,
+                {'BTC/USD': {'price': 100}},
+                1000,
+                0,
+                session_stats={"total_llm_cost": 2.0, "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc).isoformat()},
+            )
+
+        self.assertTrue(captured_prompts)
+        combined = "\n".join(captured_prompts)
+        self.assertIn("LLM spend $2.0000/$10.00", combined)
 
     @patch('trader_bot.strategy.asyncio.get_event_loop')
     async def test_llm_cost_guard_blocks_when_cap_hit(self, mock_loop):

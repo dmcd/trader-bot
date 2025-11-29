@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 
 from trader_bot.cost_tracker import CostTracker
 
@@ -39,6 +40,18 @@ class TestCostTracker(unittest.TestCase):
             + 1000 * tracker.llm_costs_by_provider["OPENAI"]["output_per_token"]
         )
         self.assertAlmostEqual(cost, expected)
+
+    def test_llm_burn_rate_projection(self):
+        tracker = CostTracker("GEMINI")
+        start = datetime(2025, 1, 1, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2025, 1, 1, 2, 0, tzinfo=timezone.utc)
+        stats = tracker.calculate_llm_burn(total_llm_cost=4.0, session_started=start, budget=10.0, now=now)
+
+        self.assertAlmostEqual(stats["elapsed_hours"], 2.0)
+        self.assertAlmostEqual(stats["burn_rate_per_hour"], 2.0)
+        self.assertAlmostEqual(stats["pct_of_budget"], 0.4)
+        self.assertAlmostEqual(stats["remaining_budget"], 6.0)
+        self.assertAlmostEqual(stats["hours_to_cap"], 3.0)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ Risk Constraints:
 - Exposure headroom: {exposure_headroom}
 - Pending BUY exposure budget: {pending_exposure_budget}
 - Max pending orders per symbol: {max_open_orders_per_symbol}
+- LLM budget: {llm_cost_note}
 
 Available Symbols: {available_symbols}
 

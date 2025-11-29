@@ -220,6 +220,25 @@ class StrategyRunner:
             deduped.append(sym_up)
         return deduped or ["BTC/USD"]
 
+    def _get_rebuild_symbols(self) -> list[str]:
+        """Return symbols to use when rebuilding stats from exchange history."""
+        allowed = [s.upper() for s in ALLOWED_SYMBOLS if s and "/" in s]
+        try:
+            exchange_symbols = getattr(self.bot, "exchange", None)
+            exchange_symbols = getattr(exchange_symbols, "symbols", []) or []
+        except Exception:
+            exchange_symbols = []
+
+        symbols = allowed
+        if exchange_symbols:
+            # Only request symbols the venue supports to avoid noisy errors
+            venue_set = {s.upper() for s in exchange_symbols}
+            symbols = [s for s in allowed if s in venue_set]
+
+        if not symbols:
+            symbols = ["BTC/USD"]
+        return symbols
+
     def _record_health_state(self, key: str, value: str, detail: dict = None):
         """Persist health state and emit telemetry."""
         detail_str = None
@@ -1163,12 +1182,7 @@ class StrategyRunner:
             start_ts_ms = int(start_of_day.timestamp() * 1000)
             
             # 2. Fetch trades for the day across active symbols
-            try:
-                symbols = [s for s in getattr(self.bot.exchange, 'symbols', []) or [] if '/USD' in s]
-            except Exception:
-                symbols = []
-            if not symbols:
-                symbols = ['BTC/USD']
+            symbols = self._get_rebuild_symbols()
             trades = []
             for sym in symbols:
                 sym_trades = await self.bot.get_trades_from_timestamp(sym, start_ts_ms)

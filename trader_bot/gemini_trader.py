@@ -147,6 +147,11 @@ class GeminiTrader(BaseTrader):
         if not self.connected:
             return None
 
+        # Gemini doesn't expose lone fiat symbols (e.g., "USD"); avoid noisy lookups
+        if not symbol or "/" not in symbol:
+            logger.debug(f"Skipping market data fetch for non-tradable symbol: {symbol}")
+            return None
+
         try:
             ticker = await self.exchange.fetch_ticker(symbol)
             order_book = None

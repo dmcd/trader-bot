@@ -213,6 +213,9 @@ class StrategyRunner:
             sym_up = sym.upper()
             if sym_up in seen:
                 continue
+            # Skip non-tradable cash-like symbols (e.g., "USD") that don't have an order book
+            if "/" not in sym_up:
+                continue
             seen.add(sym_up)
             deduped.append(sym_up)
         return deduped or ["BTC/USD"]

@@ -314,6 +314,8 @@ current_session_id = db_version_lookup.get_session_id_by_version(BOT_VERSION)
 available_versions = db_version_lookup.list_bot_versions()
 db_version_lookup.close()
 health_states = load_health_state()
+session_stats, session_id = load_session_stats(current_session_id)
+current_trades_df = load_history(session_id, user_timezone)
 
 # --- Sidebar ---
 
@@ -357,15 +359,14 @@ db.close()
 
 
 # --- Main Content ---
-tab_live, tab_health, tab_history = st.tabs(["Current Version", "System Health", "History"])
+tab_live, tab_costs, tab_health, tab_history = st.tabs(["Current Version", "Costs", "System Health", "History"])
 
 with tab_live:
     col1, col2 = st.columns([2, 1])
 
     with col1:
         st.subheader("📊 Current Performance")
-        df = load_history(current_session_id, user_timezone)
-        session_stats, session_id = load_session_stats(current_session_id)
+        df = current_trades_df.copy()
         
         if session_stats and not df.empty:
             symbols = df['symbol'].unique()
@@ -539,6 +540,71 @@ with tab_live:
         logs = load_logs()
         log_text = "".join(logs)
         st.text_area("Log Output", log_text, height=900, disabled=True)
+
+with tab_costs:
+    st.subheader("💵 Costs This Session")
+    if not session_stats:
+        st.info("No session data available yet.")
+    else:
+        total_fees = session_stats.get('total_fees', 0.0) or 0.0
+        total_llm_cost = session_stats.get('total_llm_cost', 0.0) or 0.0
+        gross_pnl = session_stats.get('gross_pnl', 0.0) or 0.0
+        net_pnl = session_stats.get('net_pnl', 0.0) or (gross_pnl - total_fees - total_llm_cost)
+        total_costs = total_fees + total_llm_cost
+        cost_ratio = (total_costs / abs(gross_pnl) * 100) if gross_pnl else None
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Fees", f"${total_fees:.2f}")
+        c2.metric("LLM Costs", f"${total_llm_cost:.4f}")
+        c3.metric("Total Costs", f"${total_costs:.2f}")
+        c4.metric("Net PnL", f"${net_pnl:,.2f}")
+        if cost_ratio is not None:
+            c3.markdown(f"<div style='margin-top:-8px;'>{format_ratio_badge(cost_ratio)}</div>", unsafe_allow_html=True)
+
+        burn_stats = get_llm_burn_stats(session_stats)
+        if burn_stats:
+            burn_rate = burn_stats.get("burn_rate_per_hour", 0.0)
+            pct_budget = burn_stats.get("pct_of_budget", 0.0) * 100
+            hours_to_cap = burn_stats.get("hours_to_cap")
+            remaining_budget = burn_stats.get("remaining_budget", 0.0)
+            eta_text = "idle" if hours_to_cap is None else f"~{hours_to_cap:.1f}h to cap"
+
+            b1, b2, b3 = st.columns(3)
+            b1.metric("LLM Burn Rate", f"${burn_rate:.4f}/hr")
+            b2.metric("LLM Budget Remaining", f"${remaining_budget:.2f}", eta_text)
+            b3.metric("% of Budget Used", f"{pct_budget:.1f}%")
+            if pct_budget >= 80 or (hours_to_cap is not None and hours_to_cap < 2):
+                st.warning(
+                    f"LLM budget is {pct_budget:.1f}% used; {eta_text}. Consider widening loop spacing or trimming tool calls.",
+                    icon="⚠️",
+                )
+
+        st.markdown("---")
+        st.subheader("🧾 Fee Breakdown")
+        if not current_trades_df.empty:
+            fee_summary = current_trades_df.groupby('symbol').agg(
+                total_fee=('fee', 'sum'),
+                trades=('symbol', 'count'),
+                notional=('trade_value', 'sum'),
+            ).reset_index()
+            fee_summary['avg_fee_bps'] = fee_summary.apply(
+                lambda row: (row['total_fee'] / row['notional'] * 10000) if row['notional'] else 0.0,
+                axis=1
+            )
+            st.dataframe(
+                fee_summary,
+                hide_index=True,
+                column_config={
+                    "symbol": "Symbol",
+                    "total_fee": st.column_config.NumberColumn("Fees ($)", format="$%.4f"),
+                    "trades": st.column_config.NumberColumn("Trades"),
+                    "notional": st.column_config.NumberColumn("Notional ($)", format="$%.2f"),
+                    "avg_fee_bps": st.column_config.NumberColumn("Avg Fee (bps)", format="%.2f"),
+                },
+                width="stretch",
+            )
+        else:
+            st.info("No trades logged yet, so no fee data to display.")
 
 with tab_health:
     st.subheader("🚦 System Health")

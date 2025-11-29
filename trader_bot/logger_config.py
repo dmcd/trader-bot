@@ -42,9 +42,10 @@ def setup_logging():
     simple_formatter = logging.Formatter('%(asctime)s - %(message)s')
     detailed_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-    # 1. Console Log (console.log) - Technical debug log
+    # 1. Console Log (console*.log) - Technical debug log
     # DEBUG and above, detailed format, captures everything
-    console_handler = logging.FileHandler('console.log', mode='w') # Clear log on startup
+    log_filename = "console_test.log" if "PYTEST_CURRENT_TEST" in os.environ else "console.log"
+    console_handler = logging.FileHandler(log_filename, mode='w') # Clear log on startup
     console_handler.setLevel(logging.DEBUG)
     console_handler.setFormatter(detailed_formatter)
     logger.addHandler(console_handler)
@@ -52,7 +53,7 @@ def setup_logging():
     # 2. Real Terminal Output
     # So the user still sees what's going on
     stream_handler = logging.StreamHandler(original_stdout)
-    stream_handler.setLevel(logging.INFO)
+    stream_handler.setLevel(logging.DEBUG if "PYTEST_CURRENT_TEST" in os.environ else logging.INFO)
     stream_handler.setFormatter(detailed_formatter)
     logger.addHandler(stream_handler)
 
@@ -62,7 +63,8 @@ def setup_logging():
     bot_actions_logger.setLevel(logging.INFO)
     bot_actions_logger.propagate = False  # Don't propagate to root logger
     
-    bot_handler = logging.FileHandler('bot.log', mode='w')  # Overwrite on startup
+    bot_log_filename = "bot_test.log" if "PYTEST_CURRENT_TEST" in os.environ else "bot.log"
+    bot_handler = logging.FileHandler(bot_log_filename, mode='w')  # Overwrite on startup
     bot_handler.setLevel(logging.INFO)
     bot_handler.setFormatter(simple_formatter)
     bot_actions_logger.addHandler(bot_handler)
@@ -72,7 +74,8 @@ def setup_logging():
     telemetry_logger.setLevel(logging.INFO)
     telemetry_logger.propagate = False
     # Reset telemetry log each startup to keep sessions isolated
-    telemetry_handler = logging.FileHandler('telemetry.log', mode='w')
+    telemetry_log_filename = "telemetry_test.log" if "PYTEST_CURRENT_TEST" in os.environ else "telemetry.log"
+    telemetry_handler = logging.FileHandler(telemetry_log_filename, mode='w')
     telemetry_handler.setLevel(logging.INFO)
     telemetry_handler.setFormatter(logging.Formatter('%(message)s'))
     telemetry_logger.addHandler(telemetry_handler)

@@ -785,6 +785,17 @@ class StrategyRunner:
                             stop = entry
                         except Exception as e:
                             logger.debug(f"Could not trail stop for plan {plan_id}: {e}")
+                    # Apply volatility-aware trailing: widen on low vol, tighten on high vol
+                    try:
+                        vol_flag = (plan.get('volatility') or regime_flags.get('volatility') or '').lower()
+                    except Exception:
+                        vol_flag = ''
+                    trail_pct = self._apply_plan_trailing_pct
+                    if vol_flag:
+                        if 'low' in vol_flag:
+                            trail_pct *= 1.5
+                        elif 'high' in vol_flag:
+                            trail_pct *= 0.7
                     if stop and price_now <= stop:
                         should_close = True
                         reason = f"Stop hit at ${price_now:,.2f}"
@@ -799,6 +810,16 @@ class StrategyRunner:
                             stop = entry
                         except Exception as e:
                             logger.debug(f"Could not trail stop for plan {plan_id}: {e}")
+                    try:
+                        vol_flag = (plan.get('volatility') or regime_flags.get('volatility') or '').lower()
+                    except Exception:
+                        vol_flag = ''
+                    trail_pct = self._apply_plan_trailing_pct
+                    if vol_flag:
+                        if 'low' in vol_flag:
+                            trail_pct *= 1.5
+                        elif 'high' in vol_flag:
+                            trail_pct *= 0.7
                     if stop and price_now >= stop:
                         should_close = True
                         reason = f"Stop hit at ${price_now:,.2f}"

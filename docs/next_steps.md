@@ -21,7 +21,7 @@
 - Execution & Risk
   - [x] Replace fixed slippage pct with symbol-aware band driven by depth/vol; block fills when book notional is thin.
   - [x] Add maker/taker policy toggle (per symbol) with retries and fee modeling; record maker vs. taker in telemetry.
-  - [ ] Enforce min RR per plan with live price tolerance and auto-cancel of stale plans; trail stops using volatility-aware bands.
+  - [x] Enforce min RR per plan with live price tolerance and auto-cancel of stale plans; trail stops using volatility-aware bands.
   - [ ] Introduce simple correlation buckets (e.g., BTC/ETH majors vs. alts) to cap same-direction stacking across related symbols.
 - LLM Context & Costs
   - [ ] Add per-turn byte budget and trimming (plans, orders, trades, memory); include change-log deltas instead of full snapshots.

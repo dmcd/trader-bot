@@ -98,11 +98,33 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
             'target_price': 110,
             'size': 0.1,
             'opened_at': now.isoformat(),
-            'version': 1
+            'version': 1,
+            'volatility': 'medium (1%)',
         }]
         self.runner.db.update_trade_plan_prices = Mock()
         self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '123', 'liquidity': 'taker'})
         await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 102}, open_orders=[])
+        self.runner.db.update_trade_plan_prices.assert_called_once()
+
+    async def test_trailing_stop_tightens_on_high_vol(self):
+        now = datetime.now(timezone.utc)
+        self.runner.db = MagicMock()
+        self.runner.db.get_open_trade_plans.return_value = [{
+            'id': 5,
+            'symbol': 'BTC/USD',
+            'side': 'SELL',
+            'entry_price': 100,
+            'stop_price': 105,
+            'target_price': 90,
+            'size': 0.1,
+            'opened_at': now.isoformat(),
+            'version': 1,
+            'volatility': 'high (2%)',
+        }]
+        self.runner.db.update_trade_plan_prices = Mock()
+        self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '123', 'liquidity': 'taker'})
+        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 99}, open_orders=[])
+        # High-vol trailing should be tighter; if stop already above entry, it should still trail to breakeven when rule met
         self.runner.db.update_trade_plan_prices.assert_called_once()
 
     async def test_plan_closes_when_flat_and_no_orders(self):

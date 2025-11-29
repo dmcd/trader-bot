@@ -308,6 +308,34 @@ class GeminiTrader(BaseTrader):
             logger.error(f"Error calculating Gemini equity: {e}")
             return None
 
+    async def _fetch_mark_prices(self, symbols):
+        """Fetch best-effort mark prices for a list of symbols."""
+        if not symbols:
+            return {}
+
+        async def _fetch(symbol):
+            try:
+                ticker = await self.exchange.fetch_ticker(symbol)
+                bid = ticker.get('bid')
+                ask = ticker.get('ask')
+                last = ticker.get('last')
+                if bid and ask:
+                    mid = (bid + ask) / 2
+                else:
+                    mid = None
+                price = last or mid or bid or ask
+                return symbol, price
+            except Exception as exc:
+                logger.warning(f"Price lookup failed for {symbol}: {exc}")
+                return symbol, None
+
+        results = await asyncio.gather(*[_fetch(sym) for sym in symbols])
+        prices = {}
+        for sym, price in results:
+            if price is not None:
+                prices[sym] = price
+        return prices
+
     async def get_positions_async(self):
         """Return spot balances as positions."""
         if not self.connected:
@@ -316,18 +344,28 @@ class GeminiTrader(BaseTrader):
         try:
             balance = await self.exchange.fetch_balance()
             positions = []
+            non_cash_symbols = []
+            raw = []
 
             for currency, total in balance.get('total', {}).items():
                 if total and total != 0:
                     # Represent USD as USD/USD for consistency
                     symbol = f"{currency}/USD" if currency != 'USD' else 'USD'
-                    
-                    positions.append({
-                        'symbol': symbol,
-                        'quantity': total,
-                        'avg_price': None,
-                        'timestamp': balance.get('timestamp')
-                    })
+                    raw.append((symbol, total))
+                    if symbol != 'USD':
+                        non_cash_symbols.append(symbol)
+
+            price_map = await self._fetch_mark_prices(non_cash_symbols)
+
+            for symbol, total in raw:
+                price = price_map.get(symbol, 0.0) if symbol != 'USD' else 0.0
+                positions.append({
+                    'symbol': symbol,
+                    'quantity': total,
+                    'avg_price': price,
+                    'current_price': price,
+                    'timestamp': balance.get('timestamp')
+                })
             return positions
         except Exception as e:
             logger.error(f"Error fetching Gemini positions: {e}")

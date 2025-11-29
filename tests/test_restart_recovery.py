@@ -68,3 +68,16 @@ async def test_reconcile_records_error_on_failure(runner):
     await runner._reconcile_exchange_state()
     health = {row["key"]: row for row in runner.db.get_health_state()}
     assert health["restart_recovery"]["value"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_updates_risk_manager_with_marked_positions(runner):
+    runner.bot = StubBot(
+        positions=[{"symbol": "ETH/USD", "quantity": 2.0, "avg_price": None, "current_price": 1500.0}],
+        orders=[],
+    )
+
+    await runner._reconcile_exchange_state()
+
+    assert "ETH/USD" in runner.risk_manager.positions
+    assert runner.risk_manager.positions["ETH/USD"]["current_price"] == 1500.0

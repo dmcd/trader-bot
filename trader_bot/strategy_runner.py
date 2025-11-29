@@ -328,7 +328,13 @@ class StrategyRunner:
 
         # Update risk manager with live state
         try:
-            positions_dict = {p.get("symbol"): {"quantity": p.get("quantity", 0.0), "current_price": p.get("avg_price") or 0.0} for p in live_positions or [] if p.get("symbol")}
+            positions_dict = {}
+            for pos in live_positions or []:
+                symbol = pos.get("symbol")
+                if not symbol:
+                    continue
+                mark = pos.get("current_price") or pos.get("avg_price") or 0.0
+                positions_dict[symbol] = {"quantity": pos.get("quantity", 0.0), "current_price": mark}
             self.risk_manager.update_positions(positions_dict)
             self.risk_manager.update_pending_orders(live_orders, price_lookup=None)
         except Exception as exc:
@@ -1717,7 +1723,7 @@ class StrategyRunner:
                         positions_data = self.db.get_positions(self.session_id)
                         for pos in positions_data:
                             sym = pos['symbol']
-                            current_price = pos.get('avg_price') or 0
+                            current_price = pos.get('current_price') or pos.get('avg_price') or 0
 
                             # Prefer most recent market tick
                             recent_data = self.db.get_recent_market_data(self.session_id, sym, limit=1)

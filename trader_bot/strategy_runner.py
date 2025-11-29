@@ -63,6 +63,8 @@ from trader_bot.gemini_trader import GeminiTrader
 from trader_bot.logger_config import setup_logging
 from trader_bot.risk_manager import RiskManager
 from trader_bot.strategy import LLMStrategy
+from trader_bot.services.command_processor import CommandProcessor
+from trader_bot.services.plan_monitor import PlanMonitor, PlanMonitorConfig
 from trader_bot.technical_analysis import TechnicalAnalysis
 from trader_bot.trading_context import TradingContext
 from trader_bot.utils import get_client_order_id
@@ -151,6 +153,8 @@ class StrategyRunner:
         self.shutdown_reason: str | None = None  # track why we stop
         self.ohlcv_min_capture_spacing_seconds = OHLCV_MIN_CAPTURE_SPACING_SECONDS
         self.ohlcv_retention_limit = OHLCV_MAX_ROWS_PER_TIMEFRAME
+        self.command_processor = CommandProcessor(self.db)
+        self.plan_monitor = self._build_plan_monitor()
 
     def _emit_telemetry(self, record: dict):
         """Emit structured telemetry as JSON line."""
@@ -182,6 +186,19 @@ class StrategyRunner:
         except Exception:
             return 0
         return 0
+
+    def _build_plan_monitor(self) -> PlanMonitor:
+        """Construct a plan monitor bound to the current dependencies."""
+        return PlanMonitor(
+            db=self.db,
+            bot=self.bot,
+            cost_tracker=self.cost_tracker,
+            risk_manager=self.risk_manager,
+            prefer_maker=self._prefer_maker,
+            holdings_updater=self._update_holdings_and_realized,
+            session_stats_applier=self._apply_fill_to_session_stats,
+            max_total_exposure=MAX_TOTAL_EXPOSURE,
+        )
 
     def _get_active_symbols(self) -> list[str]:
         """Return ordered list of symbols to monitor/trade."""
@@ -951,153 +968,27 @@ class StrategyRunner:
         return True
 
     async def _monitor_trade_plans(self, price_lookup: dict, open_orders: list):
-        """
-        Monitor open trade plans for stop/target hits and enforce max age/day-end flattening per symbol.
-        price_lookup: symbol -> latest price
-        open_orders: list of open orders from exchange
-        """
-        if not self.session_id:
-            return
-        try:
-            open_plans = self.db.get_open_trade_plans(self.session_id)
-            now = datetime.now(timezone.utc)
-            now_iso = now.isoformat()
-            day_end_cutoff = None
-            if self.day_end_flatten_hour_utc is not None:
-                day_end_cutoff = now.replace(hour=self.day_end_flatten_hour_utc, minute=0, second=0, microsecond=0)
-
-            open_orders_by_symbol = {}
-            for o in open_orders or []:
-                sym = o.get('symbol')
-                if not sym:
-                    continue
-                open_orders_by_symbol.setdefault(sym, []).append(o)
-
-            for plan in open_plans:
-                plan_id = plan['id']
-                side = plan['side'].upper()
-                regime_flags = plan.get('regime_flags') or {}
-                stop = plan.get('stop_price')
-                target = plan.get('target_price')
-                size = plan.get('size') or 0.0
-                symbol = plan.get('symbol')
-                price_now = (price_lookup or {}).get(symbol)
-                entry = plan.get('entry_price') or price_now
-                version = plan.get('version') or 1
-                if not price_now or size <= 0:
-                    continue
-
-                should_close = False
-                reason = None
-
-                # Close stale plans with no position and no open orders for the symbol
-                pos_qty = (self.risk_manager.positions or {}).get(symbol, {}).get('quantity', 0.0) or 0.0
-                has_open_orders = bool(open_orders_by_symbol.get(symbol))
-                if abs(pos_qty) < 1e-9 and not has_open_orders:
-                    should_close = True
-                    reason = "Plan closed: position flat and no open orders"
-
-                # Cancel if exposure headroom exhausted
-                try:
-                    exposure_now = self.risk_manager.get_total_exposure()
-                    if exposure_now >= MAX_TOTAL_EXPOSURE * 0.98:
-                        should_close = True
-                        reason = "Cancelled plan: exposure headroom exhausted"
-                except Exception:
-                    pass
-
-                opened_at = plan.get('opened_at')
-                if opened_at and self.max_plan_age_minutes:
-                    try:
-                        opened_dt = datetime.fromisoformat(opened_at)
-                        age_min = (now - opened_dt).total_seconds() / 60.0
-                        if age_min >= self.max_plan_age_minutes:
-                            should_close = True
-                            reason = f"Plan age exceeded {self.max_plan_age_minutes} min"
-                    except Exception:
-                        pass
-
-                if not should_close and day_end_cutoff and opened_at:
-                    try:
-                        opened_dt = datetime.fromisoformat(opened_at)
-                        if opened_dt < day_end_cutoff:
-                            should_close = True
-                            reason = "Day-end flatten"
-                    except Exception:
-                        pass
-
-                try:
-                    vol_flag = (plan.get('volatility') or regime_flags.get('volatility') or '').lower()
-                except Exception:
-                    vol_flag = ''
-                trail_pct = self._apply_plan_trailing_pct
-                if vol_flag:
-                    if 'low' in vol_flag:
-                        trail_pct *= 1.5
-                    elif 'high' in vol_flag:
-                        trail_pct *= 0.7
-
-                if side == 'BUY':
-                    # Trail stop to entry after move in favor
-                    if stop and price_now >= entry * (1 + trail_pct) and stop < entry:
-                        try:
-                            self.db.update_trade_plan_prices(plan_id, stop_price=entry, reason="Trailed stop to breakeven")
-                            bot_actions_logger.info(f"↩️ Trailed stop to breakeven for plan {plan_id} (v{version}→v{version+1})")
-                            stop = entry
-                        except Exception as e:
-                            logger.debug(f"Could not trail stop for plan {plan_id}: {e}")
-                    # Apply volatility-aware trailing: widen on low vol, tighten on high vol
-                    if stop and price_now <= stop:
-                        should_close = True
-                        reason = f"Stop hit at ${price_now:,.2f}"
-                    elif target and price_now >= target:
-                        should_close = True
-                        reason = f"Target hit at ${price_now:,.2f}"
-                else:  # SELL plan (short)
-                    if stop and price_now <= entry * (1 - trail_pct) and stop > entry:
-                        try:
-                            self.db.update_trade_plan_prices(plan_id, stop_price=entry, reason="Trailed stop to breakeven")
-                            bot_actions_logger.info(f"↩️ Trailed stop to breakeven for plan {plan_id} (v{version}→v{version+1})")
-                            stop = entry
-                        except Exception as e:
-                            logger.debug(f"Could not trail stop for plan {plan_id}: {e}")
-                    if stop and price_now >= stop:
-                        should_close = True
-                        reason = f"Stop hit at ${price_now:,.2f}"
-                    elif target and price_now <= target:
-                        should_close = True
-                        reason = f"Target hit at ${price_now:,.2f}"
-
-                if should_close:
-                    try:
-                        action = 'SELL' if side == 'BUY' else 'BUY'
-                        bot_actions_logger.info(f"🏁 Closing plan {plan_id}: {reason}")
-                        prefer_maker = self._prefer_maker(plan['symbol'])
-                        order_result = await self.bot.place_order_async(plan['symbol'], action, size, prefer_maker=prefer_maker)
-                        liquidity_tag = order_result.get('liquidity', 'taker') if order_result else 'taker'
-                        fee = self.cost_tracker.calculate_trade_fee(plan['symbol'], size, price_now, action, liquidity=liquidity_tag)
-                        realized = self._update_holdings_and_realized(plan['symbol'], action, size, price_now, fee)
-                        self.db.log_trade(
-                            self.session_id,
-                            plan['symbol'],
-                            action,
-                            size,
-                            price_now,
-                            fee,
-                            reason,
-                            liquidity=order_result.get('liquidity') if order_result else 'taker',
-                            realized_pnl=realized,
-                        )
-                        self._apply_fill_to_session_stats(
-                            order_result.get('order_id') if order_result else None,
-                            fee,
-                            realized,
-                        )
-                        self.db.update_trade_plan_status(plan_id, status='closed', closed_at=now_iso, reason=reason)
-                    except Exception as e:
-                        logger.error(f"Failed to close plan {plan_id}: {e}")
-        except Exception as e:
-            logger.warning(f"Monitor trade plans failed: {e}")
+        """Delegate to the standalone PlanMonitor service."""
+        config = PlanMonitorConfig(
+            max_plan_age_minutes=self.max_plan_age_minutes,
+            day_end_flatten_hour_utc=self.day_end_flatten_hour_utc,
+            trail_to_breakeven_pct=self._apply_plan_trailing_pct,
+        )
+        self.plan_monitor.refresh_bindings(
+            bot=self.bot,
+            db=self.db,
+            cost_tracker=self.cost_tracker,
+            risk_manager=self.risk_manager,
+            prefer_maker=self._prefer_maker,
+            holdings_updater=self._update_holdings_and_realized,
+            session_stats_applier=self._apply_fill_to_session_stats,
+        )
+        await self.plan_monitor.monitor(
+            self.session_id,
+            price_lookup=price_lookup,
+            open_orders=open_orders,
+            config=config,
+        )
 
     async def initialize(self):
         """Connects and initializes the bot."""
@@ -1671,24 +1562,15 @@ class StrategyRunner:
                         break
                     exchange_error_seen = False
                     # 0. Check for pending commands from dashboard
-                    pending_commands = self.db.get_pending_commands()
-                    for cmd in pending_commands:
-                        command = cmd['command']
-                        command_id = cmd['id']
-                        
-                        if command == 'CLOSE_ALL_POSITIONS':
-                            logger.info("Executing command: CLOSE_ALL_POSITIONS")
-                            bot_actions_logger.info("🛑 Manual Command: Closing all positions...")
-                            await self._close_all_positions_safely()
-                            bot_actions_logger.info("✅ All positions closed")
-                            self.db.mark_command_executed(command_id)
-                            
-                        elif command == 'STOP_BOT':
-                            logger.info("Executing command: STOP_BOT")
-                            bot_actions_logger.info("🛑 Manual Command: Stopping bot...")
-                            self.db.mark_command_executed(command_id)
-                            self.running = False
-                            break
+                    command_result = await self.command_processor.process(
+                        close_positions_cb=self._close_all_positions_safely,
+                        stop_cb=self._set_shutdown_reason,
+                    )
+                    if command_result.stop_requested:
+                        self.running = False
+                        if command_result.shutdown_reason and not self.shutdown_reason:
+                            self.shutdown_reason = command_result.shutdown_reason
+                        break
                     
                     # 1. Update Equity / PnL
                     try:

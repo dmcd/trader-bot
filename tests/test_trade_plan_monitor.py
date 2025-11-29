@@ -22,6 +22,7 @@ def _cleanup_db_path():
             pass
 
 from trader_bot.strategy_runner import StrategyRunner
+from trader_bot.services.plan_monitor import PlanMonitorConfig
 
 
 class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
@@ -33,6 +34,32 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.cost_tracker.calculate_trade_fee.return_value = 1.0
         self.runner._apply_fill_to_session_stats = Mock(return_value=None)
         self.runner.session_id = 1
+        self._refresh_monitor_bindings()
+
+    def _refresh_monitor_bindings(self):
+        self.runner.plan_monitor.refresh_bindings(
+            bot=self.runner.bot,
+            db=self.runner.db,
+            cost_tracker=self.runner.cost_tracker,
+            risk_manager=self.runner.risk_manager,
+            prefer_maker=self.runner._prefer_maker,
+            holdings_updater=self.runner._update_holdings_and_realized,
+            session_stats_applier=self.runner._apply_fill_to_session_stats,
+        )
+
+    async def _run_monitor(self, price_lookup, open_orders):
+        config = PlanMonitorConfig(
+            max_plan_age_minutes=self.runner.max_plan_age_minutes,
+            day_end_flatten_hour_utc=self.runner.day_end_flatten_hour_utc,
+            trail_to_breakeven_pct=self.runner._apply_plan_trailing_pct,
+        )
+        self._refresh_monitor_bindings()
+        await self.runner.plan_monitor.monitor(
+            self.runner.session_id,
+            price_lookup=price_lookup,
+            open_orders=open_orders,
+            config=config,
+        )
 
     @patch('trader_bot.strategy_runner.datetime')
     async def test_plan_age_flatten(self, mock_dt):
@@ -59,7 +86,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.db.log_trade = Mock()
         self.runner.db.update_trade_plan_prices = Mock()
 
-        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 100}, open_orders=[])
+        await self._run_monitor(price_lookup={"BTC/USD": 100}, open_orders=[])
         self.runner.db.update_trade_plan_status.assert_called_once()
 
     async def test_headroom_cancel(self):
@@ -82,7 +109,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.db.log_trade = Mock()
         self.runner.db.update_trade_plan_prices = Mock()
 
-        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 100}, open_orders=[])
+        await self._run_monitor(price_lookup={"BTC/USD": 100}, open_orders=[])
         # Ensure we evaluated exposure headroom and attempted closure path
         self.runner.risk_manager.get_total_exposure.assert_called_once()
         self.assertGreaterEqual(self.runner.db.update_trade_plan_status.call_count, 0)
@@ -104,7 +131,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         }]
         self.runner.db.update_trade_plan_prices = Mock()
         self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '123', 'liquidity': 'taker'})
-        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 102}, open_orders=[])
+        await self._run_monitor(price_lookup={"BTC/USD": 102}, open_orders=[])
         self.runner.db.update_trade_plan_prices.assert_called_once()
 
     async def test_trailing_stop_uses_regime_flags_when_no_volatility(self):
@@ -126,7 +153,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.db.update_trade_plan_prices = Mock()
         self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '999', 'liquidity': 'taker'})
 
-        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 102}, open_orders=[])
+        await self._run_monitor(price_lookup={"BTC/USD": 102}, open_orders=[])
 
         self.runner.db.update_trade_plan_prices.assert_called_once()
         args, kwargs = self.runner.db.update_trade_plan_prices.call_args
@@ -149,7 +176,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         }]
         self.runner.db.update_trade_plan_prices = Mock()
         self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '123', 'liquidity': 'taker'})
-        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 99}, open_orders=[])
+        await self._run_monitor(price_lookup={"BTC/USD": 99}, open_orders=[])
         # High-vol trailing should be tighter; if stop already above entry, it should still trail to breakeven when rule met
         self.runner.db.update_trade_plan_prices.assert_called_once()
 
@@ -172,7 +199,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.db.update_trade_plan_prices = Mock()
         self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': 'tight', 'liquidity': 'taker'})
 
-        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 100.8}, open_orders=[])
+        await self._run_monitor(price_lookup={"BTC/USD": 100.8}, open_orders=[])
 
         self.runner.db.update_trade_plan_prices.assert_called_once()
 
@@ -195,7 +222,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.db.update_trade_plan_prices = Mock()
         self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': 'wide', 'liquidity': 'taker'})
 
-        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 101.0}, open_orders=[])
+        await self._run_monitor(price_lookup={"BTC/USD": 101.0}, open_orders=[])
 
         self.runner.db.update_trade_plan_prices.assert_not_called()
 
@@ -217,7 +244,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.db.update_trade_plan_prices = Mock()
         self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '321', 'liquidity': 'taker'})
 
-        await self.runner._monitor_trade_plans(price_lookup={"BTC/USD": 102}, open_orders=[])
+        await self._run_monitor(price_lookup={"BTC/USD": 102}, open_orders=[])
 
         self.runner.db.update_trade_plan_prices.assert_called_once()
         args, kwargs = self.runner.db.update_trade_plan_prices.call_args
@@ -243,7 +270,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': '123', 'liquidity': 'taker'})
         self.runner.db.log_trade = Mock()
 
-        await self.runner._monitor_trade_plans(price_lookup={"ETH/USD": 1500}, open_orders=[])
+        await self._run_monitor(price_lookup={"ETH/USD": 1500}, open_orders=[])
         self.runner.db.update_trade_plan_status.assert_called_once()
 
     async def test_apply_fill_not_treated_as_awaitable(self):
@@ -271,7 +298,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
 
         self.runner._apply_fill_to_session_stats = Mock(return_value=AwaitTrap())
 
-        await self.runner._monitor_trade_plans(price_lookup={"ETH/USD": 1500}, open_orders=[])
+        await self._run_monitor(price_lookup={"ETH/USD": 1500}, open_orders=[])
 
         self.runner._apply_fill_to_session_stats.assert_called_once()
 

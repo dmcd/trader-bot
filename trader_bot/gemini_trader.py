@@ -313,6 +313,9 @@ class GeminiTrader(BaseTrader):
         if not self.connected:
             return []
 
+        # Optional sandbox-only age filter for stale balances; currently unused
+        cutoff_time = None
+
         try:
             balance = await self.exchange.fetch_balance()
             positions = []

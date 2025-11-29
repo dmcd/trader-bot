@@ -114,6 +114,13 @@ class StrategyRunner:
         self._tool_health = "ok"
         self.maker_preference_default = MAKER_PREFERENCE_DEFAULT
         self.maker_preference_overrides = MAKER_PREFERENCE_OVERRIDES or {}
+        # Seed a default stats container so background tasks don't crash before initialization completes
+        self.session_stats = {
+            'total_trades': 0,
+            'gross_pnl': 0.0,
+            'total_fees': 0.0,
+            'total_llm_cost': 0.0,
+        }
         
         # Initialize Strategy
         self.strategy = LLMStrategy(

@@ -240,6 +240,66 @@ class StrategyRunner:
             self._tool_health = "ok"
             self._record_health_state("tool_circuit", "ok", {"note": "recovered"})
 
+    async def _reconcile_exchange_state(self):
+        """
+        Reconcile positions and open orders against the live exchange at startup.
+        Ensures DB snapshots and risk manager state reflect actual venue state.
+        """
+        if not self.session_id:
+            return
+        try:
+            live_positions = await self.bot.get_positions_async()
+        except Exception as exc:
+            self._record_health_state("restart_recovery", "error", {"stage": "positions", "error": str(exc)})
+            logger.warning(f"Could not fetch live positions during recovery: {exc}")
+            return
+
+        try:
+            live_orders = await self.bot.get_open_orders_async()
+            live_orders = self._filter_our_orders(live_orders)
+        except Exception as exc:
+            self._record_health_state("restart_recovery", "error", {"stage": "open_orders", "error": str(exc)})
+            logger.warning(f"Could not fetch live open orders during recovery: {exc}")
+            return
+
+        # Load existing snapshots
+        try:
+            db_positions = self.db.get_positions(self.session_id) or []
+            db_orders = self.db.get_open_orders(self.session_id) or []
+        except Exception as exc:
+            self._record_health_state("restart_recovery", "error", {"stage": "db_read", "error": str(exc)})
+            logger.warning(f"Could not load DB snapshots during recovery: {exc}")
+            return
+
+        # Replace snapshots with live state
+        try:
+            self.db.replace_positions(self.session_id, live_positions)
+            self.db.replace_open_orders(self.session_id, live_orders)
+        except Exception as exc:
+            self._record_health_state("restart_recovery", "error", {"stage": "db_write", "error": str(exc)})
+            logger.warning(f"Could not persist reconciled snapshots: {exc}")
+            return
+
+        # Update risk manager with live state
+        try:
+            positions_dict = {p.get("symbol"): {"quantity": p.get("quantity", 0.0), "current_price": p.get("avg_price") or 0.0} for p in live_positions or [] if p.get("symbol")}
+            self.risk_manager.update_positions(positions_dict)
+            self.risk_manager.update_pending_orders(live_orders, price_lookup=None)
+        except Exception as exc:
+            logger.debug(f"Risk manager update after recovery failed: {exc}")
+
+        detail = {
+            "positions_before": len(db_positions),
+            "positions_after": len(live_positions or []),
+            "orders_before": len(db_orders),
+            "orders_after": len(live_orders or []),
+        }
+        self._record_health_state("restart_recovery", "ok", detail)
+        bot_actions_logger.info(
+            f"🧹 Startup reconciliation applied: positions {detail['positions_before']}→{detail['positions_after']}, "
+            f"open orders {detail['orders_before']}→{detail['orders_after']}"
+        )
+
     def _is_stale_market_data(self, data: dict) -> tuple[bool, dict]:
         """Return (stale, detail) using latency and age thresholds."""
         if not data:
@@ -776,8 +836,8 @@ class StrategyRunner:
         
         # Initialize trading context
         self.context = TradingContext(self.db, self.session_id)
-        # Drop any stale open orders lingering from prior runs
-        await self._reconcile_open_orders()
+        # Drop any stale open orders lingering from prior runs and sync with venue
+        await self._reconcile_exchange_state()
 
         # Initialize session stats with persistence awareness
         logger.info("Initializing session stats...")

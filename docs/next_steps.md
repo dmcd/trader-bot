@@ -17,7 +17,7 @@
 - Reliability & Ops
   - [x] Add circuit breaker / auto-pause on consecutive exchange or tool failures; surface state in telemetry + dashboard.
   - [x] Tag data freshness/latency for ticker, books, and OHLCV; skip or down-weight stale feeds; add stale-feed alerts.
-  - [ ] Improve restart recovery: reconcile open orders/positions vs. exchange on startup and patch DB snapshots accordingly.
+  - [x] Improve restart recovery: reconcile open orders/positions vs. exchange on startup and patch DB snapshots accordingly.
 - Execution & Risk
   - [ ] Replace fixed slippage pct with symbol-aware band driven by depth/vol; block fills when book notional is thin.
   - [ ] Add maker/taker policy toggle (per symbol) with retries and fee modeling; record maker vs. taker in telemetry.

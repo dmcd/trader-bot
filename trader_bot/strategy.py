@@ -39,6 +39,7 @@ from trader_bot.config import (
     PLAN_MAX_PER_SYMBOL,
     PRIORITY_LOOKBACK_MIN,
     PRIORITY_MOVE_PCT,
+    LLM_DECISION_BYTE_BUDGET,
     TOOL_DEFAULT_TIMEFRAMES,
     TOOL_MAX_BARS,
     TOOL_MAX_DEPTH,
@@ -812,6 +813,60 @@ class LLMStrategy(BaseStrategy):
                 # bot_actions_logger.info("⚠️ LLM tool request rejected (see console.log for details)")
         return requests
 
+    def _enforce_prompt_budget(self, prompt: str, budget: int = LLM_DECISION_BYTE_BUDGET) -> str:
+        """
+        Trim prompt sections to respect a byte budget; removes memory/context blocks first,
+        then hard-truncates as a last resort.
+        """
+        if budget <= 0:
+            return prompt
+        def _bytes(s: str) -> int:
+            try:
+                return len(s.encode("utf-8"))
+            except Exception:
+                return len(s)
+
+        if _bytes(prompt) <= budget:
+            return prompt
+
+        trimmed = prompt
+
+        # Strip memory block if present
+        trimmed_mem = re.sub(
+            r"MEMORY \(recent plans/decisions\):\n.*?(?:\n{2,}|\Z)",
+            "MEMORY: trimmed for budget\n\n",
+            trimmed,
+            flags=re.DOTALL,
+        )
+        if _bytes(trimmed_mem) <= budget:
+            return trimmed_mem
+        trimmed = trimmed_mem
+
+        # Strip large context block if present
+        trimmed_ctx = re.sub(
+            r"CONTEXT:\n.*?(RULES:|\Z)",
+            "CONTEXT: trimmed for budget\n\\1",
+            trimmed,
+            flags=re.DOTALL,
+        )
+        if _bytes(trimmed_ctx) <= budget:
+            return trimmed_ctx
+        trimmed = trimmed_ctx
+
+        # Final hard clamp
+        encoded = trimmed.encode("utf-8")
+        if len(encoded) <= budget:
+            return trimmed
+        head = encoded[: budget - 100]  # leave room for marker
+        marker = b"\n[TRIMMED]"
+        if len(marker) > 100:
+            marker = b"[TRIMMED]"
+        clamped = head + marker
+        try:
+            return clamped.decode("utf-8", errors="ignore")
+        except Exception:
+            return trimmed[: max(0, budget // 2)]
+
     async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0):
         """Asks the configured LLM for a trading decision and logs full prompt/response; returns (decision_json, trace_id)."""
         if not self._llm_ready:
@@ -1058,6 +1113,8 @@ class LLMStrategy(BaseStrategy):
             decision_prompt += "\n\nTOOL RESPONSES (JSON):\n"
             decision_prompt += json.dumps([r.model_dump() for r in tool_responses], default=str) + "\n"
             decision_prompt += "TOOL RESPONSES ABOVE ARE THE SOURCE OF TRUTH. If any inline snapshot conflicts, prefer tool_responses.\n"
+
+        decision_prompt = self._enforce_prompt_budget(decision_prompt, budget=LLM_DECISION_BYTE_BUDGET)
 
         # Log full decision prompt to telemetry
         try:

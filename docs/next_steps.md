@@ -24,7 +24,7 @@
   - [x] Enforce min RR per plan with live price tolerance and auto-cancel of stale plans; trail stops using volatility-aware bands.
   - [x] Introduce simple correlation buckets (e.g., BTC/ETH majors vs. alts) to cap same-direction stacking across related symbols.
 - LLM Context & Costs
-  - [ ] Add per-turn byte budget and trimming (plans, orders, trades, memory); include change-log deltas instead of full snapshots.
+  - [x] Add per-turn byte budget and trimming (plans, orders, trades, memory); include change-log deltas instead of full snapshots.
   - [ ] Expose data freshness, spread/depth, and headroom explicitly in prompts; flag when plan caps or cooldowns block actions.
   - [ ] Rate-limit tool requests per symbol/timeframe combo and deduplicate across planner turns; log tool thrash metrics.
   - [ ] Track LLM cost burn rate vs. session budget and feed it into prompts plus dashboard alerts.

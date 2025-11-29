@@ -87,6 +87,16 @@ If you prefer to run components individually:
 - `run.sh`: Helper launcher that starts the runner and dashboard together.
 - Runtime artifacts: `trading.db`, `bot.log`, `telemetry.log`, `console.log` in the repo root.
 
+### Testing & Coverage
+
+Run the full suite (with coverage) using:
+
+```bash
+python -m pytest
+```
+
+This will emit a terminal coverage summary and write `coverage.xml` for tooling.
+
 ## 📚 Documentation
 
 For a deeper dive into how the bot works, check out the documentation:

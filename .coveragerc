@@ -1,0 +1,8 @@
+[run]
+branch = True
+source =
+    trader_bot
+
+[report]
+show_missing = True
+skip_covered = True

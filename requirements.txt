@@ -6,6 +6,7 @@ openai
 python-dotenv
 ccxt
 pytest
+pytest-cov
 plotly
 pydantic>=2.7,<3
 pytest-asyncio

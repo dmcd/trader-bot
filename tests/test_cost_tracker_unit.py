@@ -41,6 +41,15 @@ class TestCostTracker(unittest.TestCase):
         )
         self.assertAlmostEqual(cost, expected)
 
+    def test_unknown_llm_provider_defaults_to_gemini(self):
+        tracker = CostTracker("GEMINI", llm_provider="mystery-model")
+        self.assertEqual(tracker.llm_costs, tracker.llm_costs_by_provider["GEMINI"])
+
+    def test_unknown_exchange_fee_is_zero_and_warns(self):
+        tracker = CostTracker("UNKNOWN")
+        fee = tracker.calculate_trade_fee("BTC/USD", quantity=1, price=10000, liquidity="maker")
+        self.assertEqual(fee, 0.0)
+
     def test_llm_burn_rate_projection(self):
         tracker = CostTracker("GEMINI")
         start = datetime(2025, 1, 1, 0, 0, tzinfo=timezone.utc)
@@ -52,6 +61,35 @@ class TestCostTracker(unittest.TestCase):
         self.assertAlmostEqual(stats["pct_of_budget"], 0.4)
         self.assertAlmostEqual(stats["remaining_budget"], 6.0)
         self.assertAlmostEqual(stats["hours_to_cap"], 3.0)
+
+    def test_llm_burn_accepts_iso_strings_and_naive_datetimes(self):
+        tracker = CostTracker("GEMINI")
+        now = datetime(2025, 1, 1, 1, 0, tzinfo=timezone.utc)
+
+        stats_from_z = tracker.calculate_llm_burn(
+            total_llm_cost=2.0,
+            session_started="2025-01-01T00:00:00Z",
+            budget=8.0,
+            now=now,
+        )
+        self.assertAlmostEqual(stats_from_z["elapsed_hours"], 1.0)
+        self.assertAlmostEqual(stats_from_z["burn_rate_per_hour"], 2.0)
+
+        stats_from_naive = tracker.calculate_llm_burn(
+            total_llm_cost=1.0,
+            session_started="2025-01-01T00:00:00",
+            budget=5.0,
+            now=now,
+        )
+        self.assertAlmostEqual(stats_from_naive["elapsed_hours"], 1.0)
+        self.assertAlmostEqual(stats_from_naive["burn_rate_per_hour"], 1.0)
+
+    def test_cost_summary_includes_ratio_and_profit_flag(self):
+        tracker = CostTracker("GEMINI")
+        summary = tracker.get_cost_summary(total_fees=10.0, total_llm_cost=5.0, gross_pnl=20.0)
+        self.assertEqual(summary["total_costs"], 15.0)
+        self.assertEqual(summary["cost_ratio"], 0.75)
+        self.assertTrue(summary["profitable"])
 
 
 if __name__ == "__main__":

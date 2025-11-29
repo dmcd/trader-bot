@@ -68,6 +68,7 @@ from trader_bot.services.portfolio_tracker import PortfolioTracker
 from trader_bot.services.plan_monitor import PlanMonitor, PlanMonitorConfig
 from trader_bot.services.health_manager import HealthCircuitManager
 from trader_bot.services.trade_action_handler import TradeActionHandler
+from trader_bot.services.market_data_service import MarketDataService
 from trader_bot.technical_analysis import TechnicalAnalysis
 from trader_bot.trading_context import TradingContext
 from trader_bot.utils import get_client_order_id
@@ -129,6 +130,14 @@ class StrategyRunner:
         )
         self.portfolio_tracker = PortfolioTracker(self.db, logger=logger)
         self.holdings = self.portfolio_tracker.holdings
+        self.market_data_service = MarketDataService(
+            db=self.db,
+            bot=self.bot,
+            monotonic=self._monotonic,
+            ohlcv_min_capture_spacing_seconds=OHLCV_MIN_CAPTURE_SPACING_SECONDS,
+            ohlcv_retention_limit=OHLCV_MAX_ROWS_PER_TIMEFRAME,
+            logger=logger,
+        )
         self.action_handler = TradeActionHandler(
             db=self.db,
             bot=self.bot,
@@ -162,7 +171,6 @@ class StrategyRunner:
         # Trade syncing state
         self.order_reasons = {}  # order_id -> reason
         self.processed_trade_ids = set()
-        self._last_ohlcv_capture: dict[tuple[str, str], float] = {}
         self._open_trade_plans = {}  # plan_id -> dict
         self.max_plan_age_minutes = PLAN_MAX_AGE_MINUTES
         self.day_end_flatten_hour_utc = None  # optional UTC hour to flatten plans
@@ -192,19 +200,8 @@ class StrategyRunner:
             return 0.0
 
     def _timeframe_to_seconds(self, timeframe: str) -> int:
-        """Convert simple timeframe strings like '1m' or '1h' to seconds."""
-        try:
-            unit = timeframe[-1]
-            value = int(timeframe[:-1])
-            if unit == 'm':
-                return value * 60
-            if unit == 'h':
-                return value * 3600
-            if unit == 'd':
-                return value * 86400
-        except Exception:
-            return 0
-        return 0
+        """Delegate timeframe parsing to market data service (compatibility wrapper)."""
+        return self.market_data_service.timeframe_to_seconds(timeframe)
 
     def _build_plan_monitor(self) -> PlanMonitor:
         """Construct a plan monitor bound to the current dependencies."""
@@ -580,30 +577,15 @@ class StrategyRunner:
 
 
     async def _capture_ohlcv(self, symbol: str):
-        """Fetch multi-timeframe OHLCV for the active symbol and persist."""
-        if not hasattr(self.bot, "fetch_ohlcv"):
-            return
-        timeframes = ['1m', '5m', '1h', '1d']
-        now = self._monotonic()
-        for tf in timeframes:
-            try:
-                tf_seconds = self._timeframe_to_seconds(tf)
-                min_spacing = max(self.ohlcv_min_capture_spacing_seconds, tf_seconds or 0)
-                last_key = (symbol, tf)
-                last_capture = self._last_ohlcv_capture.get(last_key)
-                if last_capture is not None and (now - last_capture) < min_spacing:
-                    continue
-
-                bars = await self.bot.fetch_ohlcv(symbol, timeframe=tf, limit=50)
-                self.db.log_ohlcv_batch(self.session_id, symbol, tf, bars)
-                if self.ohlcv_retention_limit:
-                    try:
-                        self.db.prune_ohlcv(self.session_id, symbol, tf, self.ohlcv_retention_limit)
-                    except Exception as exc:
-                        logger.debug(f"OHLCV prune failed for {symbol} {tf}: {exc}")
-                self._last_ohlcv_capture[last_key] = now
-            except Exception as e:
-                logger.debug(f"OHLCV fetch failed for {symbol} {tf}: {e}")
+        """Delegate OHLCV capture to market data service (compatibility wrapper)."""
+        # Refresh mutable settings/clock for tests
+        self.market_data_service.db = self.db
+        self.market_data_service.bot = self.bot
+        self.market_data_service.monotonic = self._monotonic
+        self.market_data_service.ohlcv_min_capture_spacing_seconds = self.ohlcv_min_capture_spacing_seconds
+        self.market_data_service.ohlcv_retention_limit = self.ohlcv_retention_limit
+        self.market_data_service.set_session(self.session_id)
+        await self.market_data_service.capture_ohlcv(symbol)
 
     def _apply_order_value_buffer(self, quantity: float, price: float):
         """Delegate order value buffer to action handler for compatibility."""

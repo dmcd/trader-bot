@@ -1,21 +1,39 @@
 ## Project Review (LLM Day-Trading Bot)
 
 ### Snapshot
-- Bot is LLM-driven with deterministic risk overlays (order caps, exposure limits, cooldowns, stacking guard) and tool-based market data.
-- Context to LLM includes plan usage, open orders, recent decisions, and regime flags; prompts are now tool-first with truncation guards and cost/frequency limits.
-- Runs locally from a laptop in live-only mode; execution routed via exchange adapter with light slippage checks.
+- LLMStrategy (Gemini/OpenAI) drives decisions with planner + decision turns; tool requests are validated/cached via DataFetchCoordinator; prompts include context summaries, plan caps, and regime flags.
+- StrategyRunner enforces spacing, break-glass priority moves, RR/slippage/liquidity checks, and risk gating before execution through GeminiTrader (limit orders with maker-intent retry).
+- RiskManager tracks exposure caps, order value/min size, daily loss (abs/%), pending order stacking, and max positions; CostTracker measures trading + LLM costs; TradingDatabase persists sessions, trades, plans, prompts, OHLCV, positions, and telemetry.
+- Telemetry is rich (full prompts/traces, tool requests, bot_actions log), but operational guardrails for stale data, repeated errors, or restart recovery are still thin.
 
 ### Key Risks & Gaps
-- Execution realism is thin: slippage guard is a simple pct check; no latency model, liquidity impact, or maker/taker fill simulation; no PnL attribution per decision vs. drift.
-- Limited resilience/ops: no circuit breaker on repeated exchange/tool failures; manual laptop ops risk losing state or missing fills if process dies.
-- Risk controls stop at per-trade/per-symbol caps: no portfolio-level VaR, correlation/hedging awareness, or multi-symbol stacking logic beyond simple counts.
-- Observability gaps for manual ops: logs exist, but no concise “what changed since last turn” dashboard/alerting for cost, exposure, error streaks, or missed tool requests.
+- Execution realism is coarse: fixed slippage pct, simple liquidity filter, no maker/taker economics simulation, and no latency/clock skew handling between decision and fill.
+- Resilience/ops gaps: no circuit breaker on repeated exchange/tool failures, limited restart recovery for open orders vs. DB, no stale-data detection, and no heartbeat/alerting for manual ops.
+- Risk breadth: exposure is gross/notional only (no correlation buckets or per-symbol headroom tuning), and stacking logic is limited to counts; plan lifecycle ties to runner, not exchange fills.
+- LLM cost/context hygiene: spacing exists, but no per-turn byte budget, freshness tags, or delta summaries to prevent repetitive prompts; no guard against tool thrash or oversized payloads beyond coarse clamps.
+- UX: dashboard shows status but lacks quick controls (pause, flatten, reduce caps) and visibility into LLM cost burn rate vs. session cap.
 
-### Recommended Next Steps (ordered)
-1) Improve live market data coverage and resilience: stream depth/NBBO where possible, detect stale feeds, buffer short outages, and tag freshness/latency in the context so the LLM knows data quality.
-2) Tighten LLM context management: summarize decision history and market deltas into a rolling digest; pin critical risk params; enforce turn-level truncation budgets; dedup repeated signals and enrich with per-symbol change logs.
-3) Strengthen execution overlays: maker/taker preference toggle with fallback, per-symbol slippage band based on depth/vol, and a “no-trade” mode on repeated partial fills/rejections.
-4) Add ops guardrails: circuit-breaker on consecutive exchange/tool errors, auto-pause on missing market data, and a heartbeat that surfaces current state (exposure, plans, open orders, LLM error streak, cost burn, data freshness) in one summary.
-5) Broaden risk analytics: compute per-symbol and portfolio exposure with simple correlation/sector buckets; block same-direction adds when correlated names already at cap.
-6) Manual control UX: add a lightweight CLI/Streamlit pane to pause/resume, flatten, or lower caps quickly; show LLM cost pace vs. session budget.
-7) Data quality checks: enforce spread/depth thresholds per symbol before letting the LLM act; drop or down-weight symbols with stale prices or thin books.
+### Next Steps Checklist
+- Reliability & Ops
+  - [ ] Add circuit breaker / auto-pause on consecutive exchange or tool failures; surface state in telemetry + dashboard.
+  - [ ] Tag data freshness/latency for ticker, books, and OHLCV; skip or down-weight stale feeds; add stale-feed alerts.
+  - [ ] Improve restart recovery: reconcile open orders/positions vs. exchange on startup and patch DB snapshots accordingly.
+  - [ ] Emit a per-loop heartbeat (exposure, open orders/plans, equity delta, LLM error streak, cost burn) for monitoring.
+- Execution & Risk
+  - [ ] Replace fixed slippage pct with symbol-aware band driven by depth/vol; block fills when book notional is thin.
+  - [ ] Add maker/taker policy toggle (per symbol) with retries and fee modeling; record maker vs. taker in telemetry.
+  - [ ] Enforce min RR per plan with live price tolerance and auto-cancel of stale plans; trail stops using volatility-aware bands.
+  - [ ] Introduce simple correlation buckets (e.g., BTC/ETH majors vs. alts) to cap same-direction stacking across related symbols.
+- LLM Context & Costs
+  - [ ] Add per-turn byte budget and trimming (plans, orders, trades, memory); include change-log deltas instead of full snapshots.
+  - [ ] Expose data freshness, spread/depth, and headroom explicitly in prompts; flag when plan caps or cooldowns block actions.
+  - [ ] Rate-limit tool requests per symbol/timeframe combo and deduplicate across planner turns; log tool thrash metrics.
+  - [ ] Track LLM cost burn rate vs. session budget and feed it into prompts plus dashboard alerts.
+- Product & UX
+  - [ ] Expand dashboard with controls: pause/resume, lower caps, flatten positions, cancel all, toggle maker/taker policy.
+  - [ ] Add “what changed since last loop” panel (price deltas, exposure shifts, new plans/orders, errors).
+  - [ ] Provide a dry-run/sim mode that records decisions and risk rejections without placing orders for fast iteration.
+- Testing & Validation
+  - [ ] Add integration test that runs StrategyRunner against a stub exchange + stub LLM to verify spacing, slippage, and risk gates.
+  - [ ] Property tests for tool payload clamps (json size) and timeframe normalization; regression tests for plan trail-to-breakeven logic.
+  - [ ] Backfill metrics validation: reconcile DB session stats vs. equity snapshots and report drift beyond threshold.

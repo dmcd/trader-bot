@@ -1523,6 +1523,7 @@ class StrategyRunner:
                             self._log_execution_trace(trace_id, telemetry_record)
                             self._emit_telemetry(telemetry_record)
                             await sleep_loop()
+                            continue
 
                     if not exchange_error_seen:
                         self.health_manager.reset_exchange_errors()

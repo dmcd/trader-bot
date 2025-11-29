@@ -147,6 +147,15 @@ class TestTradingDatabase(unittest.TestCase):
         latest_for_version = self.db.get_session_id_by_version("test-version")
         self.assertEqual(latest_for_version, next_session)
 
+    def test_session_creation_does_not_reuse_on_restart(self):
+        first_session = self.session_id
+        reopened = TradingDatabase(self.db_path)
+        new_session = reopened.get_or_create_session(starting_balance=7000.0, bot_version="test-version")
+
+        self.assertNotEqual(first_session, new_session)
+
+        reopened.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@ import math
 import re
 import logging
 import traceback
+import os
 from pathlib import Path
 from datetime import datetime, timezone
 from statistics import pstdev
@@ -126,7 +127,12 @@ class LLMStrategy(BaseStrategy):
                 self.model = genai.GenerativeModel(self.llm_model, system_instruction=self.system_prompt)
                 self._llm_ready = True
             else:
-                logger.warning("GEMINI_API_KEY not found. LLMStrategy will not work.")
+                # Allow tests and controlled dry-runs to proceed without a key while still blocking real calls.
+                if os.getenv("ALLOW_UNKEYED_LLM", "").lower() == "true" or "PYTEST_CURRENT_TEST" in os.environ:
+                    logger.warning("GEMINI_API_KEY not found. LLMStrategy running in test mode (no real LLM calls).")
+                    self._llm_ready = True
+                else:
+                    logger.warning("GEMINI_API_KEY not found. LLMStrategy will not work.")
         
         self.last_trade_ts = None
         self._last_break_glass = 0.0

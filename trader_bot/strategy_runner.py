@@ -70,6 +70,7 @@ from trader_bot.services.health_manager import HealthCircuitManager
 from trader_bot.services.trade_action_handler import TradeActionHandler
 from trader_bot.services.market_data_service import MarketDataService
 from trader_bot.services.resync_service import ResyncService
+from trader_bot.services.strategy_orchestrator import StrategyOrchestrator
 from trader_bot.technical_analysis import TechnicalAnalysis
 from trader_bot.trading_context import TradingContext
 from trader_bot.utils import get_client_order_id
@@ -192,6 +193,16 @@ class StrategyRunner:
         self.ohlcv_retention_limit = OHLCV_MAX_ROWS_PER_TIMEFRAME
         self.command_processor = CommandProcessor(self.db)
         self.plan_monitor = self._build_plan_monitor()
+        self.orchestrator = StrategyOrchestrator(
+            command_processor=self.command_processor,
+            plan_monitor=self.plan_monitor,
+            risk_manager=self.risk_manager,
+            health_manager=self.health_manager,
+            record_operational_metrics=self._record_operational_metrics,
+            loop_interval_seconds=LOOP_INTERVAL_SECONDS,
+            logger=logger,
+            actions_logger=bot_actions_logger,
+        )
 
     def _emit_telemetry(self, record: dict):
         """Emit structured telemetry as JSON line."""
@@ -233,6 +244,13 @@ class StrategyRunner:
         self.resync_service.risk_manager = self.risk_manager
         self.resync_service.set_session(self.session_id)
         self.resync_service.trade_sync_cutoff_minutes = TRADE_SYNC_CUTOFF_MINUTES
+
+    def _refresh_orchestrator_bindings(self):
+        """Keep orchestrator dependencies in sync when tests swap stubs."""
+        self.orchestrator.command_processor = self.command_processor
+        self.orchestrator.plan_monitor = self.plan_monitor
+        self.orchestrator.risk_manager = self.risk_manager
+        self.orchestrator.health_manager = self.health_manager
 
     def _get_active_symbols(self) -> list[str]:
         """Return ordered list of symbols to monitor/trade."""
@@ -553,7 +571,7 @@ class StrategyRunner:
             day_end_flatten_hour_utc=self.day_end_flatten_hour_utc,
             trail_to_breakeven_pct=self._apply_plan_trailing_pct,
         )
-        self.plan_monitor.refresh_bindings(
+        refresh_bindings = lambda: self.plan_monitor.refresh_bindings(  # noqa: E731
             bot=self.bot,
             db=self.db,
             cost_tracker=self.cost_tracker,
@@ -562,11 +580,12 @@ class StrategyRunner:
             holdings_updater=self._update_holdings_and_realized,
             session_stats_applier=self._apply_fill_to_session_stats,
         )
-        await self.plan_monitor.monitor(
+        await self.orchestrator.monitor_trade_plans(
             self.session_id,
             price_lookup=price_lookup,
             open_orders=open_orders,
             config=config,
+            refresh_bindings_cb=refresh_bindings,
         )
 
     async def initialize(self):
@@ -900,15 +919,17 @@ class StrategyRunner:
     async def run_loop(self, max_loops: int | None = None):
         """Main autonomous loop."""
         try:
-            await self.initialize()
+            self._refresh_orchestrator_bindings()
+            await self.orchestrator.start(self.initialize)
             self.running = True
             loops = 0
             
-            while self.running:
+            while self.running and self.orchestrator.running:
                 if self._kill_switch:
                     if not self.shutdown_reason:
                         self._set_shutdown_reason("kill switch")
                     bot_actions_logger.info("🛑 Kill switch active; exiting main loop.")
+                    self.orchestrator.request_stop(self.shutdown_reason)
                     self.running = False
                     break
                 try:
@@ -916,11 +937,12 @@ class StrategyRunner:
                         break
                     exchange_error_seen = False
                     # 0. Check for pending commands from dashboard
-                    command_result = await self.command_processor.process(
+                    command_result = await self.orchestrator.process_commands(
                         close_positions_cb=self._close_all_positions_safely,
                         stop_cb=self._set_shutdown_reason,
                     )
                     if command_result.stop_requested:
+                        self.orchestrator.request_stop(command_result.shutdown_reason)
                         self.running = False
                         if command_result.shutdown_reason and not self.shutdown_reason:
                             self.shutdown_reason = command_result.shutdown_reason
@@ -950,31 +972,21 @@ class StrategyRunner:
                             logger.warning(f"Could not log equity snapshot: {e}")
                     self.risk_manager.update_equity(current_equity)
                     
-                    # Check percentage-based daily loss (tier-aware)
-                    if self.risk_manager.start_of_day_equity and self.risk_manager.start_of_day_equity > 0:
-                        loss_percent = (self.risk_manager.daily_loss / self.risk_manager.start_of_day_equity) * 100
-                        limit_pct = self.daily_loss_pct
-                        if loss_percent > limit_pct:
-                            logger.error(f"Max daily loss exceeded: {loss_percent:.2f}% > {limit_pct}%. Stopping loop.")
-                            self._set_shutdown_reason(f"daily loss {loss_percent:.2f}% > {limit_pct}%")
-                            bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded ({loss_percent:.2f}%)")
-                            # Attempt to flatten positions before stopping
-                            await self._close_all_positions_safely()
-                            self._kill_switch = True
-                            break
-                    # Check absolute daily loss
-                    if self.risk_manager.daily_loss > MAX_DAILY_LOSS:
-                        if TRADING_MODE == 'PAPER':
-                            # In sandbox, large balances make absolute loss limits ($500) too tight.
-                            # We rely on the percentage check above for safety.
-                            logger.warning(f"Sandbox: Absolute daily loss exceeded (${self.risk_manager.daily_loss:.2f} > ${MAX_DAILY_LOSS:.2f}), but continuing loop.")
-                        else:
-                            logger.error(f"Max daily loss exceeded: ${self.risk_manager.daily_loss:.2f} > ${MAX_DAILY_LOSS:.2f}. Stopping loop.")
-                            self._set_shutdown_reason(f"daily loss ${self.risk_manager.daily_loss:.2f} > ${MAX_DAILY_LOSS:.2f}")
-                            bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded (${self.risk_manager.daily_loss:.2f})")
-                            await self._close_all_positions_safely()
-                            self._kill_switch = True
-                            break
+                    risk_result = await self.orchestrator.enforce_risk_budget(
+                        current_equity=current_equity,
+                        daily_loss_pct_limit=self.daily_loss_pct,
+                        max_daily_loss=MAX_DAILY_LOSS,
+                        trading_mode=TRADING_MODE,
+                        close_positions_cb=self._close_all_positions_safely,
+                        set_shutdown_reason=self._set_shutdown_reason,
+                    )
+                    if risk_result.should_stop:
+                        self._kill_switch = risk_result.kill_switch
+                        if risk_result.shutdown_reason and not self.shutdown_reason:
+                            self.shutdown_reason = risk_result.shutdown_reason
+                        self.orchestrator.request_stop(self.shutdown_reason)
+                        self.running = False
+                        break
 
                     # 2. Fetch Market Data
                     now_monotonic = asyncio.get_event_loop().time()
@@ -1036,14 +1048,12 @@ class StrategyRunner:
                         continue
 
                     primary_data = market_data.get(primary_symbol)
-                    stale, freshness_detail = self.health_manager.is_stale_market_data(primary_data)
-                    if stale:
-                        bot_actions_logger.info("⏸️ Skipping loop: market data stale or too latent")
+                    market_ok, freshness_detail = self.orchestrator.emit_market_health(primary_data)
+                    if not market_ok:
                         self._record_health_state("market_data", "stale", freshness_detail)
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
-                    else:
-                        self._record_health_state("market_data", "ok", freshness_detail)
+                    self._record_health_state("market_data", "ok", freshness_detail)
 
                     # Capture multi-timeframe OHLCV for richer context (primary symbol only)
                     try:
@@ -1125,7 +1135,7 @@ class StrategyRunner:
                         price_overrides = {sym: md.get('price') for sym, md in market_data.items() if md and md.get('price')}
                         price_overrides = price_overrides or None
                         current_exposure = self.risk_manager.get_total_exposure(price_overrides=price_overrides)
-                        self._record_operational_metrics(current_exposure, current_equity)
+                        self.orchestrator.emit_operational_metrics(current_exposure, current_equity)
                     except Exception as e:
                         logger.warning(f"Could not build positions for exposure: {e}")
 
@@ -1140,6 +1150,7 @@ class StrategyRunner:
                         if not self.shutdown_reason:
                             self._set_shutdown_reason("kill switch")
                         bot_actions_logger.info("🛑 Kill switch active; exiting main loop.")
+                        self.orchestrator.request_stop(self.shutdown_reason)
                         self.running = False
                         break
 
@@ -1498,6 +1509,7 @@ class StrategyRunner:
                 except KeyboardInterrupt:
                     logger.info("Stopping loop...")
                     self._set_shutdown_reason("KeyboardInterrupt")
+                    self.orchestrator.request_stop(self.shutdown_reason)
                     self.running = False
                     break
                 except Exception as e:
@@ -1505,7 +1517,7 @@ class StrategyRunner:
                     await asyncio.sleep(5)
         finally:
             # Always cleanup, even if there's an exception or break
-            await self.cleanup()
+            await self.orchestrator.cleanup(self.cleanup)
 
 async def main():
     runner = StrategyRunner()

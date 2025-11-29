@@ -1,4 +1,5 @@
 import pytest
+from trader_bot.config import CLIENT_ORDER_PREFIX
 
 from trader_bot.strategy_runner import StrategyRunner
 
@@ -38,7 +39,7 @@ async def test_reconcile_replaces_snapshots_and_updates_health(runner):
                 "price": 10100,
                 "amount": 0.5,
                 "remaining": 0.5,
-                "client_order_id": "BOT-v1-abc",
+                "client_order_id": f"{CLIENT_ORDER_PREFIX}abc",
             }
         ],
     )

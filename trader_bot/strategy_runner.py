@@ -69,6 +69,7 @@ from trader_bot.services.plan_monitor import PlanMonitor, PlanMonitorConfig
 from trader_bot.services.health_manager import HealthCircuitManager
 from trader_bot.services.trade_action_handler import TradeActionHandler
 from trader_bot.services.market_data_service import MarketDataService
+from trader_bot.services.resync_service import ResyncService
 from trader_bot.technical_analysis import TechnicalAnalysis
 from trader_bot.trading_context import TradingContext
 from trader_bot.utils import get_client_order_id
@@ -136,6 +137,15 @@ class StrategyRunner:
             monotonic=self._monotonic,
             ohlcv_min_capture_spacing_seconds=OHLCV_MIN_CAPTURE_SPACING_SECONDS,
             ohlcv_retention_limit=OHLCV_MAX_ROWS_PER_TIMEFRAME,
+            logger=logger,
+        )
+        self.resync_service = ResyncService(
+            db=self.db,
+            bot=self.bot,
+            risk_manager=self.risk_manager,
+            holdings_updater=self._update_holdings_and_realized,
+            session_stats_applier=self._apply_fill_to_session_stats,
+            record_health_state=self._record_health_state,
             logger=logger,
         )
         self.action_handler = TradeActionHandler(
@@ -216,6 +226,14 @@ class StrategyRunner:
             max_total_exposure=MAX_TOTAL_EXPOSURE,
         )
 
+    def _refresh_resync_bindings(self):
+        """Keep resync service aligned with current db/bot/session for tests and stubs."""
+        self.resync_service.db = self.db
+        self.resync_service.bot = self.bot
+        self.resync_service.risk_manager = self.risk_manager
+        self.resync_service.set_session(self.session_id)
+        self.resync_service.trade_sync_cutoff_minutes = TRADE_SYNC_CUTOFF_MINUTES
+
     def _get_active_symbols(self) -> list[str]:
         """Return ordered list of symbols to monitor/trade."""
         symbols = []
@@ -270,6 +288,21 @@ class StrategyRunner:
 
         if not symbols:
             symbols = ["BTC/USD"]
+        return symbols
+
+    def _get_sync_symbols(self) -> set[str]:
+        """Collect symbols from DB state for trade sync."""
+        symbols = set()
+        try:
+            symbols.update(self.db.get_distinct_trade_symbols(self.session_id) or [])
+            symbols.update({p.get('symbol') for p in self.db.get_positions(self.session_id) or [] if p.get('symbol')})
+            symbols.update({p.get('symbol') for p in self.db.get_open_trade_plans(self.session_id) or [] if p.get('symbol')})
+            symbols.update({o.get('symbol') for o in self.db.get_open_orders(self.session_id) or [] if o.get('symbol')})
+        except Exception:
+            pass
+        symbols = {s for s in symbols if isinstance(s, str) and '/' in s}
+        if not symbols:
+            symbols = {"BTC/USD"}
         return symbols
 
     def _record_health_state(self, key: str, value: str, detail: dict = None):
@@ -344,66 +377,8 @@ class StrategyRunner:
         Reconcile positions and open orders against the live exchange at startup.
         Ensures DB snapshots and risk manager state reflect actual venue state.
         """
-        if not self.session_id:
-            return
-        try:
-            live_positions = await self.bot.get_positions_async()
-        except Exception as exc:
-            self._record_health_state("restart_recovery", "error", {"stage": "positions", "error": str(exc)})
-            logger.warning(f"Could not fetch live positions during recovery: {exc}")
-            return
-
-        try:
-            live_orders = await self.bot.get_open_orders_async()
-            live_orders = self._filter_our_orders(live_orders)
-        except Exception as exc:
-            self._record_health_state("restart_recovery", "error", {"stage": "open_orders", "error": str(exc)})
-            logger.warning(f"Could not fetch live open orders during recovery: {exc}")
-            return
-
-        # Load existing snapshots
-        try:
-            db_positions = self.db.get_positions(self.session_id) or []
-            db_orders = self.db.get_open_orders(self.session_id) or []
-        except Exception as exc:
-            self._record_health_state("restart_recovery", "error", {"stage": "db_read", "error": str(exc)})
-            logger.warning(f"Could not load DB snapshots during recovery: {exc}")
-            return
-
-        # Replace snapshots with live state
-        try:
-            self.db.replace_positions(self.session_id, live_positions)
-            self.db.replace_open_orders(self.session_id, live_orders)
-        except Exception as exc:
-            self._record_health_state("restart_recovery", "error", {"stage": "db_write", "error": str(exc)})
-            logger.warning(f"Could not persist reconciled snapshots: {exc}")
-            return
-
-        # Update risk manager with live state
-        try:
-            positions_dict = {}
-            for pos in live_positions or []:
-                symbol = pos.get("symbol")
-                if not symbol:
-                    continue
-                mark = pos.get("current_price") or pos.get("avg_price") or 0.0
-                positions_dict[symbol] = {"quantity": pos.get("quantity", 0.0), "current_price": mark}
-            self.risk_manager.update_positions(positions_dict)
-            self.risk_manager.update_pending_orders(live_orders, price_lookup=None)
-        except Exception as exc:
-            logger.debug(f"Risk manager update after recovery failed: {exc}")
-
-        detail = {
-            "positions_before": len(db_positions),
-            "positions_after": len(live_positions or []),
-            "orders_before": len(db_orders),
-            "orders_after": len(live_orders or []),
-        }
-        self._record_health_state("restart_recovery", "ok", detail)
-        bot_actions_logger.info(
-            f"🧹 Startup reconciliation applied: positions {detail['positions_before']}→{detail['positions_after']}, "
-            f"open orders {detail['orders_before']}→{detail['orders_after']}"
-        )
+        self._refresh_resync_bindings()
+        await self.resync_service.reconcile_exchange_state()
 
     def _log_execution_trace(self, trace_id: int, execution_result: dict):
         """Attach execution outcome to LLM trace when available."""
@@ -432,43 +407,15 @@ class StrategyRunner:
 
     def _filter_our_orders(self, orders: list) -> list:
         """Only keep open orders with our client id prefix."""
-        filtered = []
-        for order in orders or []:
-            client_oid = get_client_order_id(order)
-            if client_oid and client_oid.startswith(CLIENT_ORDER_PREFIX):
-                filtered.append(order)
-        return filtered
+        return self.resync_service.filter_our_orders(orders)
 
     async def _reconcile_open_orders(self):
         """
         Refresh open order snapshot using live exchange data and drop any DB orders
         that no longer exist on the venue.
         """
-        if not self.session_id:
-            return
-        try:
-            exchange_orders = await self.bot.get_open_orders_async()
-            exchange_orders = self._filter_our_orders(exchange_orders)
-        except Exception as e:
-            logger.warning(f"Could not fetch open orders for reconciliation: {e}")
-            return
-
-        try:
-            db_orders = self.db.get_open_orders(self.session_id)
-        except Exception as e:
-            logger.warning(f"Could not load open orders from DB for reconciliation: {e}")
-            db_orders = []
-
-        db_ids = {str(o.get('order_id')) for o in db_orders if o.get('order_id')}
-        exch_ids = {str(o.get('order_id') or o.get('id')) for o in exchange_orders if o.get('order_id') or o.get('id')}
-        stale = db_ids - exch_ids
-        if stale:
-            bot_actions_logger.info(f"🧹 Removed {len(stale)} stale open orders not on exchange")
-
-        try:
-            self.db.replace_open_orders(self.session_id, exchange_orders)
-        except Exception as e:
-            logger.warning(f"Could not refresh open orders snapshot: {e}")
+        self._refresh_resync_bindings()
+        await self.resync_service.reconcile_open_orders()
 
     def _passes_rr_filter(self, action: str, price: float, stop_price: float, target_price: float) -> bool:
         """Delegate RR filter to action handler for compatibility."""
@@ -661,6 +608,7 @@ class StrategyRunner:
         self.session_id = self.db.get_or_create_session(starting_balance=initial_equity, bot_version=BOT_VERSION)
         self.session = self.db.get_session(self.session_id)
         self.portfolio_tracker.set_session(self.session_id)
+        self.resync_service.set_session(self.session_id)
         # In PAPER mode, reset starting_balance baseline to current equity to avoid mismatch against old sandbox inventories
         if TRADING_MODE == 'PAPER' and self.session.get('starting_balance') != initial_equity:
             try:
@@ -873,145 +821,17 @@ class StrategyRunner:
             self._kill_switch = True
 
     async def sync_trades_from_exchange(self):
-        """Sync recent trades from exchange to DB."""
+        """Sync recent trades from exchange to DB via resync service."""
         if not self.session_id:
             return
-
-        new_processed: set[tuple[str, str | None]] = set()
-        if not self.processed_trade_ids:
-            try:
-                persisted_ids = self.db.get_processed_trade_ids(self.session_id)
-                self.processed_trade_ids.update(persisted_ids or set())
-            except Exception as exc:
-                logger.debug(f"Could not load processed trade ids: {exc}")
-
-        try:
-            symbols = set()
-            try:
-                symbols.update(self.db.get_distinct_trade_symbols(self.session_id) or [])
-                symbols.update({p.get('symbol') for p in self.db.get_positions(self.session_id) or [] if p.get('symbol')})
-                symbols.update({p.get('symbol') for p in self.db.get_open_trade_plans(self.session_id) or [] if p.get('symbol')})
-                symbols.update({o.get('symbol') for o in self.db.get_open_orders(self.session_id) or [] if o.get('symbol')})
-            except Exception:
-                pass
-            symbols = {s for s in symbols if isinstance(s, str) and '/' in s}
-            if not symbols:
-                symbols = {'BTC/USD'}
-
-            since_iso = self.db.get_latest_trade_timestamp(self.session_id)
-            since_ms = None
-            if since_iso:
-                try:
-                    since_dt = datetime.fromisoformat(since_iso)
-                    since_ms = int(since_dt.timestamp() * 1000) - 5000
-                except Exception:
-                    since_ms = None
-            cutoff_dt = datetime.now(timezone.utc) - timedelta(minutes=TRADE_SYNC_CUTOFF_MINUTES)
-
-            for symbol in symbols:
-                cursor_since = since_ms
-                while True:
-                    trades = await self.bot.get_my_trades_async(symbol, since=cursor_since, limit=100)
-                    filtered_trades = []
-                    for t in trades:
-                        client_oid = get_client_order_id(t)
-                        if not client_oid:
-                            continue
-                        if not client_oid.startswith(CLIENT_ORDER_PREFIX):
-                            continue
-                        t["_client_oid"] = client_oid
-                        filtered_trades.append(t)
-                    trades = filtered_trades
-
-                    if not trades:
-                        break
-
-                    latest_ts = None
-                    for t in trades:
-                        client_oid = t.get('_client_oid') or get_client_order_id(t)
-                        trade_id = str(t['id'])
-                        if trade_id in self.processed_trade_ids:
-                            continue
-
-                        existing = self.db.conn.execute("SELECT id FROM trades WHERE trade_id = ?", (trade_id,)).fetchone()
-                        if existing:
-                            self.processed_trade_ids.add(trade_id)
-                            new_processed.add((trade_id, client_oid))
-                            continue
-
-                        ts_ms = t.get('timestamp')
-                        if ts_ms:
-                            trade_dt = datetime.fromtimestamp(ts_ms / 1000, timezone.utc)
-                            if trade_dt < cutoff_dt:
-                                self.processed_trade_ids.add(trade_id)
-                                new_processed.add((trade_id, client_oid))
-                                continue
-
-                        order_id = t.get('order')
-                        side = t['side'].upper()
-                        price = t['price']
-                        quantity = t['amount']
-                        fee = t.get('fee', {}).get('cost', 0.0)
-
-                        info = t.get('info') or {}
-                        liquidity = (
-                            t.get('liquidity')
-                            or info.get('liquidity')
-                            or info.get('fillLiquidity')
-                            or info.get('liquidityIndicator')
-                            or 'unknown'
-                        )
-                        if liquidity:
-                            liquidity = str(liquidity).lower()
-
-                        plan_reason = None
-                        try:
-                            plan_reason = self.db.get_trade_plan_reason_by_order(self.session_id, order_id, client_oid)
-                        except Exception:
-                            plan_reason = None
-                        reason = self.order_reasons.get(str(order_id)) or plan_reason
-                        if not reason:
-                            # Skip trades we cannot attribute to our client IDs/reasons
-                            self.processed_trade_ids.add(trade_id)
-                            new_processed.add((trade_id, client_oid))
-                            continue
-
-                        realized_pnl = self._update_holdings_and_realized(symbol, side, quantity, price, fee)
-
-                        self.db.log_trade(
-                            self.session_id,
-                            symbol,
-                            side,
-                            quantity,
-                            price,
-                            fee,
-                            reason,
-                            liquidity=liquidity,
-                            realized_pnl=realized_pnl,
-                            trade_id=trade_id,
-                            timestamp=t.get('datetime')
-                        )
-                        self._apply_fill_to_session_stats(order_id, fee, realized_pnl)
-                        self.processed_trade_ids.add(trade_id)
-                        new_processed.add((trade_id, client_oid))
-                        bot_actions_logger.info(f"✅ Synced trade: {side} {quantity} {symbol} @ ${price:,.2f} (Fee: ${fee:.4f})")
-
-                        ts = t.get('timestamp')
-                        if ts is not None:
-                            latest_ts = max(latest_ts or ts, ts)
-
-                    if latest_ts is None or len(trades) < 100:
-                        break
-                    cursor_since = latest_ts + 1
-
-        except Exception as e:
-            logger.exception(f"Error syncing trades: {e}")
-        finally:
-            if new_processed:
-                try:
-                    self.db.record_processed_trade_ids(self.session_id, new_processed)
-                except Exception as exc:
-                    logger.debug(f"Could not persist processed trade ids: {exc}")
+        self._refresh_resync_bindings()
+        await self.resync_service.sync_trades_from_exchange(
+            session_id=self.session_id,
+            processed_trade_ids=self.processed_trade_ids,
+            order_reasons=self.order_reasons,
+            plan_reason_lookup=self.db.get_trade_plan_reason_by_order,
+            get_symbols=lambda: self._get_sync_symbols(),
+        )
 
     async def cleanup(self):
         """Cleanup and close connection."""

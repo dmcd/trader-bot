@@ -1299,9 +1299,16 @@ class StrategyRunner:
                         quantity = t['amount']
                         fee = t.get('fee', {}).get('cost', 0.0)
 
-                        liquidity = 'unknown'
-                        if 'liquidity' in t.get('info', {}):
-                            liquidity = t['info']['liquidity']
+                        info = t.get('info') or {}
+                        liquidity = (
+                            t.get('liquidity')
+                            or info.get('liquidity')
+                            or info.get('fillLiquidity')
+                            or info.get('liquidityIndicator')
+                            or 'unknown'
+                        )
+                        if liquidity:
+                            liquidity = str(liquidity).lower()
 
                         plan_reason = None
                         try:

@@ -78,7 +78,7 @@ class StubBot:
         return self.open_orders
 
 
-def build_trade(trade_id, client_oid=None, order_id="order-1", side="buy", price=100.0, amount=1.0, fee=0.0):
+def build_trade(trade_id, client_oid=None, order_id="order-1", side="buy", price=100.0, amount=1.0, fee=0.0, info=None, liquidity=None):
     ts = int(datetime.now(timezone.utc).timestamp() * 1000)
     payload = {
         "id": trade_id,
@@ -92,6 +92,10 @@ def build_trade(trade_id, client_oid=None, order_id="order-1", side="buy", price
     }
     if client_oid is not None:
         payload["clientOrderId"] = client_oid
+    if info is not None:
+        payload["info"] = info
+    if liquidity is not None:
+        payload["liquidity"] = liquidity
     return payload
 
 
@@ -196,6 +200,33 @@ async def test_sync_trades_skips_invalid_symbols():
     await runner.sync_trades_from_exchange()
 
     assert runner.bot.called_symbols == ["BTC/USD"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "liquidity_fields,expected",
+    [
+        ({"liquidity": "maker"}, "maker"),
+        ({"info": {"fillLiquidity": "taker"}}, "taker"),
+        ({"info": {"liquidityIndicator": "maker_or_cancel"}}, "maker_or_cancel"),
+    ],
+)
+async def test_sync_trades_records_reported_liquidity(liquidity_fields, expected):
+    client_oid = f"{CLIENT_ORDER_PREFIX}liq"
+    trade_liq = build_trade("t-liq", client_oid=client_oid, **liquidity_fields)
+
+    runner = StrategyRunner(execute_orders=False)
+    runner.session_id = 5
+    runner.telemetry_logger = None
+    runner.db = StubDB(plan_reason="LLM reason")
+    runner.bot = StubBot([trade_liq])
+    runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
+    runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
+    runner.order_reasons = {}
+
+    await runner.sync_trades_from_exchange()
+
+    assert runner.db.logged_trades[0]["liquidity"] == expected
 
 
 def test_filter_our_orders_only_keeps_client_prefixed():

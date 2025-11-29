@@ -52,6 +52,27 @@ class TestTradingDatabase(unittest.TestCase):
         # Should return most recent first
         self.assertAlmostEqual(fetched[0]["close"], 2.0)
 
+    def test_prune_ohlcv_retains_latest_rows(self):
+        bars = []
+        for idx in range(6):
+            bars.append(
+                {
+                    "timestamp": 1_000_000 + (idx * 60),
+                    "open": float(idx),
+                    "high": float(idx) + 1,
+                    "low": float(idx),
+                    "close": float(idx) + 0.5,
+                    "volume": idx + 1,
+                }
+            )
+        self.db.log_ohlcv_batch(self.session_id, "ETH/USD", "5m", bars)
+        self.db.prune_ohlcv(self.session_id, "ETH/USD", "5m", retain=3)
+
+        remaining = self.db.get_recent_ohlcv(self.session_id, "ETH/USD", "5m", limit=10)
+        self.assertEqual(len(remaining), 3)
+        self.assertAlmostEqual(remaining[0]["close"], 5.5)
+        self.assertAlmostEqual(remaining[-1]["close"], 3.5)
+
     def test_multiple_sessions_created_per_version(self):
         next_session = self.db.get_or_create_session(starting_balance=6000.0, bot_version="test-version")
         self.assertNotEqual(self.session_id, next_session)

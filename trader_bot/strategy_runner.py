@@ -19,6 +19,8 @@ from trader_bot.config import (
     FEE_RATIO_COOLDOWN,
     GEMINI_API_KEY,
     HIGH_VOL_SIZE_FACTOR,
+    OHLCV_MAX_ROWS_PER_TIMEFRAME,
+    OHLCV_MIN_CAPTURE_SPACING_SECONDS,
     LOOP_INTERVAL_SECONDS,
     MAX_DAILY_LOSS,
     MAX_DAILY_LOSS_PERCENT,
@@ -135,6 +137,7 @@ class StrategyRunner:
         # Trade syncing state
         self.order_reasons = {}  # order_id -> reason
         self.processed_trade_ids = set()
+        self._last_ohlcv_capture: dict[tuple[str, str], float] = {}
         self._open_trade_plans = {}  # plan_id -> dict
         self.max_plan_age_minutes = PLAN_MAX_AGE_MINUTES
         self.day_end_flatten_hour_utc = None  # optional UTC hour to flatten plans
@@ -143,6 +146,8 @@ class StrategyRunner:
         self._apply_plan_trailing_pct = PLAN_TRAIL_TO_BREAKEVEN_PCT  # move stop to entry after move in favor
         self._pause_until = None  # timestamp (monotonic seconds) when pause expires
         self.shutdown_reason: str | None = None  # track why we stop
+        self.ohlcv_min_capture_spacing_seconds = OHLCV_MIN_CAPTURE_SPACING_SECONDS
+        self.ohlcv_retention_limit = OHLCV_MAX_ROWS_PER_TIMEFRAME
 
     def _emit_telemetry(self, record: dict):
         """Emit structured telemetry as JSON line."""
@@ -159,6 +164,21 @@ class StrategyRunner:
             return asyncio.get_event_loop().time()
         except Exception:
             return 0.0
+
+    def _timeframe_to_seconds(self, timeframe: str) -> int:
+        """Convert simple timeframe strings like '1m' or '1h' to seconds."""
+        try:
+            unit = timeframe[-1]
+            value = int(timeframe[:-1])
+            if unit == 'm':
+                return value * 60
+            if unit == 'h':
+                return value * 3600
+            if unit == 'd':
+                return value * 86400
+        except Exception:
+            return 0
+        return 0
 
     def _get_active_symbols(self) -> list[str]:
         """Return ordered list of symbols to monitor/trade."""
@@ -796,10 +816,24 @@ class StrategyRunner:
         if not hasattr(self.bot, "fetch_ohlcv"):
             return
         timeframes = ['1m', '5m', '1h', '1d']
+        now = self._monotonic()
         for tf in timeframes:
             try:
+                tf_seconds = self._timeframe_to_seconds(tf)
+                min_spacing = max(self.ohlcv_min_capture_spacing_seconds, tf_seconds or 0)
+                last_key = (symbol, tf)
+                last_capture = self._last_ohlcv_capture.get(last_key)
+                if last_capture is not None and (now - last_capture) < min_spacing:
+                    continue
+
                 bars = await self.bot.fetch_ohlcv(symbol, timeframe=tf, limit=50)
                 self.db.log_ohlcv_batch(self.session_id, symbol, tf, bars)
+                if self.ohlcv_retention_limit:
+                    try:
+                        self.db.prune_ohlcv(self.session_id, symbol, tf, self.ohlcv_retention_limit)
+                    except Exception as exc:
+                        logger.debug(f"OHLCV prune failed for {symbol} {tf}: {exc}")
+                self._last_ohlcv_capture[last_key] = now
             except Exception as e:
                 logger.debug(f"OHLCV fetch failed for {symbol} {tf}: {e}")
 

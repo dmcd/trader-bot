@@ -41,6 +41,8 @@ PRIORITY_MOVE_PCT = float(os.getenv('PRIORITY_MOVE_PCT', '1.5'))  # % move over 
 PRIORITY_LOOKBACK_MIN = int(os.getenv('PRIORITY_LOOKBACK_MIN', '5'))  # minutes to measure move
 BREAK_GLASS_COOLDOWN_MIN = int(os.getenv('BREAK_GLASS_COOLDOWN_MIN', '60'))  # min between break-glass uses
 BREAK_GLASS_SIZE_FACTOR = float(os.getenv('BREAK_GLASS_SIZE_FACTOR', '0.6'))  # reduce size on break-glass trades
+OHLCV_MIN_CAPTURE_SPACING_SECONDS = int(os.getenv('OHLCV_MIN_CAPTURE_SPACING_SECONDS', '60'))  # min spacing per timeframe fetch
+OHLCV_MAX_ROWS_PER_TIMEFRAME = int(os.getenv('OHLCV_MAX_ROWS_PER_TIMEFRAME', '1000'))  # retention per symbol/timeframe
 
 # Market microstructure guards
 MAX_SPREAD_PCT = float(os.getenv('MAX_SPREAD_PCT', '0.20'))  # Skip trading if spread exceeds this % of mid

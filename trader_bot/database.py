@@ -586,6 +586,30 @@ class TradingDatabase:
         """, records)
         self.conn.commit()
 
+    def prune_ohlcv(self, session_id: int, symbol: str, timeframe: str, retain: int):
+        """Keep only the most recent `retain` rows for a symbol/timeframe."""
+        if retain is None or retain <= 0:
+            return
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            DELETE FROM ohlcv_bars
+            WHERE session_id = ?
+              AND symbol = ?
+              AND timeframe = ?
+              AND id NOT IN (
+                SELECT id FROM ohlcv_bars
+                WHERE session_id = ?
+                  AND symbol = ?
+                  AND timeframe = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+              )
+            """,
+            (session_id, symbol, timeframe, session_id, symbol, timeframe, retain),
+        )
+        self.conn.commit()
+
     def get_recent_ohlcv(self, session_id: int, symbol: str, timeframe: str, limit: int = 200) -> List[Dict[str, Any]]:
         """Fetch recent OHLCV bars for a symbol/timeframe."""
         cursor = self.conn.cursor()

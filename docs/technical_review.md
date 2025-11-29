@@ -22,7 +22,7 @@
 - [ ] SQLite access uses a shared connection with `check_same_thread=False` but no locking; multiple async tasks call into the DB concurrently (equity logging, trade syncing, plan updates) which risks intermittent failures and partial writes.
 
 ## Observability / Ops
-- [ ] No retention or pruning on telemetry tables (`llm_traces`, `market_data`, `ohlcv_bars`, `commands`), so long-running sessions can bloat the DB and slow prompt/memory retrieval.
+- [x] No retention or pruning on telemetry tables (`llm_traces`, `market_data`, `ohlcv_bars`, `commands`), so long-running sessions can bloat the DB and slow prompt/memory retrieval.
 - [ ] Health-state telemetry logs exchange/tool circuits but does not emit metrics for key risk counters (daily loss, exposure headroom, fee ratio) or LLM budget state, making it difficult to monitor drift or cost leaks.
 - [ ] Equity sanity checks (`trader_bot/strategy_runner.py:117-205`) are info-level only and not surfaced to health state; discrepancies between broker equity and reconstructed PnL can go unnoticed.
 

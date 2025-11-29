@@ -19,9 +19,11 @@ from trader_bot.config import (
     FEE_RATIO_COOLDOWN,
     GEMINI_API_KEY,
     HIGH_VOL_SIZE_FACTOR,
+    COMMAND_RETENTION_DAYS,
     OHLCV_MAX_ROWS_PER_TIMEFRAME,
     OHLCV_MIN_CAPTURE_SPACING_SECONDS,
     LOOP_INTERVAL_SECONDS,
+    MARKET_DATA_RETENTION_MINUTES,
     MAX_DAILY_LOSS,
     MAX_DAILY_LOSS_PERCENT,
     MAX_ORDER_VALUE,
@@ -1087,6 +1089,10 @@ class StrategyRunner:
         
         # Clear any old pending commands from previous sessions
         self.db.clear_old_commands()
+        try:
+            self.db.prune_commands(COMMAND_RETENTION_DAYS)
+        except Exception as e:
+            logger.debug(f"Could not prune commands: {e}")
         
         # Initialize trading context
         self.context = TradingContext(self.db, self.session_id)
@@ -1720,6 +1726,11 @@ class StrategyRunner:
                                 )
                             except Exception as e:
                                 logger.warning(f"Could not log market data: {e}")
+                    if self.session_id:
+                        try:
+                            self.db.prune_market_data(self.session_id, MARKET_DATA_RETENTION_MINUTES)
+                        except Exception as e:
+                            logger.debug(f"Could not prune market data: {e}")
 
                     if primary_fetch_failed or not market_data.get(primary_symbol):
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)

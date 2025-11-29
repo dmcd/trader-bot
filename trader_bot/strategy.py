@@ -49,6 +49,7 @@ from trader_bot.config import (
     TRADING_MODE,
     OPENAI_API_KEY,
     OPENAI_BASE_URL,
+    LLM_TRACE_RETENTION_DAYS,
 )
 from trader_bot.llm_tools import TOOL_PARAM_MODELS, ToolName, ToolRequest, ToolResponse
 
@@ -1238,6 +1239,10 @@ class LLMStrategy(BaseStrategy):
                     decision_json=text,
                     market_context=market_context,
                 )
+                try:
+                    self.db.prune_llm_traces(session_id, LLM_TRACE_RETENTION_DAYS)
+                except Exception as e:
+                    logger.debug(f"Could not prune llm_traces: {e}")
             except Exception as e:
                 logger.warning(f"Could not log LLM trace: {e}")
 

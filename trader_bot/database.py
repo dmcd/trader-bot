@@ -2,7 +2,7 @@ import sqlite3
 import logging
 import os
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -455,6 +455,18 @@ class TradingDatabase:
         """, (execution_str, trace_id))
         self.conn.commit()
 
+    def prune_llm_traces(self, session_id: int, retention_days: int):
+        """Delete LLM traces older than the retention window for a session."""
+        if retention_days is None or retention_days <= 0:
+            return
+        cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "DELETE FROM llm_traces WHERE session_id = ? AND timestamp < ?",
+            (session_id, cutoff),
+        )
+        self.conn.commit()
+
     def get_recent_llm_stats(self, session_id: int, limit: int = 20) -> Dict[str, Any]:
         """Return summary of recent LLM calls for telemetry."""
         cursor = self.conn.cursor()
@@ -495,6 +507,18 @@ class TradingDatabase:
             INSERT INTO market_data (session_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (session_id, datetime.now().isoformat(), symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance))
+        self.conn.commit()
+
+    def prune_market_data(self, session_id: int, retention_minutes: int):
+        """Trim market data older than the retention window."""
+        if retention_minutes is None or retention_minutes <= 0:
+            return
+        cutoff = (datetime.now() - timedelta(minutes=retention_minutes)).isoformat()
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "DELETE FROM market_data WHERE session_id = ? AND timestamp < ?",
+            (session_id, cutoff),
+        )
         self.conn.commit()
     
     def get_recent_trades(self, session_id: int, limit: int = 10) -> List[Dict[str, Any]]:
@@ -846,6 +870,23 @@ class TradingDatabase:
         self.conn.commit()
         if cancelled_count > 0:
             logger.info(f"Cancelled {cancelled_count} old pending command(s) from previous session")
+
+    def prune_commands(self, retention_days: int):
+        """Remove executed/cancelled commands older than the retention window."""
+        if retention_days is None or retention_days <= 0:
+            return
+        cutoff = datetime.now() - timedelta(days=retention_days)
+        cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            DELETE FROM commands
+            WHERE created_at < ?
+              AND status IN ('executed', 'cancelled')
+            """,
+            (cutoff_str,),
+        )
+        self.conn.commit()
 
     # Health state helpers
     def set_health_state(self, key: str, value: str, detail: str = None):

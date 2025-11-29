@@ -43,6 +43,9 @@ BREAK_GLASS_COOLDOWN_MIN = int(os.getenv('BREAK_GLASS_COOLDOWN_MIN', '60'))  # m
 BREAK_GLASS_SIZE_FACTOR = float(os.getenv('BREAK_GLASS_SIZE_FACTOR', '0.6'))  # reduce size on break-glass trades
 OHLCV_MIN_CAPTURE_SPACING_SECONDS = int(os.getenv('OHLCV_MIN_CAPTURE_SPACING_SECONDS', '60'))  # min spacing per timeframe fetch
 OHLCV_MAX_ROWS_PER_TIMEFRAME = int(os.getenv('OHLCV_MAX_ROWS_PER_TIMEFRAME', '1000'))  # retention per symbol/timeframe
+MARKET_DATA_RETENTION_MINUTES = int(os.getenv('MARKET_DATA_RETENTION_MINUTES', '720'))  # minutes of market snapshots to keep per session
+LLM_TRACE_RETENTION_DAYS = int(os.getenv('LLM_TRACE_RETENTION_DAYS', '7'))  # days of full prompt/response traces to retain
+COMMAND_RETENTION_DAYS = int(os.getenv('COMMAND_RETENTION_DAYS', '7'))  # days to keep executed/cancelled commands
 
 # Market microstructure guards
 MAX_SPREAD_PCT = float(os.getenv('MAX_SPREAD_PCT', '0.20'))  # Skip trading if spread exceeds this % of mid

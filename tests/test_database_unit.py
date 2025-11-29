@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 
 from trader_bot.database import TradingDatabase
 
@@ -72,6 +73,67 @@ class TestTradingDatabase(unittest.TestCase):
         self.assertEqual(len(remaining), 3)
         self.assertAlmostEqual(remaining[0]["close"], 5.5)
         self.assertAlmostEqual(remaining[-1]["close"], 3.5)
+
+    def test_prune_market_data_removes_old_rows(self):
+        cursor = self.db.conn.cursor()
+        old_ts = (datetime.now() - timedelta(minutes=10)).isoformat()
+        recent_ts = datetime.now().isoformat()
+        cursor.execute(
+            """
+            INSERT INTO market_data (session_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (self.session_id, old_ts, "BTC/USD", 10.0, 9.5, 10.5, 1.0, None, None, None, None),
+        )
+        cursor.execute(
+            """
+            INSERT INTO market_data (session_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (self.session_id, recent_ts, "BTC/USD", 11.0, 10.5, 11.5, 2.0, None, None, None, None),
+        )
+        self.db.conn.commit()
+
+        self.db.prune_market_data(self.session_id, retention_minutes=5)
+        cursor.execute("SELECT COUNT(*) as cnt FROM market_data WHERE session_id = ?", (self.session_id,))
+        self.assertEqual(cursor.fetchone()["cnt"], 1)
+
+    def test_prune_llm_traces_respects_retention(self):
+        cursor = self.db.conn.cursor()
+        old_ts = (datetime.now() - timedelta(days=10)).isoformat()
+        recent_ts = datetime.now().isoformat()
+        cursor.execute(
+            "INSERT INTO llm_traces (session_id, timestamp, prompt, response, decision_json, market_context) VALUES (?, ?, ?, ?, ?, ?)",
+            (self.session_id, old_ts, "old", "resp", "{}", "{}"),
+        )
+        cursor.execute(
+            "INSERT INTO llm_traces (session_id, timestamp, prompt, response, decision_json, market_context) VALUES (?, ?, ?, ?, ?, ?)",
+            (self.session_id, recent_ts, "new", "resp", "{}", "{}"),
+        )
+        self.db.conn.commit()
+
+        self.db.prune_llm_traces(self.session_id, retention_days=7)
+        cursor.execute("SELECT COUNT(*) as cnt FROM llm_traces WHERE session_id = ?", (self.session_id,))
+        self.assertEqual(cursor.fetchone()["cnt"], 1)
+
+    def test_prune_commands_drops_old_executed(self):
+        cursor = self.db.conn.cursor()
+        old_ts = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+        recent_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            "INSERT INTO commands (command, status, created_at, executed_at) VALUES (?, 'executed', ?, ?)",
+            ("OLD", old_ts, old_ts),
+        )
+        cursor.execute(
+            "INSERT INTO commands (command, status, created_at, executed_at) VALUES (?, 'executed', ?, ?)",
+            ("RECENT", recent_ts, recent_ts),
+        )
+        self.db.conn.commit()
+
+        self.db.prune_commands(retention_days=7)
+        cursor.execute("SELECT command FROM commands")
+        remaining = {row["command"] for row in cursor.fetchall()}
+        self.assertEqual(remaining, {"RECENT"})
 
     def test_multiple_sessions_created_per_version(self):
         next_session = self.db.get_or_create_session(starting_balance=6000.0, bot_version="test-version")

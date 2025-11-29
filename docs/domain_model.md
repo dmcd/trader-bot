@@ -7,15 +7,15 @@ The bot persists trading state in SQLite for restart resilience, monitoring, and
 ```mermaid
 classDiagram
     direction LR
-    Session "sessions" --> Trade "trades" : 1-to-many
-    Session --> TradePlan "trade_plans" : 1-to-many
-    Session --> Position "positions" : snapshot
-    Session --> OpenOrder "open_orders" : snapshot
-    Session --> MarketData "market_data" : 1-to-many
-    Session --> OHLCV "ohlcv" : 1-to-many
-    Session --> Command "commands" : dashboard→bot
-    Session --> LLMTrace "llm_traces" : 1-to-many
-    Session --> SessionStatsCache "session_stats_cache" : 1-to-1
+    Session --> Trade : trades (1..*)
+    Session --> TradePlan : trade_plans (1..*)
+    Session --> Position : positions (snapshot)
+    Session --> OpenOrder : open_orders (snapshot)
+    Session --> MarketData : market_data (1..*)
+    Session --> OHLCV : ohlcv (1..*)
+    Session --> Command : commands (dashboard→bot)
+    Session --> LLMTrace : llm_traces (1..*)
+    Session --> SessionStatsCache : session_stats_cache (1..1)
 
     class Session {
       id:int

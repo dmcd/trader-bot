@@ -1383,14 +1383,17 @@ class StrategyRunner:
         
         logger.info("Cleanup complete.")
 
-    async def run_loop(self):
+    async def run_loop(self, max_loops: int | None = None):
         """Main autonomous loop."""
         try:
             await self.initialize()
             self.running = True
+            loops = 0
             
             while self.running:
                 try:
+                    if max_loops is not None and loops >= max_loops:
+                        break
                     exchange_error_seen = False
                     # 0. Check for pending commands from dashboard
                     pending_commands = self.db.get_pending_commands()
@@ -1960,6 +1963,7 @@ class StrategyRunner:
                     # 5. Sleep
                     logger.info(f"Sleeping for {LOOP_INTERVAL_SECONDS} seconds...")
                     await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                    loops += 1
 
                 except KeyboardInterrupt:
                     logger.info("Stopping loop...")

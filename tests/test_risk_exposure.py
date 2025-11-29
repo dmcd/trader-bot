@@ -101,6 +101,16 @@ class TestRiskManager(unittest.TestCase):
         expected_cap = rm_module.MAX_ORDER_VALUE - rm_module.ORDER_VALUE_BUFFER
         self.assertLessEqual(adjusted_value, expected_cap)
 
+        # Orders between the buffer cap and max should still be trimmed to the buffered cap
+        near_cap_price = 50.0
+        capped_value = rm_module.MAX_ORDER_VALUE - rm_module.ORDER_VALUE_BUFFER
+        near_cap_qty = (capped_value / near_cap_price) + 0.01  # $0.50 above buffered cap but under hard cap
+
+        buffered_qty, buffered_overage = self.rm.apply_order_value_buffer(near_cap_qty, near_cap_price)
+        self.assertGreater(buffered_overage, 0)
+        self.assertLess(buffered_qty, near_cap_qty)
+        self.assertAlmostEqual(buffered_qty * near_cap_price, capped_value)
+
         # Orders already under the cap are unchanged
         kept_qty, kept_overage = self.rm.apply_order_value_buffer(1.0, 10.0)
         self.assertEqual(kept_qty, 1.0)

@@ -94,14 +94,14 @@ class RiskManager:
         if price <= 0 or quantity <= 0:
             return quantity, 0.0
 
+        capped_value = max(0.0, MAX_ORDER_VALUE - ORDER_VALUE_BUFFER)
         order_value = quantity * price
-        if order_value <= MAX_ORDER_VALUE:
+        if order_value <= capped_value:
             return quantity, 0.0
 
-        capped_value = max(0.0, MAX_ORDER_VALUE - ORDER_VALUE_BUFFER)
         capped_qty = capped_value / price if price else 0.0
         capped_qty = max(0.0, capped_qty)
-        overage = order_value - MAX_ORDER_VALUE
+        overage = order_value - capped_value
         return capped_qty, overage
 
     def check_trade_allowed(self, symbol, action, quantity, price) -> RiskCheckResult:

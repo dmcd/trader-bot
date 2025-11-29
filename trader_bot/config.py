@@ -74,6 +74,8 @@ GEMINI_SANDBOX_SECRET = os.getenv('GEMINI_SANDBOX_SECRET', '') # Sandbox Secret
 # Exchange Selection
 # Options: 'GEMINI'
 ACTIVE_EXCHANGE = os.getenv('ACTIVE_EXCHANGE', 'GEMINI').upper()
+# Comma-separated symbols to trade/monitor, preserves order
+ACTIVE_SYMBOLS = [s.strip().upper() for s in os.getenv('ACTIVE_SYMBOLS', 'BTC/USD').split(',') if s.strip()]
 
 # Exchange Fees
 GEMINI_MAKER_FEE = float(os.getenv('GEMINI_MAKER_FEE', '0.0020'))  # 0.20%

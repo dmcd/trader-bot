@@ -50,6 +50,7 @@ from trader_bot.config import (
     TICKER_MAX_LATENCY_MS,
     MAKER_PREFERENCE_DEFAULT,
     MAKER_PREFERENCE_OVERRIDES,
+    ACTIVE_SYMBOLS,
 )
 from trader_bot.cost_tracker import CostTracker
 from trader_bot.data_fetch_coordinator import DataFetchCoordinator
@@ -159,6 +160,40 @@ class StrategyRunner:
             return asyncio.get_event_loop().time()
         except Exception:
             return 0.0
+
+    def _get_active_symbols(self) -> list[str]:
+        """Return ordered list of symbols to monitor/trade."""
+        symbols = []
+        # 1) Configured symbols (ordered)
+        symbols.extend([s for s in ACTIVE_SYMBOLS if s])
+        # 2) Live state from DB snapshots
+        try:
+            positions = self.db.get_positions(self.session_id) if self.session_id else []
+            symbols.extend([p.get("symbol") for p in positions or [] if p.get("symbol")])
+        except Exception:
+            pass
+        try:
+            orders = self.db.get_open_orders(self.session_id) if self.session_id else []
+            symbols.extend([o.get("symbol") for o in orders or [] if o.get("symbol")])
+        except Exception:
+            pass
+        try:
+            plans = self.db.get_open_trade_plans(self.session_id) if self.session_id else []
+            symbols.extend([p.get("symbol") for p in plans or [] if p.get("symbol")])
+        except Exception:
+            pass
+
+        deduped = []
+        seen = set()
+        for sym in symbols:
+            if not sym:
+                continue
+            sym_up = sym.upper()
+            if sym_up in seen:
+                continue
+            seen.add(sym_up)
+            deduped.append(sym_up)
+        return deduped or ["BTC/USD"]
 
     def _record_health_state(self, key: str, value: str, detail: dict = None):
         """Persist health state and emit telemetry."""
@@ -1519,33 +1554,54 @@ class StrategyRunner:
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
 
+                    symbols = self._get_active_symbols()
                     market_data = {}
-                    
-                    # Determine which symbol to fetch based on exchange
-                    symbol = 'BTC/USD'
-                    ticker_started = self._monotonic()
-                    try:
-                        data = await self.bot.get_market_data_async(symbol)
-                    except Exception as e:
-                        logger.warning(f"Market data fetch failed: {e}")
-                        self._record_exchange_failure("get_market_data_async", e)
-                        exchange_error_seen = True
-                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
-                        continue
-                    ticker_ended = self._monotonic()
-                    market_data[symbol] = data
-                    if data is not None:
-                        data["_latency_ms"] = (ticker_ended - ticker_started) * 1000
-                        data["_fetched_monotonic"] = ticker_ended
-                        data["fetched_at"] = datetime.now(timezone.utc).isoformat()
-                    price_now = data.get('price') if data else None
-                    if not data:
-                        self._record_exchange_failure("get_market_data_async", "empty")
-                        exchange_error_seen = True
+                    primary_symbol = symbols[0]
+                    primary_fetch_failed = False
+
+                    for sym in symbols:
+                        ticker_started = self._monotonic()
+                        try:
+                            md = await self.bot.get_market_data_async(sym)
+                        except Exception as e:
+                            logger.warning(f"Market data fetch failed for {sym}: {e}")
+                            self._record_exchange_failure("get_market_data_async", e)
+                            exchange_error_seen = True
+                            if sym == primary_symbol:
+                                primary_fetch_failed = True
+                                break
+                            continue
+                        ticker_ended = self._monotonic()
+                        if md is not None:
+                            md["_latency_ms"] = (ticker_ended - ticker_started) * 1000
+                            md["_fetched_monotonic"] = ticker_ended
+                            md["fetched_at"] = datetime.now(timezone.utc).isoformat()
+                        market_data[sym] = md
+
+                        # Log market data to database
+                        if md and self.session_id:
+                            try:
+                                self.db.log_market_data(
+                                    self.session_id,
+                                    sym,
+                                    md.get('price'),
+                                    md.get('bid'),
+                                    md.get('ask'),
+                                    md.get('volume') or 0.0,
+                                    spread_pct=md.get('spread_pct'),
+                                    bid_size=md.get('bid_size'),
+                                    ask_size=md.get('ask_size'),
+                                    ob_imbalance=md.get('ob_imbalance'),
+                                )
+                            except Exception as e:
+                                logger.warning(f"Could not log market data: {e}")
+
+                    if primary_fetch_failed or not market_data.get(primary_symbol):
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
 
-                    stale, freshness_detail = self._is_stale_market_data(data)
+                    primary_data = market_data.get(primary_symbol)
+                    stale, freshness_detail = self._is_stale_market_data(primary_data)
                     if stale:
                         bot_actions_logger.info("⏸️ Skipping loop: market data stale or too latent")
                         self._record_health_state("market_data", "stale", freshness_detail)
@@ -1554,32 +1610,14 @@ class StrategyRunner:
                     else:
                         self._record_health_state("market_data", "ok", freshness_detail)
 
-                    # Log market data to database
-                    if data and self.session_id:
-                        try:
-                            self.db.log_market_data(
-                                self.session_id,
-                                symbol,
-                                data.get('price'),
-                                data.get('bid'),
-                                data.get('ask'),
-                                data.get('volume') or 0.0,
-                                spread_pct=data.get('spread_pct'),
-                                bid_size=data.get('bid_size'),
-                                ask_size=data.get('ask_size'),
-                                ob_imbalance=data.get('ob_imbalance'),
-                            )
-                        except Exception as e:
-                            logger.warning(f"Could not log market data: {e}")
-
-                    # Capture multi-timeframe OHLCV for richer context
+                    # Capture multi-timeframe OHLCV for richer context (primary symbol only)
                     try:
-                        await self._capture_ohlcv(symbol)
+                        await self._capture_ohlcv(primary_symbol)
                     except Exception as e:
                         logger.debug(f"Could not capture OHLCV: {e}")
 
-                    # Microstructure filter: skip trading when spread/liquidity are poor
-                    if data and not self._liquidity_ok(data):
+                    # Microstructure filter: skip trading when spread/liquidity are poor (primary symbol)
+                    if primary_data and not self._liquidity_ok(primary_data):
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
 
@@ -1625,9 +1663,9 @@ class StrategyRunner:
                             if recent_data and recent_data[0].get('price'):
                                 current_price = recent_data[0]['price']
 
-                            # If this is the actively traded symbol, use live price
-                            if sym == symbol and data and data.get('price'):
-                                current_price = data['price']
+                            # Prefer live price when we have it
+                            if market_data.get(sym) and market_data[sym].get('price'):
+                                current_price = market_data[sym]['price']
 
                             if current_price:
                                 positions_dict[sym] = {
@@ -1637,8 +1675,9 @@ class StrategyRunner:
                         self.risk_manager.update_positions(positions_dict)
 
                         # Build price lookup for open orders (fallback to recent tick)
-                        if data and data.get('price'):
-                            price_lookup[symbol] = data['price']
+                        for sym, md in market_data.items():
+                            if md and md.get('price'):
+                                price_lookup[sym] = md['price']
                         for ord in open_orders or []:
                             sym = ord.get('symbol')
                             if sym and sym in price_lookup:
@@ -1648,7 +1687,8 @@ class StrategyRunner:
                                 price_lookup[sym] = latest[0]['price']
                         self.risk_manager.update_pending_orders(open_orders, price_lookup=price_lookup)
 
-                        price_overrides = {symbol: data['price']} if data and data.get('price') else None
+                        price_overrides = {sym: md.get('price') for sym, md in market_data.items() if md and md.get('price')}
+                        price_overrides = price_overrides or None
                         current_exposure = self.risk_manager.get_total_exposure(price_overrides=price_overrides)
                     except Exception as e:
                         logger.warning(f"Could not build positions for exposure: {e}")
@@ -1666,7 +1706,7 @@ class StrategyRunner:
                         continue
 
                     # Slippage guard: if latest price moved >2% from decision price, skip execution
-                    decision_price = market_data[symbol]['price'] if market_data.get(symbol) else None
+                    decision_price = market_data.get(primary_symbol, {}).get('price')
 
                     # 2.5 Sync Trades from Exchange (for logging only)
                     try:
@@ -1791,8 +1831,10 @@ class StrategyRunner:
                         elif action in ['BUY', 'SELL'] and quantity > 0:
                             # Get price for risk checks and execution
                             md = market_data.get(symbol)
-                            price = md.get('price') if md else (data['price'] if data else 0)
-                                
+                            price = md.get('price') if md else None
+                            if price is None:
+                                price = price_lookup.get(symbol)
+                            
                             if not price:
                                 logger.warning("Skipped trade: missing price data")
                                 continue

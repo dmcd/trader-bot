@@ -313,6 +313,7 @@ db_version_lookup = TradingDatabase()
 current_session_id = db_version_lookup.get_session_id_by_version(BOT_VERSION)
 available_versions = db_version_lookup.list_bot_versions()
 db_version_lookup.close()
+health_states = load_health_state()
 
 # --- Sidebar ---
 
@@ -356,7 +357,7 @@ db.close()
 
 
 # --- Main Content ---
-tab_live, tab_history = st.tabs(["Current Version", "History"])
+tab_live, tab_health, tab_history = st.tabs(["Current Version", "System Health", "History"])
 
 with tab_live:
     col1, col2 = st.columns([2, 1])
@@ -365,25 +366,6 @@ with tab_live:
         st.subheader("📊 Current Performance")
         df = load_history(current_session_id, user_timezone)
         session_stats, session_id = load_session_stats(current_session_id)
-        health_states = load_health_state()
-
-        if health_states:
-            st.markdown("### 🚦 Health")
-            for entry in health_states:
-                status_raw = entry.get("value") or "unknown"
-                status = status_raw.upper()
-                detail = summarize_health_detail(entry.get("detail"))
-                updated = entry.get("updated_at")
-                color = "#2ecc71" if status_raw == "ok" else "#f39c12" if status_raw == "degraded" else "#e74c3c"
-                st.markdown(
-                    f"<div style='padding:8px 12px;margin-bottom:6px;border-radius:8px;background:rgba(0,0,0,0.02);border-left:4px solid {color};'>"
-                    f"<strong>{entry.get('key')}</strong>: <span style='color:{color};font-weight:700;'>{status}</span>"
-                    f"{' — ' + detail if detail else ''}"
-                    f"{' (' + updated + ')' if updated else ''}"
-                    "</div>",
-                    unsafe_allow_html=True,
-                )
-            st.markdown("---")
         
         if session_stats and not df.empty:
             symbols = df['symbol'].unique()
@@ -559,6 +541,26 @@ with tab_live:
         st.text_area("Log Output", log_text, height=900, disabled=True)
         time.sleep(5)
         st.rerun()
+
+with tab_health:
+    st.subheader("🚦 System Health")
+    if health_states:
+        for entry in health_states:
+            status_raw = entry.get("value") or "unknown"
+            status = status_raw.upper()
+            detail = summarize_health_detail(entry.get("detail"))
+            updated = entry.get("updated_at")
+            color = "#2ecc71" if status_raw == "ok" else "#f39c12" if status_raw == "degraded" else "#e74c3c"
+            st.markdown(
+                f"<div style='padding:10px 12px;margin-bottom:8px;border-radius:10px;background:rgba(0,0,0,0.02);border-left:5px solid {color};'>"
+                f"<strong>{entry.get('key')}</strong>: <span style='color:{color};font-weight:700;'>{status}</span>"
+                f"{' — ' + detail if detail else ''}"
+                f"{' (' + updated + ')' if updated else ''}"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+    else:
+        st.info("No health data available yet.")
 
 with tab_history:
     st.subheader("📚 Historical Versions")

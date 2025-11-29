@@ -35,6 +35,7 @@ from trader_bot.config import (
     MIN_RR,
     MIN_TRADE_SIZE,
     MIN_TOP_OF_BOOK_NOTIONAL,
+    LLM_MAX_SESSION_COST,
     ORDER_VALUE_BUFFER,
     LLM_PROVIDER,
     PLAN_MAX_AGE_MINUTES,
@@ -237,6 +238,51 @@ class StrategyRunner:
             "session_id": self.session_id,
         }
         self._emit_telemetry(record)
+
+    def _record_operational_metrics(self, current_exposure: float, current_equity: float):
+        """Emit health metrics for risk counters and LLM budget."""
+        llm_cost = (self.session_stats or {}).get("total_llm_cost", 0.0) or 0.0
+        try:
+            sod = self.risk_manager.start_of_day_equity or 0.0
+            loss_pct = (self.risk_manager.daily_loss / sod * 100) if sod else 0.0
+            gross = (self.session_stats or {}).get("gross_pnl", 0.0) or 0.0
+            fees = (self.session_stats or {}).get("total_fees", 0.0) or 0.0
+            fee_ratio = fees / max(abs(gross), 1.0)
+            risk_detail = {
+                "daily_loss": self.risk_manager.daily_loss,
+                "daily_loss_pct": loss_pct,
+                "daily_loss_pct_limit": self.daily_loss_pct,
+                "daily_loss_limit": MAX_DAILY_LOSS,
+                "exposure": current_exposure,
+                "exposure_limit": MAX_TOTAL_EXPOSURE,
+                "exposure_headroom": max(0.0, MAX_TOTAL_EXPOSURE - current_exposure),
+                "fee_ratio": fee_ratio,
+                "gross_pnl": gross,
+                "total_fees": fees,
+                "total_llm_cost": llm_cost,
+                "equity": current_equity,
+            }
+            self._record_health_state("risk_metrics", "ok", risk_detail)
+        except Exception as exc:
+            logger.debug(f"Could not emit risk metrics: {exc}")
+
+        try:
+            session_started = None
+            if self.session:
+                session_started = self.session.get("created_at") or self.session.get("date")
+            burn_stats = self.cost_tracker.calculate_llm_burn(
+                total_llm_cost=llm_cost,
+                session_started=session_started,
+                budget=LLM_MAX_SESSION_COST,
+            )
+            budget_status = "ok"
+            if burn_stats.get("remaining_budget", 0.0) <= 0:
+                budget_status = "cap_hit"
+            elif burn_stats.get("pct_of_budget", 0.0) >= 0.8:
+                budget_status = "near_cap"
+            self._record_health_state("llm_budget", budget_status, burn_stats)
+        except Exception as exc:
+            logger.debug(f"Could not emit LLM budget metrics: {exc}")
 
     def _record_exchange_failure(self, context: str, error: Exception | str = None):
         """Track consecutive exchange failures and trigger auto-pause."""
@@ -1261,8 +1307,6 @@ class StrategyRunner:
 
     def _sanity_check_equity_vs_stats(self, current_equity: float):
         """Compare estimated net PnL vs equity delta; log if off by >10%."""
-        if TRADING_MODE == 'PAPER':
-            return
         if current_equity is None or self.session is None:
             return
         try:
@@ -1277,11 +1321,21 @@ class StrategyRunner:
             actual_net = current_equity - starting
             diff = actual_net - estimated_net
             pct = abs(diff) / max(1e-6, abs(actual_net) if actual_net != 0 else 1.0)
+            detail = {
+                "starting_balance": starting,
+                "estimated_net": estimated_net,
+                "equity_net": actual_net,
+                "diff": diff,
+                "diff_pct": pct * 100,
+            }
             if pct > 0.1:
                 logger.warning(
                     f"Equity/net mismatch: equity_net={actual_net:.2f}, estimated_net={estimated_net:.2f}, "
                     f"diff={diff:.2f} ({pct*100:.1f}%)"
                 )
+                self._record_health_state("equity_sanity", "mismatch", detail)
+            else:
+                self._record_health_state("equity_sanity", "ok", detail)
         except Exception as e:
             logger.debug(f"Equity sanity check failed: {e}")
 
@@ -1826,6 +1880,7 @@ class StrategyRunner:
                         price_overrides = {sym: md.get('price') for sym, md in market_data.items() if md and md.get('price')}
                         price_overrides = price_overrides or None
                         current_exposure = self.risk_manager.get_total_exposure(price_overrides=price_overrides)
+                        self._record_operational_metrics(current_exposure, current_equity)
                     except Exception as e:
                         logger.warning(f"Could not build positions for exposure: {e}")
 

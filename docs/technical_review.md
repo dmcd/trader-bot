@@ -23,8 +23,8 @@
 
 ## Observability / Ops
 - [x] No retention or pruning on telemetry tables (`llm_traces`, `market_data`, `ohlcv_bars`, `commands`), so long-running sessions can bloat the DB and slow prompt/memory retrieval.
-- [ ] Health-state telemetry logs exchange/tool circuits but does not emit metrics for key risk counters (daily loss, exposure headroom, fee ratio) or LLM budget state, making it difficult to monitor drift or cost leaks.
-- [ ] Equity sanity checks (`trader_bot/strategy_runner.py:117-205`) are info-level only and not surfaced to health state; discrepancies between broker equity and reconstructed PnL can go unnoticed.
+- [x] Health-state telemetry logs exchange/tool circuits but does not emit metrics for key risk counters (daily loss, exposure headroom, fee ratio) or LLM budget state, making it difficult to monitor drift or cost leaks.
+- [x] Equity sanity checks (`trader_bot/strategy_runner.py:117-205`) are info-level only and not surfaced to health state; discrepancies between broker equity and reconstructed PnL can go unnoticed.
 
 ## Testing Gaps / Suggestions
 - [ ] Add regression tests for partial close plan accounting to ensure plan size/status is updated and monitor does not double-close.

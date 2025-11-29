@@ -1,4 +1,5 @@
-from unittest.mock import AsyncMock
+import json
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -60,3 +61,40 @@ async def test_kill_switch_stops_loop(runner):
     runner.cleanup.assert_awaited()
     assert runner.running is False
     assert runner.shutdown_reason == "kill switch"
+
+
+def test_operational_metrics_emit_health_state(runner):
+    runner.session_id = runner.db.get_or_create_session(starting_balance=1000.0, bot_version="metric-test")
+    runner.session = runner.db.get_session(runner.session_id)
+    runner.risk_manager.start_of_day_equity = 1000.0
+    runner.risk_manager.daily_loss = 50.0
+    runner.session_stats = {"gross_pnl": 100.0, "total_fees": 10.0, "total_llm_cost": 2.0}
+    runner.cost_tracker = MagicMock()
+    runner.cost_tracker.calculate_llm_burn.return_value = {
+        "remaining_budget": 8.0,
+        "pct_of_budget": 0.2,
+        "total_llm_cost": 2.0,
+    }
+    runner.daily_loss_pct = 10.0
+
+    runner._record_operational_metrics(current_exposure=250.0, current_equity=950.0)
+
+    health = {row["key"]: row for row in runner.db.get_health_state()}
+    risk_detail = json.loads(health["risk_metrics"]["detail"])
+    assert risk_detail["exposure"] == 250.0
+    assert risk_detail["daily_loss"] == 50.0
+    budget_detail = json.loads(health["llm_budget"]["detail"])
+    assert budget_detail["total_llm_cost"] == 2.0
+
+
+def test_equity_sanity_health_state(runner):
+    runner.session_id = runner.db.get_or_create_session(starting_balance=1000.0, bot_version="eq-test")
+    runner.session = runner.db.get_session(runner.session_id)
+    runner.session_stats = {"gross_pnl": 0.0, "total_fees": 0.0, "total_llm_cost": 0.0}
+
+    runner._sanity_check_equity_vs_stats(current_equity=800.0)
+
+    health = {row["key"]: row for row in runner.db.get_health_state()}
+    detail = json.loads(health["equity_sanity"]["detail"])
+    assert health["equity_sanity"]["value"] == "mismatch"
+    assert detail["equity_net"] == -200.0

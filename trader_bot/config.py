@@ -104,3 +104,20 @@ CLIENT_ORDER_PREFIX = os.getenv('CLIENT_ORDER_PREFIX', f'BOT-{BOT_VERSION}')
 
 # Trade sync guardrails
 TRADE_SYNC_CUTOFF_MINUTES = int(os.getenv('TRADE_SYNC_CUTOFF_MINUTES', '1440'))  # ignore trades older than this window when syncing
+
+# Maker/taker preferences
+MAKER_PREFERENCE_DEFAULT = os.getenv('MAKER_PREFERENCE_DEFAULT', 'true').lower() == 'true'
+def _parse_maker_overrides(raw: str):
+    result = {}
+    for entry in raw.split(','):
+        if not entry.strip() or ':' not in entry:
+            continue
+        sym, val = entry.split(':', 1)
+        key = sym.strip().upper()
+        v = val.strip().lower()
+        if v in ('true', '1', 'yes'):
+            result[key] = True
+        elif v in ('false', '0', 'no'):
+            result[key] = False
+    return result
+MAKER_PREFERENCE_OVERRIDES = _parse_maker_overrides(os.getenv('MAKER_PREFERENCE_OVERRIDES', ''))

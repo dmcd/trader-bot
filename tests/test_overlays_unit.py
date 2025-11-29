@@ -58,6 +58,12 @@ class TestDeterministicOverlays(unittest.TestCase):
         ok_thin, _ = self.runner._slippage_within_limit(100, 100.6, thin_md)
         self.assertFalse(ok_thin)
 
+    def test_prefer_maker_overrides(self):
+        self.runner.maker_preference_default = True
+        self.runner.maker_preference_overrides = {"ETH/USD": False}
+        self.assertTrue(self.runner._prefer_maker("BTC/USD"))
+        self.assertFalse(self.runner._prefer_maker("eth/usd"))
+
 
 if __name__ == '__main__':
     unittest.main()

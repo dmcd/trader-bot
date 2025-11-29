@@ -20,7 +20,7 @@
   - [x] Improve restart recovery: reconcile open orders/positions vs. exchange on startup and patch DB snapshots accordingly.
 - Execution & Risk
   - [x] Replace fixed slippage pct with symbol-aware band driven by depth/vol; block fills when book notional is thin.
-  - [ ] Add maker/taker policy toggle (per symbol) with retries and fee modeling; record maker vs. taker in telemetry.
+  - [x] Add maker/taker policy toggle (per symbol) with retries and fee modeling; record maker vs. taker in telemetry.
   - [ ] Enforce min RR per plan with live price tolerance and auto-cancel of stale plans; trail stops using volatility-aware bands.
   - [ ] Introduce simple correlation buckets (e.g., BTC/ETH majors vs. alts) to cap same-direction stacking across related symbols.
 - LLM Context & Costs

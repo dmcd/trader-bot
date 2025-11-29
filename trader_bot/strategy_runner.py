@@ -48,6 +48,8 @@ from trader_bot.config import (
     TOOL_PAUSE_SECONDS,
     TICKER_MAX_AGE_SECONDS,
     TICKER_MAX_LATENCY_MS,
+    MAKER_PREFERENCE_DEFAULT,
+    MAKER_PREFERENCE_OVERRIDES,
 )
 from trader_bot.cost_tracker import CostTracker
 from trader_bot.data_fetch_coordinator import DataFetchCoordinator
@@ -110,6 +112,8 @@ class StrategyRunner:
         self.ticker_max_latency_ms = TICKER_MAX_LATENCY_MS
         self._exchange_health = "ok"
         self._tool_health = "ok"
+        self.maker_preference_default = MAKER_PREFERENCE_DEFAULT
+        self.maker_preference_overrides = MAKER_PREFERENCE_OVERRIDES or {}
         
         # Initialize Strategy
         self.strategy = LLMStrategy(
@@ -440,6 +444,15 @@ class StrategyRunner:
         cap = self._compute_slippage_cap(market_data_point or {})
         return move_pct <= cap, move_pct
 
+    def _prefer_maker(self, symbol: str) -> bool:
+        """Determine maker intent based on overrides, else default."""
+        if not symbol:
+            return self.maker_preference_default
+        symbol_up = symbol.upper()
+        if symbol_up in self.maker_preference_overrides:
+            return self.maker_preference_overrides[symbol_up]
+        return self.maker_preference_default
+
     def _stacking_block(
         self,
         action: str,
@@ -521,8 +534,10 @@ class StrategyRunner:
             return
         bot_actions_logger.info(f"🔻 Partial close {close_fraction*100:.0f}% of plan {plan_id}: {flatten_action} {qty_for_risk} {symbol}")
         try:
-            order_result = await self.bot.place_order_async(symbol, flatten_action, qty_for_risk, prefer_maker=True)
-            fee = self.cost_tracker.calculate_trade_fee(symbol, qty_for_risk, price or 0, flatten_action)
+            prefer_maker = self._prefer_maker(symbol)
+            order_result = await self.bot.place_order_async(symbol, flatten_action, qty_for_risk, prefer_maker=prefer_maker)
+            liquidity_tag = order_result.get('liquidity', 'taker') if order_result else 'taker'
+            fee = self.cost_tracker.calculate_trade_fee(symbol, qty_for_risk, price or 0, flatten_action, liquidity=liquidity_tag)
             realized = self._update_holdings_and_realized(symbol, flatten_action, qty_for_risk, price or 0, fee)
             self.db.log_trade(
                 self.session_id,
@@ -576,8 +591,10 @@ class StrategyRunner:
             self._emit_telemetry(telemetry_record)
             return
         try:
-            order_result = await self.bot.place_order_async(symbol, action, qty_buffered, prefer_maker=True)
-            fee = self.cost_tracker.calculate_trade_fee(symbol, qty_buffered, price or 0, action)
+            prefer_maker = self._prefer_maker(symbol)
+            order_result = await self.bot.place_order_async(symbol, action, qty_buffered, prefer_maker=prefer_maker)
+            liquidity_tag = order_result.get('liquidity', 'taker') if order_result else 'taker'
+            fee = self.cost_tracker.calculate_trade_fee(symbol, qty_buffered, price or 0, action, liquidity=liquidity_tag)
             realized = self._update_holdings_and_realized(symbol, action, qty_buffered, price or 0, fee)
             self.db.log_trade(
                 self.session_id,
@@ -793,8 +810,10 @@ class StrategyRunner:
                     try:
                         action = 'SELL' if side == 'BUY' else 'BUY'
                         bot_actions_logger.info(f"🏁 Closing plan {plan_id}: {reason}")
-                        order_result = await self.bot.place_order_async(plan['symbol'], action, size, prefer_maker=False)
-                        fee = self.cost_tracker.calculate_trade_fee(plan['symbol'], size, price_now, action)
+                        prefer_maker = self._prefer_maker(plan['symbol'])
+                        order_result = await self.bot.place_order_async(plan['symbol'], action, size, prefer_maker=prefer_maker)
+                        liquidity_tag = order_result.get('liquidity', 'taker') if order_result else 'taker'
+                        fee = self.cost_tracker.calculate_trade_fee(plan['symbol'], size, price_now, action, liquidity=liquidity_tag)
                         realized = self._update_holdings_and_realized(plan['symbol'], action, size, price_now, fee)
                         self.db.log_trade(
                             self.session_id,
@@ -1132,7 +1151,7 @@ class StrategyRunner:
                     price = data.get('price', 0) if data else 0
                     result = await self.bot.place_order_async(symbol, 'SELL', quantity, prefer_maker=False)
                     if result:
-                        fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, 'SELL')
+                        fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, 'SELL', liquidity=result.get('liquidity', 'taker'))
                         realized_pnl = self._update_holdings_and_realized(symbol, 'SELL', quantity, price, fee)
                         self.db.log_trade(
                             self.session_id,
@@ -1723,6 +1742,9 @@ class StrategyRunner:
                             qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
                         bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol} - {reason}")
 
+                        prefer_maker = self._prefer_maker(symbol)
+                        telemetry_record["prefer_maker"] = prefer_maker
+
                         risk_result = self.risk_manager.check_trade_allowed(symbol, action, quantity, price)
                         telemetry_record["risk_allowed"] = risk_result.allowed
                         telemetry_record["risk_reason"] = risk_result.reason
@@ -1738,8 +1760,9 @@ class StrategyRunner:
                                 continue
 
                             # Calculate fee before execution (estimate)
-                            estimated_fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, action)
-                            liquidity = "maker_intent"
+                            liquidity_hint = "maker" if prefer_maker else "taker"
+                            estimated_fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, action, liquidity=liquidity_hint)
+                            liquidity = "maker_intent" if prefer_maker else "taker_intent"
                             # Capture stop/target if provided by strategy
                             stop_price = getattr(signal, 'stop_price', None)
                             target_price = getattr(signal, 'target_price', None)
@@ -1832,7 +1855,7 @@ class StrategyRunner:
                             while retries < 2 and order_result is None:
                                 try:
                                     order_result = await asyncio.wait_for(
-                                        self.bot.place_order_async(symbol, action, quantity, prefer_maker=True),
+                                        self.bot.place_order_async(symbol, action, quantity, prefer_maker=prefer_maker),
                                         timeout=15
                                     )
                                 except asyncio.TimeoutError:

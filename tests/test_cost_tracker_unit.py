@@ -10,6 +10,15 @@ class TestCostTracker(unittest.TestCase):
         expected = 0.5 * 20000.0 * tracker.fee_rates["GEMINI"]["taker"]
         self.assertAlmostEqual(fee, expected)
 
+    def test_gemini_fee_maker_vs_taker(self):
+        tracker = CostTracker("GEMINI")
+        trade_value = 1.0 * 1000.0
+        taker_fee = tracker.calculate_trade_fee("BTC/USD", quantity=1.0, price=1000.0, action="BUY", liquidity="taker")
+        maker_fee = tracker.calculate_trade_fee("BTC/USD", quantity=1.0, price=1000.0, action="BUY", liquidity="maker")
+        self.assertAlmostEqual(taker_fee, trade_value * tracker.fee_rates["GEMINI"]["taker"])
+        self.assertAlmostEqual(maker_fee, trade_value * tracker.fee_rates["GEMINI"]["maker"])
+        self.assertLess(maker_fee, taker_fee)
+
     def test_llm_costs_and_net_pnl(self):
         tracker = CostTracker("GEMINI")
         cost = tracker.calculate_llm_cost(input_tokens=1000, output_tokens=500)

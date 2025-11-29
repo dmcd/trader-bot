@@ -49,15 +49,16 @@ class CostTracker:
             )
     
     def calculate_trade_fee(self, symbol: str, quantity: float, price: float, 
-                           action: str = 'BUY') -> float:
-        """Calculate trading fee based on exchange and trade details."""
+                           action: str = 'BUY', liquidity: str = 'taker') -> float:
+        """Calculate trading fee based on exchange, trade details, and maker/taker liquidity."""
         
         if self.exchange == 'GEMINI':
             # Crypto: percentage-based fee
             trade_value = quantity * price
-            # Assume taker fee (immediate execution)
-            fee = trade_value * self.fee_rates['GEMINI']['taker']
-            logger.debug(f"Gemini fee: ${fee:.4f} ({self.fee_rates['GEMINI']['taker']*100}% of ${trade_value:.2f})")
+            liq = (liquidity or 'taker').lower()
+            fee_rate = self.fee_rates['GEMINI'].get('maker' if liq == 'maker' else 'taker')
+            fee = trade_value * fee_rate
+            logger.debug(f"Gemini fee: ${fee:.4f} ({fee_rate*100}% of ${trade_value:.2f}) [{liq}]")
             return fee
         
 

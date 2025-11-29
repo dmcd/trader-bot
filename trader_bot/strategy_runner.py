@@ -142,6 +142,7 @@ class StrategyRunner:
         self.telemetry_logger = telemetry_logger
         self._apply_plan_trailing_pct = PLAN_TRAIL_TO_BREAKEVEN_PCT  # move stop to entry after move in favor
         self._pause_until = None  # timestamp (monotonic seconds) when pause expires
+        self.shutdown_reason: str | None = None  # track why we stop
 
     def _emit_telemetry(self, record: dict):
         """Emit structured telemetry as JSON line."""
@@ -1173,6 +1174,11 @@ class StrategyRunner:
         if current_equity is not None:
             self._sanity_check_equity_vs_stats(current_equity)
 
+    def _set_shutdown_reason(self, reason: str):
+        """Keep the first shutdown reason to surface in logs."""
+        if not self.shutdown_reason:
+            self.shutdown_reason = reason
+
     async def _close_all_positions_safely(self):
         """Attempt to flatten all positions using market-ish orders."""
         try:
@@ -1207,6 +1213,7 @@ class StrategyRunner:
                     logger.error(f"Error flattening {symbol}: {e}")
         except Exception as e:
             logger.error(f"Flatten-all failed: {e}")
+            self._set_shutdown_reason("flatten-all failed")
             self._kill_switch = True
 
     async def _reconnect_bot(self):
@@ -1339,7 +1346,8 @@ class StrategyRunner:
 
     async def cleanup(self):
         """Cleanup and close connection."""
-        logger.info("Cleaning up connections...")
+        logger.info(f"Cleaning up connections... (reason: {self.shutdown_reason or 'unspecified'})")
+        bot_actions_logger.info(f"🧹 Cleanup starting (reason: {self.shutdown_reason or 'unspecified'})")
         
         # Save final session statistics
         if self.session_id:
@@ -1462,6 +1470,7 @@ class StrategyRunner:
                         limit_pct = self.daily_loss_pct
                         if loss_percent > limit_pct:
                             logger.error(f"Max daily loss exceeded: {loss_percent:.2f}% > {limit_pct}%. Stopping loop.")
+                            self._set_shutdown_reason(f"daily loss {loss_percent:.2f}% > {limit_pct}%")
                             bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded ({loss_percent:.2f}%)")
                             # Attempt to flatten positions before stopping
                             await self._close_all_positions_safely()
@@ -1475,6 +1484,7 @@ class StrategyRunner:
                             logger.warning(f"Sandbox: Absolute daily loss exceeded (${self.risk_manager.daily_loss:.2f} > ${MAX_DAILY_LOSS:.2f}), but continuing loop.")
                         else:
                             logger.error(f"Max daily loss exceeded: ${self.risk_manager.daily_loss:.2f} > ${MAX_DAILY_LOSS:.2f}. Stopping loop.")
+                            self._set_shutdown_reason(f"daily loss ${self.risk_manager.daily_loss:.2f} > ${MAX_DAILY_LOSS:.2f}")
                             bot_actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded (${self.risk_manager.daily_loss:.2f})")
                             await self._close_all_positions_safely()
                             self._kill_switch = True
@@ -1984,6 +1994,7 @@ class StrategyRunner:
 
                 except KeyboardInterrupt:
                     logger.info("Stopping loop...")
+                    self._set_shutdown_reason("KeyboardInterrupt")
                     self.running = False
                     break
                 except Exception as e:
@@ -2003,6 +2014,7 @@ async def main():
         """Handle Ctrl+C gracefully"""
         logger.info("Received shutdown signal, stopping bot...")
         bot_actions_logger.info("🛑 Bot shutting down...")
+        runner._set_shutdown_reason(f"signal {sig.name if hasattr(sig, 'name') else sig}")
         runner.running = False
     
     # Register signal handlers

@@ -18,7 +18,6 @@
   - [ ] Add circuit breaker / auto-pause on consecutive exchange or tool failures; surface state in telemetry + dashboard.
   - [ ] Tag data freshness/latency for ticker, books, and OHLCV; skip or down-weight stale feeds; add stale-feed alerts.
   - [ ] Improve restart recovery: reconcile open orders/positions vs. exchange on startup and patch DB snapshots accordingly.
-  - [ ] Emit a per-loop heartbeat (exposure, open orders/plans, equity delta, LLM error streak, cost burn) for monitoring.
 - Execution & Risk
   - [ ] Replace fixed slippage pct with symbol-aware band driven by depth/vol; block fills when book notional is thin.
   - [ ] Add maker/taker policy toggle (per symbol) with retries and fee modeling; record maker vs. taker in telemetry.
@@ -32,8 +31,6 @@
 - Product & UX
   - [ ] Expand dashboard with controls: pause/resume, lower caps, flatten positions, cancel all, toggle maker/taker policy.
   - [ ] Add “what changed since last loop” panel (price deltas, exposure shifts, new plans/orders, errors).
-  - [ ] Provide a dry-run/sim mode that records decisions and risk rejections without placing orders for fast iteration.
-- Testing & Validation
   - [ ] Add integration test that runs StrategyRunner against a stub exchange + stub LLM to verify spacing, slippage, and risk gates.
   - [ ] Property tests for tool payload clamps (json size) and timeframe normalization; regression tests for plan trail-to-breakeven logic.
   - [ ] Backfill metrics validation: reconcile DB session stats vs. equity snapshots and report drift beyond threshold.

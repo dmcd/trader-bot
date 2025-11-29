@@ -25,6 +25,10 @@ MIN_RR = float(os.getenv('MIN_RR', '1.2'))  # Minimum risk/reward ratio when sto
 MAX_SLIPPAGE_PCT = float(os.getenv('MAX_SLIPPAGE_PCT', '0.5'))  # Max price move % allowed between decision and execution
 HIGH_VOL_SIZE_FACTOR = float(os.getenv('HIGH_VOL_SIZE_FACTOR', '0.6'))  # Scale size in high vol regimes
 MED_VOL_SIZE_FACTOR = float(os.getenv('MED_VOL_SIZE_FACTOR', '0.8'))  # Scale size in medium vol regimes
+EXCHANGE_ERROR_THRESHOLD = int(os.getenv('EXCHANGE_ERROR_THRESHOLD', '3'))  # consecutive exchange errors before auto-pause
+EXCHANGE_PAUSE_SECONDS = int(os.getenv('EXCHANGE_PAUSE_SECONDS', '60'))  # pause duration after exchange circuit trips
+TOOL_ERROR_THRESHOLD = int(os.getenv('TOOL_ERROR_THRESHOLD', '3'))  # consecutive tool failures before auto-pause
+TOOL_PAUSE_SECONDS = int(os.getenv('TOOL_PAUSE_SECONDS', '60'))  # pause duration after tool circuit trips
 
 # Cadence & spacing
 LOOP_INTERVAL_SECONDS = int(os.getenv('LOOP_INTERVAL_SECONDS', '300'))  # main loop sleep (default 5 min)

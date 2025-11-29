@@ -51,6 +51,8 @@ class DataFetchCoordinator:
         allowed_symbols: Optional[List[str]] = None,
         rate_limits: Optional[Dict[ToolName, int]] = None,
         rate_limit_window_seconds: int = TOOL_RATE_LIMIT_WINDOW_SECONDS,
+        error_callback: Any = None,
+        success_callback: Any = None,
     ):
         self.exchange = exchange
         self.max_bars = max_bars
@@ -68,6 +70,8 @@ class DataFetchCoordinator:
         self.rate_limit_window_seconds = rate_limit_window_seconds
         self._tool_counts: Dict[ToolName, int] = {}
         self._tool_window_start = time.time()
+        self.error_callback = error_callback
+        self.success_callback = success_callback
 
     def _cache_get(self, key: str) -> Optional[Dict[str, Any]]:
         entry = self._cache.get(key)
@@ -225,11 +229,18 @@ class DataFetchCoordinator:
 
     async def handle_requests(self, requests: List[ToolRequest]) -> List[ToolResponse]:
         responses: List[ToolResponse] = []
+        had_error = False
         for req in requests:
             try:
                 symbol = getattr(req.params, "symbol", "") if hasattr(req, "params") else ""
                 if symbol and not self._is_symbol_allowed(symbol):
                     logger.info(f"Tool request {req.id} rejected: symbol {symbol} not in allowlist")
+                    had_error = True
+                    if self.error_callback:
+                        try:
+                            self.error_callback(req, "symbol_not_allowed")
+                        except Exception:
+                            logger.debug("Tool error callback failed")
                     responses.append(
                         ToolResponse(
                             id=req.id,
@@ -242,6 +253,12 @@ class DataFetchCoordinator:
 
                 if not self._check_rate_limit(req.tool):
                     logger.info(f"Tool request {req.id} dropped: rate limit exceeded for {req.tool.value}")
+                    had_error = True
+                    if self.error_callback:
+                        try:
+                            self.error_callback(req, "rate_limited")
+                        except Exception:
+                            logger.debug("Tool error callback failed")
                     responses.append(
                         ToolResponse(
                             id=req.id,
@@ -264,5 +281,30 @@ class DataFetchCoordinator:
                 responses.append(ToolResponse(id=req.id, tool=req.tool, data=data))
             except Exception as exc:
                 logger.error(f"Tool request {req.id} failed: {exc}")
+                had_error = True
+                if self.error_callback:
+                    try:
+                        self.error_callback(req, exc)
+                    except Exception:
+                        logger.debug("Tool error callback failed")
                 responses.append(ToolResponse(id=req.id, tool=req.tool, data={}, error=str(exc)))
+                continue
+
+            # Track per-response errors from the tool layer
+            if responses and responses[-1].error:
+                had_error = True
+                if self.error_callback:
+                    try:
+                        self.error_callback(req, responses[-1].error)
+                    except Exception:
+                        logger.debug("Tool error callback failed")
+            else:
+                # No error for this request; defer success notification until batch end
+                pass
+
+        if self.success_callback and not had_error and requests:
+            try:
+                self.success_callback()
+            except Exception:
+                logger.debug("Tool success callback failed")
         return responses

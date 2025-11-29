@@ -221,6 +221,16 @@ class TradingDatabase:
             )
         """)
 
+        # Health state table (key/value) for surfacing circuit breakers and ops signals
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS health_state (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                detail TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Session stats cache to persist in-memory aggregates across restarts
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS session_stats_cache (
@@ -770,6 +780,30 @@ class TradingDatabase:
         self.conn.commit()
         if cancelled_count > 0:
             logger.info(f"Cancelled {cancelled_count} old pending command(s) from previous session")
+
+    # Health state helpers
+    def set_health_state(self, key: str, value: str, detail: str = None):
+        """Upsert health state key/value with optional detail JSON/text."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO health_state (key, value, detail, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+                value=excluded.value,
+                detail=excluded.detail,
+                updated_at=CURRENT_TIMESTAMP
+        """, (key, value, detail))
+        self.conn.commit()
+
+    def get_health_state(self) -> List[Dict[str, Any]]:
+        """Return all health state entries."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT key, value, detail, updated_at
+            FROM health_state
+            ORDER BY key
+        """)
+        return [dict(row) for row in cursor.fetchall()]
     
     def close(self):
         """Close database connection."""

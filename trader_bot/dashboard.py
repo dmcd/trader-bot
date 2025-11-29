@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import time
@@ -254,6 +255,29 @@ def load_trade_plans(session_id):
     finally:
         db.close()
 
+def load_health_state():
+    db = TradingDatabase()
+    try:
+        return db.get_health_state()
+    finally:
+        db.close()
+
+def summarize_health_detail(detail):
+    if not detail:
+        return ""
+    try:
+        parsed = json.loads(detail)
+        if isinstance(parsed, dict):
+            parts = []
+            for key, val in parsed.items():
+                if val is None:
+                    continue
+                parts.append(f"{key}: {val}")
+            return ", ".join(parts)
+        return str(parsed)
+    except Exception:
+        return str(detail)
+
 # --- Page Config ---
 st.set_page_config(
     page_title="Dennis-Day Trading Bot",
@@ -321,6 +345,25 @@ with tab_live:
         st.subheader("📊 Current Performance")
         df = load_history(current_session_id, user_timezone)
         session_stats, session_id = load_session_stats(current_session_id)
+        health_states = load_health_state()
+
+        if health_states:
+            st.markdown("### 🚦 Health")
+            for entry in health_states:
+                status_raw = entry.get("value") or "unknown"
+                status = status_raw.upper()
+                detail = summarize_health_detail(entry.get("detail"))
+                updated = entry.get("updated_at")
+                color = "#2ecc71" if status_raw == "ok" else "#f39c12" if status_raw == "degraded" else "#e74c3c"
+                st.markdown(
+                    f"<div style='padding:8px 12px;margin-bottom:6px;border-radius:8px;background:rgba(0,0,0,0.02);border-left:4px solid {color};'>"
+                    f"<strong>{entry.get('key')}</strong>: <span style='color:{color};font-weight:700;'>{status}</span>"
+                    f"{' — ' + detail if detail else ''}"
+                    f"{' (' + updated + ')' if updated else ''}"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+            st.markdown("---")
         
         if session_stats and not df.empty:
             symbols = df['symbol'].unique()

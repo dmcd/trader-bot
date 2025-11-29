@@ -923,6 +923,13 @@ class StrategyRunner:
             await self.orchestrator.start(self.initialize)
             self.running = True
             loops = 0
+
+            async def sleep_loop():
+                """Sleep for the configured interval and bump loop counter."""
+                nonlocal loops
+                logger.info(f"Sleeping for {LOOP_INTERVAL_SECONDS} seconds...")
+                await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                loops += 1
             
             while self.running and self.orchestrator.running:
                 if self._kill_switch:
@@ -1220,6 +1227,7 @@ class StrategyRunner:
                             telemetry_record["status"] = "hold"
                             self._log_execution_trace(trace_id, {"status": "hold", "reason": reason})
                             self._emit_telemetry(telemetry_record)
+                            await sleep_loop()
                             continue
                         
                         elif action == 'CANCEL':
@@ -1229,6 +1237,7 @@ class StrategyRunner:
                                 telemetry_record["error"] = "missing order_id"
                                 self._log_execution_trace(trace_id, {"status": "cancel_missing_id"})
                                 self._emit_telemetry(telemetry_record)
+                                await sleep_loop()
                                 continue
                             cancel_id = order_id
                             if isinstance(order_id, str) and order_id.isdigit():
@@ -1253,18 +1262,22 @@ class StrategyRunner:
                                 telemetry_record["error"] = str(e)
                             self._log_execution_trace(trace_id, telemetry_record)
                             self._emit_telemetry(telemetry_record)
+                            await sleep_loop()
                             continue
 
                         elif action == 'UPDATE_PLAN':
                             await self._handle_update_plan(signal, telemetry_record, trace_id)
+                            await sleep_loop()
                             continue
 
                         elif action == 'PARTIAL_CLOSE':
                             await self._handle_partial_close(signal, telemetry_record, trace_id, market_data, current_exposure)
+                            await sleep_loop()
                             continue
 
                         elif action == 'CLOSE_POSITION':
                             await self._handle_close_position(signal, telemetry_record, trace_id, market_data)
+                            await sleep_loop()
                             continue
 
                         elif action == 'PAUSE_TRADING':
@@ -1276,6 +1289,7 @@ class StrategyRunner:
                             telemetry_record["pause_until"] = pause_until
                             self._emit_telemetry(telemetry_record)
                             bot_actions_logger.info(f"⏸️ Trading paused for {pause_seconds/60:.1f} minutes by LLM request")
+                            await sleep_loop()
                             continue
 
                         elif action in ['BUY', 'SELL'] and quantity > 0:
@@ -1287,6 +1301,7 @@ class StrategyRunner:
                             
                             if not price:
                                 logger.warning("Skipped trade: missing price data")
+                                await sleep_loop()
                                 continue
 
                         # Volatility sizing adjustment
@@ -1298,6 +1313,7 @@ class StrategyRunner:
 
                         if quantity <= 0:
                             logger.warning("Skipped trade: buffered quantity became non-positive")
+                            await sleep_loop()
                             continue
 
                         # Format quantity appropriately (show more decimals for small amounts) after buffering
@@ -1322,6 +1338,7 @@ class StrategyRunner:
                                 self._log_execution_trace(trace_id, telemetry_record)
                                 self._emit_telemetry(telemetry_record)
                                 self.strategy.on_trade_rejected("RR below threshold")
+                                await sleep_loop()
                                 continue
 
                             # Calculate fee before execution (estimate)
@@ -1350,10 +1367,12 @@ class StrategyRunner:
                                             logger.warning(f"Auto-replace plan failed: {e}")
                                             bot_actions_logger.info(f"⛔ Trade Blocked: plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
                                             self.strategy.on_trade_rejected(f"Plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
+                                            await sleep_loop()
                                             continue
                                     else:
                                         bot_actions_logger.info(f"⛔ Trade Blocked: plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
                                         self.strategy.on_trade_rejected(f"Plan cap reached for {symbol} ({open_plan_count}/{self.max_plans_per_symbol})")
+                                        await sleep_loop()
                                         continue
                             except Exception as e:
                                 logger.debug(f"Could not check plan cap: {e}")
@@ -1369,6 +1388,7 @@ class StrategyRunner:
                                     telemetry_record["risk_reason"] = "Open order cap reached"
                                     self._log_execution_trace(trace_id, telemetry_record)
                                     self._emit_telemetry(telemetry_record)
+                                    await sleep_loop()
                                     continue
                                 position_qty = (self.risk_manager.positions or {}).get(symbol, {}).get('quantity', 0.0) or 0.0
                                 if self._stacking_block(action, symbol, open_plan_count, pending_data, position_qty):
@@ -1378,6 +1398,7 @@ class StrategyRunner:
                                     telemetry_record["risk_reason"] = "Stacking blocked"
                                     self._log_execution_trace(trace_id, telemetry_record)
                                     self._emit_telemetry(telemetry_record)
+                                    await sleep_loop()
                                     continue
                                 order_value = quantity * price
                                 if action == 'BUY' and (pending_exposure + order_value + current_exposure) > MAX_TOTAL_EXPOSURE:
@@ -1387,6 +1408,7 @@ class StrategyRunner:
                                     telemetry_record["risk_reason"] = "Pending exposure over cap"
                                     self._log_execution_trace(trace_id, telemetry_record)
                                     self._emit_telemetry(telemetry_record)
+                                    await sleep_loop()
                                     continue
                             except Exception as e:
                                 logger.debug(f"Pending exposure check failed: {e}")
@@ -1406,12 +1428,14 @@ class StrategyRunner:
                                 self._log_execution_trace(trace_id, telemetry_record)
                                 self._emit_telemetry(telemetry_record)
                                 self.strategy.on_trade_rejected("Slippage over limit")
+                                await sleep_loop()
                                 continue
 
                             bot_actions_logger.info(f"✅ Executing: {action} {qty_str} {symbol} at ${price:,.2f} (est. fee: ${estimated_fee:.4f})")
 
                             if not self.execute_orders:
                                 bot_actions_logger.info("👁️ Shadow mode: skipping live order placement")
+                                await sleep_loop()
                                 continue
                             
                             # Execute trade
@@ -1498,13 +1522,12 @@ class StrategyRunner:
                             self.strategy.on_trade_rejected(risk_result.reason)
                             self._log_execution_trace(trace_id, telemetry_record)
                             self._emit_telemetry(telemetry_record)
+                            await sleep_loop()
 
                     if not exchange_error_seen:
                         self.health_manager.reset_exchange_errors()
                     # 5. Sleep
-                    logger.info(f"Sleeping for {LOOP_INTERVAL_SECONDS} seconds...")
-                    await asyncio.sleep(LOOP_INTERVAL_SECONDS)
-                    loops += 1
+                    await sleep_loop()
 
                 except KeyboardInterrupt:
                     logger.info("Stopping loop...")

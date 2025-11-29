@@ -31,4 +31,4 @@
 - Product & UX
   - [x] Add integration test that runs StrategyRunner against a stub exchange + stub LLM to verify spacing, slippage, and risk gates.
   - [x] Property tests for tool payload clamps (json size) and timeframe normalization; regression tests for plan trail-to-breakeven logic.
-  - [ ] Backfill metrics validation: reconcile DB session stats vs. equity snapshots and report drift beyond threshold.
+  - [x] Backfill metrics validation: reconcile DB session stats vs. equity snapshots and report drift beyond threshold.

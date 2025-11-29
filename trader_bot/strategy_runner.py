@@ -404,12 +404,41 @@ class StrategyRunner:
         rr = reward / risk
         return rr >= MIN_RR
 
-    def _slippage_within_limit(self, decision_price: float, latest_price: float):
-        """Return (allowed, move_pct) based on max slippage config."""
+    def _compute_slippage_cap(self, market_data_point: dict) -> float:
+        """Derive a slippage cap that tightens on thin books or wide spreads."""
+        cap = MAX_SLIPPAGE_PCT
+        if not market_data_point:
+            return cap
+
+        spread_pct = market_data_point.get("spread_pct")
+        bid = market_data_point.get("bid")
+        ask = market_data_point.get("ask")
+        bid_size = market_data_point.get("bid_size")
+        ask_size = market_data_point.get("ask_size")
+
+        top_notional = None
+        if bid and ask and bid_size and ask_size:
+            top_notional = min(bid * bid_size, ask * ask_size)
+
+        if top_notional is not None:
+            if top_notional < MIN_TOP_OF_BOOK_NOTIONAL:
+                cap *= 0.25
+            elif top_notional < MIN_TOP_OF_BOOK_NOTIONAL * 2:
+                cap *= 0.5
+
+        if spread_pct is not None and spread_pct > 0:
+            factor = max(0.3, min(1.0, MAX_SPREAD_PCT / max(spread_pct, 1e-9)))
+            cap *= factor
+
+        return max(cap, MAX_SLIPPAGE_PCT * 0.1)
+
+    def _slippage_within_limit(self, decision_price: float, latest_price: float, market_data_point: dict = None):
+        """Return (allowed, move_pct) based on dynamic slippage cap."""
         if not decision_price or not latest_price:
             return True, 0.0
         move_pct = abs(latest_price - decision_price) / decision_price * 100
-        return move_pct <= MAX_SLIPPAGE_PCT, move_pct
+        cap = self._compute_slippage_cap(market_data_point or {})
+        return move_pct <= cap, move_pct
 
     def _stacking_block(
         self,
@@ -1781,7 +1810,7 @@ class StrategyRunner:
                             except Exception:
                                 latest_price = price
 
-                            ok_slip, move_pct = self._slippage_within_limit(price, latest_price)
+                            ok_slip, move_pct = self._slippage_within_limit(price, latest_price, latest_md or md)
                             telemetry_record["slippage_pct"] = move_pct
                             if not ok_slip:
                                 bot_actions_logger.info(f"⏸️ Skipping trade: slippage {move_pct:.2f}% > {MAX_SLIPPAGE_PCT:.2f}%")

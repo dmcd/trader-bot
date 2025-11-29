@@ -45,12 +45,18 @@ class TestDeterministicOverlays(unittest.TestCase):
         allowed = self.runner._stacking_block('SELL', "BTC/USD", open_plan_count=1, pending_data=pending, position_qty=1.0)
         self.assertFalse(allowed)
 
-    def test_slippage_guard_helper(self):
-        ok, move = self.runner._slippage_within_limit(100, 100.2)
+    def test_slippage_guard_helper_dynamic_cap(self):
+        rich_md = {"bid": 100, "ask": 100.1, "bid_size": 10, "ask_size": 10, "spread_pct": 0.05}
+        thin_md = {"bid": 100, "ask": 100.1, "bid_size": 0.1, "ask_size": 0.1, "spread_pct": 0.5}
+
+        # With healthy depth, small move should pass
+        ok, move = self.runner._slippage_within_limit(100, 100.2, rich_md)
         self.assertTrue(ok)
         self.assertGreaterEqual(move, 0)
-        ok_bad, _ = self.runner._slippage_within_limit(100, 101)
-        self.assertFalse(ok_bad)
+
+        # Thin book should reduce cap; same move more likely to fail
+        ok_thin, _ = self.runner._slippage_within_limit(100, 100.6, thin_md)
+        self.assertFalse(ok_thin)
 
 
 if __name__ == '__main__':

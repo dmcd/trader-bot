@@ -36,6 +36,7 @@ from trader_bot.config import (
     PLAN_TRAIL_TO_BREAKEVEN_PCT,
     PRIORITY_LOOKBACK_MIN,
     PRIORITY_MOVE_PCT,
+    BOT_VERSION,
     TRADE_SYNC_CUTOFF_MINUTES,
     TRADING_MODE,
 )
@@ -614,7 +615,7 @@ class StrategyRunner:
         logger.info(f"{self.exchange_name} Equity: {initial_equity}")
         
         # Create or load today's trading session (DB still used for logging/IDs)
-        self.session_id = self.db.get_or_create_session(starting_balance=initial_equity)
+        self.session_id = self.db.get_or_create_session(starting_balance=initial_equity, bot_version=BOT_VERSION)
         self.session = self.db.get_session(self.session_id)
         
         # Clear any old pending commands from previous sessions

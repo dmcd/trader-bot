@@ -12,7 +12,7 @@ class TestTradingContext(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.tmpdir.name, "context.db")
         self.db = TradingDatabase(self.db_path)
-        self.session_id = self.db.get_or_create_session(starting_balance=10000.0)
+        self.session_id = self.db.get_or_create_session(starting_balance=10000.0, bot_version="test-version")
 
         # Simple trade history and market data
         self.db.log_trade(self.session_id, "BTC/USD", "BUY", 0.1, 20000.0, 2.0, "entry")

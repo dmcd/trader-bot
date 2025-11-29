@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
-from trader_bot.config import LOOP_INTERVAL_SECONDS
+from trader_bot.config import LOOP_INTERVAL_SECONDS, BOT_VERSION
 from trader_bot.database import TradingDatabase
 
 # --- Helper Functions ---
@@ -93,16 +93,17 @@ def get_timezone_label(tzinfo):
     return "Local"
 
 
-def load_history(user_timezone):
-    """Load trade history from the SQLite database for today's session."""
+def load_history(session_id, user_timezone):
+    """Load trade history from the SQLite database for a session."""
+    if not session_id:
+        return pd.DataFrame()
     try:
         user_timezone = user_timezone or ZoneInfo("UTC")
         db = TradingDatabase()
-        today = date.today().isoformat()
         cursor = db.conn.cursor()
         cursor.execute(
-            "SELECT timestamp, symbol, action, price, quantity, fee, liquidity, realized_pnl, reason FROM trades WHERE session_id = (SELECT id FROM sessions WHERE date = ?)",
-            (today,)
+            "SELECT timestamp, symbol, action, price, quantity, fee, liquidity, realized_pnl, reason FROM trades WHERE session_id = ?",
+            (session_id,)
         )
         rows = cursor.fetchall()
         db.close()
@@ -217,20 +218,14 @@ def load_logs():
             return lines[::-1]
     return []
 
-def load_session_stats():
+def load_session_stats(session_id):
+    if not session_id:
+        return None, None
     try:
         db = TradingDatabase()
-        today = date.today().isoformat()
-        cursor = db.conn.cursor()
-        cursor.execute("SELECT id FROM sessions WHERE date = ?", (today,))
-        row = cursor.fetchone()
-        if row:
-            session_id = row['id']
-            stats = db.get_session_stats(session_id)
-            db.close()
-            return stats, session_id
+        stats = db.get_session_stats(session_id)
         db.close()
-        return None, None
+        return stats, session_id
     except Exception as e:
         st.error(f"Error loading session stats: {e}")
         return None, None
@@ -270,6 +265,10 @@ st.title("🤖 Dennis-Day Trading Bot")
 
 user_timezone = get_user_timezone()
 timezone_label = get_timezone_label(user_timezone)
+db_version_lookup = TradingDatabase()
+current_session_id = db_version_lookup.get_session_id_by_version(BOT_VERSION)
+available_versions = db_version_lookup.list_bot_versions()
+db_version_lookup.close()
 
 # --- Sidebar ---
 
@@ -313,169 +312,198 @@ db.close()
 
 
 # --- Main Content ---
-col1, col2 = st.columns([2, 1])
+tab_live, tab_history = st.tabs(["Current Version", "History"])
 
-with col1:
-    st.subheader("📊 Session Performance")
-    df = load_history(user_timezone)
-    session_stats, session_id = load_session_stats()
-    
-    if session_stats and not df.empty:
-        symbols = df['symbol'].unique()
-        current_prices = get_latest_prices(session_id, symbols)
-        realized_pnl, unrealized_pnl, active_positions, df, exposure, trade_spacing = calculate_pnl(df, current_prices)
-        open_orders = load_open_orders(session_id)
-        pending_exposure = 0.0
-        if open_orders:
-            for o in open_orders:
-                side = (o.get('side') or '').upper()
-                if side != 'BUY':
-                    continue
-                px = o.get('price') or current_prices.get(o.get('symbol'), 0) or 0
-                qty = o.get('remaining')
-                if qty is None:
-                    qty = o.get('amount', 0)
-                if px and qty:
-                    pending_exposure += px * qty
-        total_exposure = exposure + pending_exposure
-        
-        gross_pnl_usd = realized_pnl + unrealized_pnl
-        
-        gross_pnl = gross_pnl_usd
-        realized_disp = realized_pnl
-        unrealized_disp = unrealized_pnl
-        currency_symbol = 'USD'
+with tab_live:
+    col1, col2 = st.columns([2, 1])
 
-        fees = session_stats.get('total_fees', 0)
-        llm_cost = session_stats.get('total_llm_cost', 0)
-        net_pnl = gross_pnl - fees - llm_cost
-        total_costs = fees + llm_cost
+    with col1:
+        st.subheader("📊 Current Performance")
+        df = load_history(current_session_id, user_timezone)
+        session_stats, session_id = load_session_stats(current_session_id)
         
-        cost_ratio = (total_costs / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
-        fee_ratio = (fees / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
-        fee_badge = format_ratio_badge(fee_ratio if gross_pnl else None)
-        cost_badge = format_ratio_badge(cost_ratio if gross_pnl else None)
+        if session_stats and not df.empty:
+            symbols = df['symbol'].unique()
+            current_prices = get_latest_prices(session_id, symbols)
+            realized_pnl, unrealized_pnl, active_positions, df, exposure, trade_spacing = calculate_pnl(df, current_prices)
+            open_orders = load_open_orders(session_id)
+            pending_exposure = 0.0
+            if open_orders:
+                for o in open_orders:
+                    side = (o.get('side') or '').upper()
+                    if side != 'BUY':
+                        continue
+                    px = o.get('price') or current_prices.get(o.get('symbol'), 0) or 0
+                    qty = o.get('remaining')
+                    if qty is None:
+                        qty = o.get('amount', 0)
+                    if px and qty:
+                        pending_exposure += px * qty
+            total_exposure = exposure + pending_exposure
+            
+            gross_pnl_usd = realized_pnl + unrealized_pnl
+            
+            gross_pnl = gross_pnl_usd
+            realized_disp = realized_pnl
+            unrealized_disp = unrealized_pnl
+            currency_symbol = 'USD'
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric(f"Net PnL ({currency_symbol})", f"${net_pnl:,.2f}")
-        m2.metric(f"Gross PnL ({currency_symbol})", f"${gross_pnl:,.2f}")
-        m3.metric(f"Realized PnL", f"${realized_disp:,.2f}")
-        m4.metric(f"Unrealized PnL", f"${unrealized_disp:,.2f}")
+            fees = session_stats.get('total_fees', 0)
+            llm_cost = session_stats.get('total_llm_cost', 0)
+            net_pnl = gross_pnl - fees - llm_cost
+            total_costs = fees + llm_cost
+            
+            cost_ratio = (total_costs / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
+            fee_ratio = (fees / abs(gross_pnl) * 100) if gross_pnl != 0 else 0
+            fee_badge = format_ratio_badge(fee_ratio if gross_pnl else None)
+            cost_badge = format_ratio_badge(cost_ratio if gross_pnl else None)
 
-        st.markdown("---")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total Fees", f"${fees:.2f}")
-        c2.metric("LLM Costs", f"${llm_cost:.4f}")
-        c3.metric("Total Costs", f"${total_costs:.2f}")
-        c4.metric("Total Trades", session_stats.get('total_trades', 0))
-        if fee_badge:
-            c1.markdown(f"<div style='margin-top:-8px;'>{fee_badge}</div>", unsafe_allow_html=True)
-        if cost_badge:
-            c3.markdown(f"<div style='margin-top:-8px;'>{cost_badge}</div>", unsafe_allow_html=True)
-        
-        st.markdown("---")
-        s1, s2, s3, s4 = st.columns(4)
-        avg_spacing = trade_spacing.get("avg_seconds")
-        last_spacing = trade_spacing.get("last_seconds")
-        spacing_text = f"{avg_spacing:.0f}s avg" if avg_spacing else "n/a"
-        spacing_delta = f"{last_spacing:.0f}s last" if last_spacing else None
-        s1.metric("Trade Spacing", spacing_text, spacing_delta)
-        s2.metric("Exposure (incl pending)", f"${total_exposure:,.2f}", f"pending ${pending_exposure:,.2f}")
-        s3.metric("Positions", len(active_positions))
-        loop_interval_display = f"{LOOP_INTERVAL_SECONDS}s loop"
-        s4.metric("Loop Interval", loop_interval_display)
-        
-        st.subheader("📈 Active Positions")
-        if active_positions:
-            pos_df = pd.DataFrame(active_positions)
-        else:
-            pos_df = pd.DataFrame(columns=['Symbol', 'Quantity', 'Avg Price', 'Current Price', 'Unrealized PnL', 'Value'])
-        
-        st.dataframe(
-            pos_df,
-            column_config={
-                "Symbol": "Symbol",
-                "Quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
-                "Avg Price": st.column_config.NumberColumn("Avg Price", format="$%.2f"),
-                "Current Price": st.column_config.NumberColumn("Current Price", format="$%.2f"),
-                "Unrealized PnL": st.column_config.NumberColumn("Unrealized PnL", format="$%.2f"),
-                "Value": st.column_config.NumberColumn("Value", format="$%.2f"),
-            },
-            hide_index=True,
-            width="stretch"
-        )
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric(f"Net PnL ({currency_symbol})", f"${net_pnl:,.2f}")
+            m2.metric(f"Gross PnL ({currency_symbol})", f"${gross_pnl:,.2f}")
+            m3.metric(f"Realized PnL", f"${realized_disp:,.2f}")
+            m4.metric(f"Unrealized PnL", f"${unrealized_disp:,.2f}")
 
-    elif session_stats:
-        st.info("Session started, waiting for trades...")
-        st.metric("Starting Balance", f"${session_stats.get('starting_balance', 0):,.2f}")
-    else:
-        st.warning("No session stats available.")
-    
-    st.subheader("🧾 Trade History")
-    if not df.empty:
-        df = df.sort_values('timestamp', ascending=False)
-        st.dataframe(
-            df[['timestamp', 'symbol', 'action', 'price', 'quantity', 'pnl', 'fee', 'liquidity', 'reason']],
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "timestamp": st.column_config.DatetimeColumn(f"Date/Time ({timezone_label})", format="YYYY-MM-DD HH:mm:ss"),
-                "symbol": "Symbol",
-                "action": "Action",
-                "price": st.column_config.NumberColumn("Price", format="$%.2f"),
-                "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
-                "pnl": st.column_config.NumberColumn("Realized PnL", format="$%.2f"),
-                "fee": st.column_config.NumberColumn("Fee", format="$%.4f"),
-                "liquidity": "Liq",
-                "reason": st.column_config.TextColumn("Reason", width="large"),
-            }
-        )
-    else:
-        st.info("No trade history found yet. Start the bot!")
-
-with col2:
-    if session_stats and session_id:
-        st.subheader("📌 Open Orders")
-        open_orders = load_open_orders(session_id)
-        if open_orders:
-            oo_df = pd.DataFrame(open_orders)
-            oo_df = oo_df.rename(columns={"amount": "quantity"})
+            st.markdown("---")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Total Fees", f"${fees:.2f}")
+            c2.metric("LLM Costs", f"${llm_cost:.4f}")
+            c3.metric("Total Costs", f"${total_costs:.2f}")
+            c4.metric("Total Trades", session_stats.get('total_trades', 0))
+            if fee_badge:
+                c1.markdown(f"<div style='margin-top:-8px;'>{fee_badge}</div>", unsafe_allow_html=True)
+            if cost_badge:
+                c3.markdown(f"<div style='margin-top:-8px;'>{cost_badge}</div>", unsafe_allow_html=True)
+            
+            st.markdown("---")
+            s1, s2, s3, s4 = st.columns(4)
+            avg_spacing = trade_spacing.get("avg_seconds")
+            last_spacing = trade_spacing.get("last_seconds")
+            spacing_text = f"{avg_spacing:.0f}s avg" if avg_spacing else "n/a"
+            spacing_delta = f"{last_spacing:.0f}s last" if last_spacing else None
+            s1.metric("Trade Spacing", spacing_text, spacing_delta)
+            s2.metric("Exposure (incl pending)", f"${total_exposure:,.2f}", f"pending ${pending_exposure:,.2f}")
+            s3.metric("Positions", len(active_positions))
+            loop_interval_display = f"{LOOP_INTERVAL_SECONDS}s loop"
+            s4.metric("Loop Interval", loop_interval_display)
+            
+            st.subheader("📈 Active Positions")
+            if active_positions:
+                pos_df = pd.DataFrame(active_positions)
+            else:
+                pos_df = pd.DataFrame(columns=['Symbol', 'Quantity', 'Avg Price', 'Current Price', 'Unrealized PnL', 'Value'])
+            
             st.dataframe(
-                oo_df[['order_id', 'symbol', 'side', 'price', 'quantity', 'remaining', 'status']],
+                pos_df,
+                column_config={
+                    "Symbol": "Symbol",
+                    "Quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
+                    "Avg Price": st.column_config.NumberColumn("Avg Price", format="$%.2f"),
+                    "Current Price": st.column_config.NumberColumn("Current Price", format="$%.2f"),
+                    "Unrealized PnL": st.column_config.NumberColumn("Unrealized PnL", format="$%.2f"),
+                    "Value": st.column_config.NumberColumn("Value", format="$%.2f"),
+                },
+                hide_index=True,
+                width="stretch"
+            )
+
+        elif session_stats:
+            st.info("Bot version started, waiting for trades...")
+            st.metric("Starting Balance", f"${session_stats.get('starting_balance', 0):,.2f}")
+        else:
+            st.warning("No session stats available for this version.")
+        
+        st.subheader("🧾 Trade History")
+        if not df.empty:
+            df = df.sort_values('timestamp', ascending=False)
+            st.dataframe(
+                df[['timestamp', 'symbol', 'action', 'price', 'quantity', 'fee', 'realized_pnl', 'reason']],
+                width="stretch",
                 hide_index=True,
                 column_config={
+                    "timestamp": st.column_config.DatetimeColumn(f"Date/Time ({timezone_label})", format="YYYY-MM-DD HH:mm:ss"),
                     "price": st.column_config.NumberColumn("Price", format="$%.2f"),
                     "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
-                    "remaining": st.column_config.NumberColumn("Remaining", format="%.4f"),
-                },
-                width="stretch",
-                height=200
+                    "realized_pnl": st.column_config.NumberColumn("Realized PnL", format="$%.2f"),
+                    "fee": st.column_config.NumberColumn("Fee", format="$%.4f"),
+                    "reason": st.column_config.TextColumn("Reason", width="large"),
+                }
             )
         else:
-            st.info("No open orders")
+            st.info("No trade history for this version yet.")
 
-        st.subheader("🎯 Trade Plans")
-        plans = load_trade_plans(session_id)
-        if plans:
-            tp_df = pd.DataFrame(plans)
+    with col2:
+        if session_stats and session_id:
+            st.subheader("📌 Open Orders")
+            open_orders = load_open_orders(session_id)
+            if open_orders:
+                oo_df = pd.DataFrame(open_orders)
+                oo_df = oo_df.rename(columns={"amount": "quantity"})
+                st.dataframe(
+                    oo_df[['order_id', 'symbol', 'side', 'price', 'quantity', 'remaining', 'status']],
+                    hide_index=True,
+                    column_config={
+                        "price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                        "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
+                        "remaining": st.column_config.NumberColumn("Remaining", format="%.4f"),
+                    },
+                    width="stretch",
+                    height=200
+                )
+            else:
+                st.info("No open orders")
+
+            st.subheader("🎯 Trade Plans")
+            plans = load_trade_plans(session_id)
+            if plans:
+                tp_df = pd.DataFrame(plans)
+                st.dataframe(
+                    tp_df[['id', 'symbol', 'side', 'size', 'stop_price', 'target_price', 'opened_at']],
+                    hide_index=True,
+                    column_config={
+                        "size": st.column_config.NumberColumn("Size", format="%.4f"),
+                        "stop_price": st.column_config.NumberColumn("Stop", format="$%.2f"),
+                        "target_price": st.column_config.NumberColumn("Target", format="$%.2f"),
+                        "opened_at": st.column_config.DatetimeColumn("Opened", format="HH:mm:ss"),
+                    },
+                    width="stretch",
+                    height=200
+                )
+            else:
+                st.info("No open trade plans")
+
+        st.subheader("📜 Logs")
+        logs = load_logs()
+        log_text = "".join(logs)
+        st.text_area("Log Output", log_text, height=900, disabled=True)
+        time.sleep(5)
+        st.rerun()
+
+with tab_history:
+    st.subheader("📚 Historical Versions")
+    if not available_versions:
+        st.info("No historical versions found yet.")
+    else:
+        selected_version = st.selectbox("Select bot version", options=available_versions, index=0)
+        db_hist = TradingDatabase()
+        hist_session_id = db_hist.get_session_id_by_version(selected_version)
+        db_hist.close()
+        hist_df = load_history(hist_session_id, user_timezone)
+        if hist_df.empty:
+            st.info("No trades logged for this version.")
+        else:
+            hist_df = hist_df.sort_values('timestamp', ascending=False)
             st.dataframe(
-                tp_df[['id', 'symbol', 'side', 'size', 'stop_price', 'target_price', 'opened_at']],
+                hist_df[['timestamp', 'symbol', 'action', 'price', 'quantity', 'fee', 'realized_pnl', 'reason']],
                 hide_index=True,
                 column_config={
-                    "size": st.column_config.NumberColumn("Size", format="%.4f"),
-                    "stop_price": st.column_config.NumberColumn("Stop", format="$%.2f"),
-                    "target_price": st.column_config.NumberColumn("Target", format="$%.2f"),
-                    "opened_at": st.column_config.DatetimeColumn("Opened", format="HH:mm:ss"),
+                    "timestamp": st.column_config.DatetimeColumn(f"Date/Time ({timezone_label})", format="YYYY-MM-DD HH:mm:ss"),
+                    "price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                    "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
+                    "realized_pnl": st.column_config.NumberColumn("Realized PnL", format="$%.2f"),
+                    "fee": st.column_config.NumberColumn("Fee", format="$%.4f"),
+                    "reason": st.column_config.TextColumn("Reason", width="large"),
                 },
                 width="stretch",
-                height=200
+                height=600
             )
-        else:
-            st.info("No open trade plans")
-
-    st.subheader("📜 Logs")
-    logs = load_logs()
-    log_text = "".join(logs)
-    st.text_area("Log Output", log_text, height=900, disabled=True)
-    time.sleep(5)
-    st.rerun()

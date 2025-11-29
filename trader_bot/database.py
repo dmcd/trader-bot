@@ -27,7 +27,8 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT UNIQUE NOT NULL,
+                date TEXT NOT NULL,
+                bot_version TEXT,
                 starting_balance REAL,
                 ending_balance REAL,
                 total_trades INTEGER DEFAULT 0,
@@ -252,33 +253,52 @@ class TradingDatabase:
             )
         """)
         
+        # Add bot_version column and index for version-based sessions
+        try:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN bot_version TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_bot_version ON sessions(bot_version)")
+        except Exception:
+            pass
+
         self.conn.commit()
         logger.info(f"Database initialized at {self.db_path}")
     
-    def get_or_create_session(self, starting_balance: float) -> int:
-        """Get today's session or create a new one."""
-        today = date.today().isoformat()
+    def get_or_create_session(self, starting_balance: float, bot_version: str) -> int:
+        """Get or create session keyed by bot version (no daily reset)."""
         cursor = self.conn.cursor()
-        
-        # Try to get existing session
-        cursor.execute("SELECT id FROM sessions WHERE date = ?", (today,))
+
+        cursor.execute("SELECT id FROM sessions WHERE bot_version = ?", (bot_version,))
         row = cursor.fetchone()
         
         if row:
             session_id = row['id']
-            logger.info(f"Loaded existing session {session_id} for {today}")
+            logger.info(f"Loaded existing session {session_id} for version {bot_version}")
             return session_id
         
         # Create new session
         cursor.execute("""
-            INSERT INTO sessions (date, starting_balance)
-            VALUES (?, ?)
-        """, (today, starting_balance))
+            INSERT INTO sessions (date, bot_version, starting_balance)
+            VALUES (?, ?, ?)
+        """, (date.today().isoformat(), bot_version, starting_balance))
         self.conn.commit()
         
         session_id = cursor.lastrowid
-        logger.info(f"Created new session {session_id} for {today}")
+        logger.info(f"Created new session {session_id} for version {bot_version}")
         return session_id
+
+    def get_session_id_by_version(self, bot_version: str) -> Optional[int]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id FROM sessions WHERE bot_version = ?", (bot_version,))
+        row = cursor.fetchone()
+        return row['id'] if row else None
+
+    def list_bot_versions(self) -> List[str]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT DISTINCT bot_version FROM sessions WHERE bot_version IS NOT NULL ORDER BY created_at DESC")
+        return [row['bot_version'] for row in cursor.fetchall()]
 
     def get_session(self, session_id: int) -> Optional[Dict[str, Any]]:
         """Fetch a session row by id."""

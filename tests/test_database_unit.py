@@ -10,7 +10,7 @@ class TestTradingDatabase(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.tmpdir.name, "test.db")
         self.db = TradingDatabase(self.db_path)
-        self.session_id = self.db.get_or_create_session(starting_balance=5000.0)
+        self.session_id = self.db.get_or_create_session(starting_balance=5000.0, bot_version="test-version")
 
     def tearDown(self):
         self.db.close()

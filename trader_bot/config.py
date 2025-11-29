@@ -80,8 +80,11 @@ PLAN_MAX_PER_SYMBOL = int(os.getenv('PLAN_MAX_PER_SYMBOL', '2'))
 PLAN_MAX_AGE_MINUTES = int(os.getenv('PLAN_MAX_AGE_MINUTES', '60'))
 PLAN_TRAIL_TO_BREAKEVEN_PCT = float(os.getenv('PLAN_TRAIL_TO_BREAKEVEN_PCT', '0.01'))  # e.g., 0.01 = 1%
 
+# Bot versioning
+BOT_VERSION = os.getenv('BOT_VERSION', 'v1')
+
 # Order routing
-CLIENT_ORDER_PREFIX = os.getenv('CLIENT_ORDER_PREFIX', 'BOT')
+CLIENT_ORDER_PREFIX = os.getenv('CLIENT_ORDER_PREFIX', f'BOT-{BOT_VERSION}')
 
 # Trade sync guardrails
 TRADE_SYNC_CUTOFF_MINUTES = int(os.getenv('TRADE_SYNC_CUTOFF_MINUTES', '1440'))  # ignore trades older than this window when syncing

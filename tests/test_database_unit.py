@@ -52,6 +52,18 @@ class TestTradingDatabase(unittest.TestCase):
         # Should return most recent first
         self.assertAlmostEqual(fetched[0]["close"], 2.0)
 
+    def test_multiple_sessions_created_per_version(self):
+        next_session = self.db.get_or_create_session(starting_balance=6000.0, bot_version="test-version")
+        self.assertNotEqual(self.session_id, next_session)
+
+        cursor = self.db.conn.cursor()
+        cursor.execute("SELECT COUNT(*) as count FROM sessions WHERE bot_version = ?", ("test-version",))
+        row = cursor.fetchone()
+        self.assertEqual(row["count"], 2)
+
+        latest_for_version = self.db.get_session_id_by_version("test-version")
+        self.assertEqual(latest_for_version, next_session)
+
 
 if __name__ == "__main__":
     unittest.main()

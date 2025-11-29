@@ -268,27 +268,22 @@ class TradingDatabase:
             cursor.execute("ALTER TABLE sessions ADD COLUMN bot_version TEXT")
         except sqlite3.OperationalError:
             pass
+        # Allow multiple sessions per version; keep a non-unique index for lookups
         try:
-            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_bot_version ON sessions(bot_version)")
-        except Exception:
-            pass
+            cursor.execute("DROP INDEX IF EXISTS idx_sessions_bot_version")
+        except Exception as e:
+            logger.warning(f"Could not drop legacy unique index on bot_version: {e}")
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_bot_version ON sessions(bot_version)")
+        except Exception as e:
+            logger.warning(f"Could not create non-unique index on bot_version: {e}")
 
         self.conn.commit()
         logger.info(f"Database initialized at {self.db_path}")
     
     def get_or_create_session(self, starting_balance: float, bot_version: str) -> int:
-        """Get or create session keyed by bot version (no daily reset)."""
+        """Create a new session for this run, tagged by bot version."""
         cursor = self.conn.cursor()
-
-        cursor.execute("SELECT id FROM sessions WHERE bot_version = ?", (bot_version,))
-        row = cursor.fetchone()
-        
-        if row:
-            session_id = row['id']
-            logger.info(f"Loaded existing session {session_id} for version {bot_version}")
-            return session_id
-        
-        # Create new session
         cursor.execute("""
             INSERT INTO sessions (date, bot_version, starting_balance)
             VALUES (?, ?, ?)
@@ -301,7 +296,10 @@ class TradingDatabase:
 
     def get_session_id_by_version(self, bot_version: str) -> Optional[int]:
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id FROM sessions WHERE bot_version = ?", (bot_version,))
+        cursor.execute(
+            "SELECT id FROM sessions WHERE bot_version = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+            (bot_version,)
+        )
         row = cursor.fetchone()
         return row['id'] if row else None
 

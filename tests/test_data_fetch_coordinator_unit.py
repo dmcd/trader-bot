@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from trader_bot.data_fetch_coordinator import DataFetchCoordinator
@@ -149,3 +151,60 @@ async def test_order_book_meta_includes_freshness(monkeypatch):
     meta = shaped["meta"]
     assert meta.get("latency_ms") >= 0
     assert meta.get("data_age_ms") is not None
+
+
+@pytest.mark.asyncio
+async def test_handle_requests_dedupes_repeat_requests(caplog):
+    caplog.set_level(logging.INFO, logger="telemetry")
+    exchange = StubExchange()
+    coordinator = DataFetchCoordinator(exchange, cache_ttl_seconds=0, rate_limit_window_seconds=120)
+    req = ToolRequest(
+        id="m1",
+        tool=ToolName.GET_MARKET_DATA,
+        params={"symbol": "BTC/USD", "timeframes": ["1m"], "limit": 2},
+    )
+
+    await coordinator.handle_requests([req])
+    caplog.clear()
+    responses = await coordinator.handle_requests([req])
+
+    assert exchange.ohlcv_calls == 1  # deduped
+    assert responses[0].data.get("meta", {}).get("deduped") is True
+    assert any("tool_thrash" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_is_per_symbol_timeframe_combination():
+    exchange = StubExchange()
+    coordinator = DataFetchCoordinator(
+        exchange,
+        cache_ttl_seconds=0,
+        rate_limits={ToolName.GET_MARKET_DATA: 1},
+        rate_limit_window_seconds=120,
+        dedup_window_seconds=0,
+    )
+    reqs = [
+        ToolRequest(
+            id="first",
+            tool=ToolName.GET_MARKET_DATA,
+            params={"symbol": "BTC/USD", "timeframes": ["1m"], "limit": 2},
+        ),
+        ToolRequest(
+            id="second",
+            tool=ToolName.GET_MARKET_DATA,
+            params={"symbol": "BTC/USD", "timeframes": ["5m"], "limit": 2},
+        ),
+        ToolRequest(
+            id="third",
+            tool=ToolName.GET_MARKET_DATA,
+            params={"symbol": "BTC/USD", "timeframes": ["1m"], "limit": 2},
+        ),
+    ]
+
+    responses = await coordinator.handle_requests(reqs)
+    errors = {r.id: r.error for r in responses}
+
+    assert errors["first"] is None
+    assert errors["second"] is None
+    assert errors["third"] == "rate_limited"
+    assert exchange.ohlcv_calls == 2  # distinct timeframes allowed once each

@@ -5,6 +5,7 @@ from trader_bot.llm_tools import (
     OrderBookParams,
     ToolName,
     ToolRequest,
+    _clean_timeframes,
     estimate_json_bytes,
     clamp_payload_size,
     normalize_candles,
@@ -91,3 +92,37 @@ def test_tool_request_disambiguates_union_types():
     assert not hasattr(req.params, "timeframes")
     assert not hasattr(req.params, "include_volume")
     assert req.params.limit == 50
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (["1m", "1m", "5m", "4h", " 1d "], ["1m", "5m", "6h", "1d"]),
+        (["1hr", "1hour", "30min", "bad", ""], ["1h", "30m"]),
+        (["   ", None, ""], []),
+    ],
+)
+def test_clean_timeframes_normalizes_and_dedupes(raw, expected):
+    cleaned = _clean_timeframes(raw)
+    assert cleaned == expected
+    # All results should be in allowed map (no rogue entries)
+    assert all(isinstance(tf, str) and tf for tf in cleaned)
+
+
+def test_clamp_payload_size_idempotent_and_respects_budget():
+    payload = {
+        "timeframes": {
+            "1m": {"candles": [[i, 1, 1, 1, 1, 1] for i in range(200)], "summary": {}},
+        },
+        "bids": [[100 - i, 1] for i in range(200)],
+        "asks": [[101 + i, 1] for i in range(200)],
+        "trades": [{"ts": i, "price": 100 + i, "amount": 1} for i in range(200)],
+    }
+    max_bytes = 800
+    clamped = clamp_payload_size(payload, max_bytes=max_bytes)
+    assert estimate_json_bytes(clamped) <= max_bytes
+    assert clamped.get("truncated") is True
+    # Re-clamping should not grow or remove the truncated marker
+    reclamped = clamp_payload_size(clamped, max_bytes=max_bytes)
+    assert reclamped.get("truncated") is True
+    assert estimate_json_bytes(reclamped) <= max_bytes

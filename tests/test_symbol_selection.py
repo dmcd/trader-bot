@@ -27,7 +27,7 @@ class TestActiveSymbolSelection(unittest.TestCase):
         self.runner.session_id = 1
         self.runner.db = MagicMock()
 
-    @patch("trader_bot.strategy_runner.ACTIVE_SYMBOLS", ["BTC/USD", "ETH/USD"])
+    @patch("trader_bot.strategy_runner.ALLOWED_SYMBOLS", ["BTC/USD", "ETH/USD"])
     def test_merges_configured_and_state_symbols(self):
         self.runner.db.get_positions.return_value = [{'symbol': 'SOL/USD', 'quantity': 1.0}]
         self.runner.db.get_open_orders.return_value = [{'symbol': 'BTC/USD'}, {'symbol': 'ADA/USD'}]
@@ -42,7 +42,7 @@ class TestActiveSymbolSelection(unittest.TestCase):
         # Ensure no duplicates and ordering preserved
         self.assertEqual(len(symbols), len(set(symbols)))
 
-    @patch("trader_bot.strategy_runner.ACTIVE_SYMBOLS", [])
+    @patch("trader_bot.strategy_runner.ALLOWED_SYMBOLS", [])
     def test_fallback_to_default_when_empty(self):
         self.runner.db.get_positions.return_value = []
         self.runner.db.get_open_orders.return_value = []

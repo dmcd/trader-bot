@@ -51,6 +51,13 @@ COMMAND_RETENTION_DAYS = int(os.getenv('COMMAND_RETENTION_DAYS', '7'))  # days t
 MAX_SPREAD_PCT = float(os.getenv('MAX_SPREAD_PCT', '0.20'))  # Skip trading if spread exceeds this % of mid
 MIN_TOP_OF_BOOK_NOTIONAL = float(os.getenv('MIN_TOP_OF_BOOK_NOTIONAL', '100.0'))  # Require at least this notional at best bid/ask
 
+# Exchange selection and symbol allowlist
+# Options: 'GEMINI'
+ACTIVE_EXCHANGE = os.getenv('ACTIVE_EXCHANGE', 'GEMINI').upper()
+# Comma-separated symbols to trade/monitor and allow for tool access; preserves order
+_ALLOWED_SYMBOLS_RAW = os.getenv('ALLOWED_SYMBOLS', 'BTC/USD')
+ALLOWED_SYMBOLS = [s.strip().upper() for s in _ALLOWED_SYMBOLS_RAW.split(',') if s.strip()]
+
 # LLM tool/data fetch limits
 TOOL_MAX_BARS = int(os.getenv('TOOL_MAX_BARS', '2000'))  # cap per-timeframe bars returned to the LLM
 TOOL_MAX_TRADES = int(os.getenv('TOOL_MAX_TRADES', '500'))  # cap recent trades returned
@@ -61,7 +68,6 @@ TOOL_DEFAULT_TIMEFRAMES = os.getenv('TOOL_DEFAULT_TIMEFRAMES', '1m,5m,15m,1h,6h,
 TOOL_ALLOWED_TIMEFRAMES = os.getenv('TOOL_ALLOWED_TIMEFRAMES', '1m,5m,15m,30m,1h,6h,1d').split(',')
 TOOL_MAX_JSON_BYTES = int(os.getenv('TOOL_MAX_JSON_BYTES', '200000'))  # fail-safe cap on JSON payload size
 TOOL_CACHE_TTL_SECONDS = int(os.getenv('TOOL_CACHE_TTL_SECONDS', '5'))  # reuse fresh fetches within this window
-TOOL_ALLOWED_SYMBOLS = [s.strip().upper() for s in os.getenv('TOOL_ALLOWED_SYMBOLS', 'BTC/USD').split(',') if s.strip()]
 TOOL_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv('TOOL_RATE_LIMIT_WINDOW_SECONDS', '60'))
 TOOL_RATE_LIMIT_MARKET_DATA = int(os.getenv('TOOL_RATE_LIMIT_MARKET_DATA', '12'))  # per window
 TOOL_RATE_LIMIT_ORDER_BOOK = int(os.getenv('TOOL_RATE_LIMIT_ORDER_BOOK', '12'))
@@ -75,12 +81,6 @@ GEMINI_EXCHANGE_API_KEY = os.getenv('GEMINI_EXCHANGE_API_KEY', '') # Trading Key
 GEMINI_EXCHANGE_SECRET = os.getenv('GEMINI_EXCHANGE_SECRET', '') # Trading Secret
 GEMINI_SANDBOX_API_KEY = os.getenv('GEMINI_SANDBOX_API_KEY', '') # Sandbox Key
 GEMINI_SANDBOX_SECRET = os.getenv('GEMINI_SANDBOX_SECRET', '') # Sandbox Secret
-
-# Exchange Selection
-# Options: 'GEMINI'
-ACTIVE_EXCHANGE = os.getenv('ACTIVE_EXCHANGE', 'GEMINI').upper()
-# Comma-separated symbols to trade/monitor, preserves order
-ACTIVE_SYMBOLS = [s.strip().upper() for s in os.getenv('ACTIVE_SYMBOLS', 'BTC/USD').split(',') if s.strip()]
 
 # Exchange Fees
 GEMINI_MAKER_FEE = float(os.getenv('GEMINI_MAKER_FEE', '0.0020'))  # 0.20%

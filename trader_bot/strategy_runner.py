@@ -54,7 +54,7 @@ from trader_bot.config import (
     TICKER_MAX_LATENCY_MS,
     MAKER_PREFERENCE_DEFAULT,
     MAKER_PREFERENCE_OVERRIDES,
-    ACTIVE_SYMBOLS,
+    ALLOWED_SYMBOLS,
 )
 from trader_bot.cost_tracker import CostTracker
 from trader_bot.data_fetch_coordinator import DataFetchCoordinator
@@ -187,7 +187,7 @@ class StrategyRunner:
         """Return ordered list of symbols to monitor/trade."""
         symbols = []
         # 1) Configured symbols (ordered)
-        symbols.extend([s for s in ACTIVE_SYMBOLS if s])
+        symbols.extend([s for s in ALLOWED_SYMBOLS if s])
         # 2) Live state from DB snapshots
         try:
             positions = self.db.get_positions(self.session_id) if self.session_id else []

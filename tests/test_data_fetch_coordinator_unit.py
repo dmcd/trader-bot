@@ -61,7 +61,11 @@ async def test_market_data_uses_cache_between_calls():
 @pytest.mark.asyncio
 async def test_handle_requests_returns_normalized_order_book_and_clamps_size():
     exchange = StubExchange()
-    coordinator = DataFetchCoordinator(exchange, max_json_bytes=10)
+    coordinator = DataFetchCoordinator(
+        exchange,
+        max_json_bytes=10,
+        allowed_symbols=["ETH/USD"],
+    )
     reqs = [
         ToolRequest(
             id="ob1",

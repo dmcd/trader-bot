@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from trader_bot.config import (
-    TOOL_ALLOWED_SYMBOLS,
+    ALLOWED_SYMBOLS,
     TOOL_CACHE_TTL_SECONDS,
     TOOL_MAX_BARS,
     TOOL_MAX_DEPTH,
@@ -66,7 +66,7 @@ class DataFetchCoordinator:
         self.cache_ttl_seconds = cache_ttl_seconds
         self.max_json_bytes = max_json_bytes
         self._cache: Dict[str, Dict[str, Any]] = {}
-        self.allowed_symbols = [s.upper() for s in (allowed_symbols or TOOL_ALLOWED_SYMBOLS)]
+        self.allowed_symbols = [s.upper() for s in (allowed_symbols or ALLOWED_SYMBOLS)]
         self.rate_limits = rate_limits or {
             ToolName.GET_MARKET_DATA: TOOL_RATE_LIMIT_MARKET_DATA,
             ToolName.GET_ORDER_BOOK: TOOL_RATE_LIMIT_ORDER_BOOK,

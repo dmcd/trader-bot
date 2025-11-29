@@ -27,7 +27,7 @@ HIGH_VOL_SIZE_FACTOR = float(os.getenv('HIGH_VOL_SIZE_FACTOR', '0.6'))  # Scale 
 MED_VOL_SIZE_FACTOR = float(os.getenv('MED_VOL_SIZE_FACTOR', '0.8'))  # Scale size in medium vol regimes
 
 # Cadence & spacing
-LOOP_INTERVAL_SECONDS = int(os.getenv('LOOP_INTERVAL_SECONDS', '10'))  # main loop sleep (default 5 min)
+LOOP_INTERVAL_SECONDS = int(os.getenv('LOOP_INTERVAL_SECONDS', '300'))  # main loop sleep (default 5 min)
 MIN_TRADE_INTERVAL_SECONDS = int(os.getenv('MIN_TRADE_INTERVAL_SECONDS', '120'))  # min spacing between trades
 FEE_RATIO_COOLDOWN = float(os.getenv('FEE_RATIO_COOLDOWN', '50.0'))  # if fees > X% of gross PnL, pause trading
 PRIORITY_MOVE_PCT = float(os.getenv('PRIORITY_MOVE_PCT', '1.5'))  # % move over short window to break cooldown

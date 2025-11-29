@@ -22,6 +22,15 @@ class TestCostTracker(unittest.TestCase):
         net = tracker.calculate_net_pnl(gross_pnl=100.0, total_fees=10.0, total_llm_cost=5.0)
         self.assertEqual(net, 85.0)
 
+    def test_llm_costs_switch_with_provider(self):
+        tracker = CostTracker("GEMINI", llm_provider="OPENAI")
+        cost = tracker.calculate_llm_cost(input_tokens=2000, output_tokens=1000)
+        expected = (
+            2000 * tracker.llm_costs_by_provider["OPENAI"]["input_per_token"]
+            + 1000 * tracker.llm_costs_by_provider["OPENAI"]["output_per_token"]
+        )
+        self.assertAlmostEqual(cost, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

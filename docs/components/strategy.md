@@ -4,7 +4,7 @@
 
 ## Inputs
 - Trading context from `trading_context.py` (positions, prices, indicators, caps, cooldowns).
-- System prompt + tools for Gemini 2.5 Flash.
+- System prompt + tools for the configured LLM provider (Gemini 2.5 Flash by default; OpenAI models supported when `LLM_PROVIDER=OPENAI`).
 
 ## Outputs
 - Actions: `BUY`/`SELL` entries (may include `stop_price`/`target_price`), `HOLD`, `CLOSE_POSITION`, `PARTIAL_CLOSE` (with `plan_id` and fraction), `UPDATE_PLAN`, `PAUSE_TRADING`.

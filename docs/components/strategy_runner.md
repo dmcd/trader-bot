@@ -3,7 +3,7 @@
 The main orchestration loop (`trader_bot/strategy_runner.py`) pulls market data, asks the LLM for actions, enforces risk, and routes orders.
 
 ## Flow
-- Initializes exchange, DB, cost tracker, risk manager, and strategy.
+- Initializes exchange, DB, cost tracker (with configured `LLM_PROVIDER`), risk manager, and strategy.
 - Main loop: fetch market data → build trading context → call `LLMStrategy.decide` → risk checks → place order(s) → log/telemetry → sleep.
 - Periodic sync: rebuild session stats, refresh open orders/positions, sync recent trades from exchange.
 

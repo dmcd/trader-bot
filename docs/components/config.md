@@ -4,6 +4,7 @@
 
 ## Key areas
 - Trading mode/keys: `TRADING_MODE`, `ACTIVE_EXCHANGE`, sandbox vs live API keys.
+- LLM selection: `LLM_PROVIDER` (`GEMINI` default, `OPENAI` optional), `LLM_MODEL`, and provider API keys/base URLs.
 - Risk limits: daily loss caps, max order value, exposure caps, spacing, slippage, spread/notional guards.
 - Cadence: loop interval, trade spacing, priority move thresholds.
 - LLM limits: cost caps, call spacing, max consecutive errors.

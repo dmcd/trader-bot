@@ -9,6 +9,7 @@
 
 ## LLM costs
 - Computes input/output token costs per call; applies caps from `config.py`.
+- Supports provider-specific rates (Gemini default, OpenAI optional) keyed by `LLM_PROVIDER`.
 - Used by the runner to pause or reject actions if cost ceilings are reached.
 
 ## Tips

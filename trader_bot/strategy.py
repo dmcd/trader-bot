@@ -8,11 +8,13 @@ from pathlib import Path
 from datetime import datetime, timezone
 from statistics import pstdev
 from typing import Any, Dict, List, Optional
+from types import SimpleNamespace
 
 import google.generativeai as genai
 import jsonschema
 from pydantic import BaseModel, ValidationError
 from abc import ABC, abstractmethod
+from openai import OpenAI
 
 from trader_bot.config import (
     ACTIVE_EXCHANGE,
@@ -20,9 +22,11 @@ from trader_bot.config import (
     BREAK_GLASS_COOLDOWN_MIN,
     FEE_RATIO_COOLDOWN,
     GEMINI_API_KEY,
+    LLM_MODEL,
     LLM_MAX_CONSECUTIVE_ERRORS,
     LLM_MAX_SESSION_COST,
     LLM_MIN_CALL_INTERVAL_SECONDS,
+    LLM_PROVIDER,
     LOOP_INTERVAL_SECONDS,
     MAX_DAILY_LOSS,
     MAX_DAILY_LOSS_PERCENT,
@@ -41,6 +45,8 @@ from trader_bot.config import (
     TOOL_MAX_JSON_BYTES,
     TOOL_MAX_TRADES,
     TRADING_MODE,
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
 )
 from trader_bot.llm_tools import TOOL_PARAM_MODELS, ToolName, ToolRequest, ToolResponse
 
@@ -61,6 +67,22 @@ class StrategySignal:
     def __str__(self):
         return f"{self.action} {self.quantity} {self.symbol} ({self.reason})"
 
+
+class _LLMResponse:
+    """Lightweight wrapper to normalize LLM responses across providers."""
+
+    def __init__(self, text: str, prompt_tokens: int = 0, completion_tokens: int = 0):
+        self.text = text
+        self.usage_metadata = SimpleNamespace(
+            prompt_token_count=prompt_tokens or 0,
+            candidates_token_count=completion_tokens or 0,
+        )
+        self.usage = SimpleNamespace(
+            prompt_tokens=prompt_tokens or 0,
+            completion_tokens=completion_tokens or 0,
+        )
+
+
 class BaseStrategy(ABC):
     def __init__(self, db, technical_analysis, cost_tracker):
         self.db = db
@@ -78,11 +100,32 @@ class LLMStrategy(BaseStrategy):
     def __init__(self, db, technical_analysis, cost_tracker, open_orders_provider=None, ohlcv_provider=None, tool_coordinator=None):
         super().__init__(db, technical_analysis, cost_tracker)
         self.system_prompt = self._load_system_prompt()
-        self.model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=self.system_prompt)
-        if GEMINI_API_KEY:
-            genai.configure(api_key=GEMINI_API_KEY)
+        self.llm_provider = (LLM_PROVIDER or "GEMINI").upper()
+        if self.llm_provider not in {"GEMINI", "OPENAI"}:
+            logger.warning("Unknown LLM_PROVIDER %s, defaulting to GEMINI", self.llm_provider)
+            self.llm_provider = "GEMINI"
+
+        self.llm_model = LLM_MODEL
+        self._llm_ready = False
+        self._openai_client = None
+        self.model = None
+
+        if self.llm_provider == "OPENAI":
+            if OPENAI_API_KEY:
+                client_kwargs = {"api_key": OPENAI_API_KEY}
+                if OPENAI_BASE_URL:
+                    client_kwargs["base_url"] = OPENAI_BASE_URL
+                self._openai_client = OpenAI(**client_kwargs)
+                self._llm_ready = True
+            else:
+                logger.warning("OPENAI_API_KEY not found. LLMStrategy will not work.")
         else:
-            logger.warning("GEMINI_API_KEY not found. LLMStrategy will not work.")
+            if GEMINI_API_KEY:
+                genai.configure(api_key=GEMINI_API_KEY)
+                self.model = genai.GenerativeModel(self.llm_model, system_instruction=self.system_prompt)
+                self._llm_ready = True
+            else:
+                logger.warning("GEMINI_API_KEY not found. LLMStrategy will not work.")
         
         self.last_trade_ts = None
         self._last_break_glass = 0.0
@@ -619,18 +662,66 @@ class LLMStrategy(BaseStrategy):
 
     async def _invoke_llm(self, prompt: str, timeout: int = 30):
         """Invoke the LLM with a timeout."""
+        if self.llm_provider == "OPENAI":
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._call_openai, prompt),
+                timeout=timeout,
+            )
+
         return await asyncio.wait_for(
-            asyncio.to_thread(self.model.generate_content, prompt),
+            asyncio.to_thread(self._call_gemini, prompt),
             timeout=timeout,
         )
 
+    def _call_gemini(self, prompt: str):
+        if not self.model:
+            raise RuntimeError("Gemini model is not configured")
+        return self.model.generate_content(prompt)
+
+    def _call_openai(self, prompt: str):
+        if not self._openai_client:
+            raise RuntimeError("OpenAI client is not configured")
+
+        response = self._openai_client.chat.completions.create(
+            model=self.llm_model,
+            messages=[
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        text = ""
+        if response.choices:
+            message = response.choices[0].message
+            text = message.content if message else ""
+
+        usage = getattr(response, "usage", None)
+        prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
+        completion_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
+
+        return _LLMResponse(text, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+
     def _log_llm_usage(self, session_id: int, response: Any, response_text: str):
         """Record token usage and partial response to DB."""
-        if not hasattr(response, "usage_metadata") or not session_id:
+        if not session_id:
             return
         try:
-            input_tokens = response.usage_metadata.prompt_token_count
-            output_tokens = response.usage_metadata.candidates_token_count
+            usage = None
+            input_tokens = None
+            output_tokens = None
+
+            if hasattr(response, "usage_metadata"):
+                usage = response.usage_metadata
+                input_tokens = getattr(usage, "prompt_token_count", None)
+                output_tokens = getattr(usage, "candidates_token_count", None)
+
+            if (input_tokens is None or output_tokens is None) and hasattr(response, "usage"):
+                usage = response.usage
+                input_tokens = input_tokens if input_tokens is not None else getattr(usage, "prompt_tokens", None)
+                output_tokens = output_tokens if output_tokens is not None else getattr(usage, "completion_tokens", None)
+
+            if input_tokens is None or output_tokens is None:
+                return
+
             cost = self.cost_tracker.calculate_llm_cost(input_tokens, output_tokens)
             self.db.log_llm_call(session_id, input_tokens, output_tokens, cost, response_text[:500])
         except Exception as e:
@@ -707,8 +798,8 @@ class LLMStrategy(BaseStrategy):
         return requests
 
     async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0):
-        """Asks Gemini for a trading decision and logs full prompt/response; returns (decision_json, trace_id)."""
-        if not GEMINI_API_KEY:
+        """Asks the configured LLM for a trading decision and logs full prompt/response; returns (decision_json, trace_id)."""
+        if not self._llm_ready:
             return None, None
 
         open_orders = open_orders or []

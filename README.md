@@ -1,6 +1,6 @@
 # Dennis-Day Trading Bot
 
-A laptop-run trading bot that aims to replicate a disciplined professional day trader. Decisions come from Gemini 2.5 Flash using only fresh market/context data (no back-testing) and heuristic intuition. It includes a risk engine, SQLite storage, structured logging, and a Streamlit dashboard for monitoring and control.
+A laptop-run trading bot that aims to replicate a disciplined professional day trader. Decisions come from a configurable LLM (Gemini 2.5 Flash by default) using only fresh market/context data (no back-testing) and heuristic intuition. It includes a risk engine, SQLite storage, structured logging, and a Streamlit dashboard for monitoring and control.
 
 ## 🚀 Getting Started
 
@@ -10,7 +10,7 @@ Follow these steps to get the bot up and running in minutes.
 
 *   **Python 3.10+** installed.
 *   **API Keys**:
-    *   **Gemini (Google)**: An API key for Gemini 2.5 Flash (for the LLM strategy).
+    *   **LLM**: Gemini 2.5 Flash API key (default) or OpenAI API key when using `LLM_PROVIDER=OPENAI`.
     *   **Exchange**:
         *   **Gemini Exchange Account**: API Key and Secret (Sandbox or Live).
 
@@ -32,9 +32,15 @@ Create a `.env` file in the root directory. You can copy the example below and f
 # --- Core Settings ---
 TRADING_MODE=PAPER            # 'PAPER' or 'LIVE'
 ACTIVE_EXCHANGE=GEMINI        # 'GEMINI'
+LLM_PROVIDER=GEMINI           # 'GEMINI' (default) or 'OPENAI'
+LLM_MODEL=gemini-2.5-flash    # Override to switch Gemini or OpenAI model ids
 
 # --- Gemini (Google) LLM ---
 GEMINI_API_KEY=your_google_gemini_api_key
+
+# --- OpenAI LLM (optional) ---
+# Set when LLM_PROVIDER=OPENAI
+OPENAI_API_KEY=your_openai_api_key
 
 # --- Exchange: Gemini ---
 GEMINI_EXCHANGE_API_KEY=your_gemini_exchange_key

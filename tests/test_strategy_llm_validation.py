@@ -241,6 +241,30 @@ class TestLLMValidation(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(hold_signal)
             self.assertEqual(hold_signal.action, 'HOLD')
 
+    @patch('trader_bot.strategy.OpenAI')
+    async def test_openai_provider_invocation_and_usage_logging(self, mock_openai):
+        mock_db = MagicMock()
+        mock_cost = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = '{"action":"HOLD","symbol":"BTC/USD","reason":"test"}'
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.usage = MagicMock(prompt_tokens=10, completion_tokens=5)
+
+        with patch('trader_bot.strategy.LLM_PROVIDER', 'OPENAI'), \
+             patch('trader_bot.strategy.OPENAI_API_KEY', 'sk-test'):
+            client = MagicMock()
+            mock_openai.return_value = client
+            client.chat.completions.create.return_value = mock_response
+            strategy = LLMStrategy(mock_db, self.mock_ta, mock_cost)
+
+        resp = await strategy._invoke_llm("prompt")
+        self.assertEqual(resp.text, mock_choice.message.content)
+
+        strategy._log_llm_usage(session_id=1, response=resp, response_text=resp.text)
+        mock_cost.calculate_llm_cost.assert_called_with(10, 5)
+        mock_db.log_llm_call.assert_called_once()
+
 
 if __name__ == '__main__':
     unittest.main()

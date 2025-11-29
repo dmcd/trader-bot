@@ -31,6 +31,7 @@ from trader_bot.config import (
     MIN_TRADE_SIZE,
     MIN_TOP_OF_BOOK_NOTIONAL,
     ORDER_VALUE_BUFFER,
+    LLM_PROVIDER,
     PLAN_MAX_AGE_MINUTES,
     PLAN_MAX_PER_SYMBOL,
     PLAN_TRAIL_TO_BREAKEVEN_PCT,
@@ -79,7 +80,7 @@ class StrategyRunner:
         
         # Professional trading infrastructure
         self.db = TradingDatabase()
-        self.cost_tracker = CostTracker(self.exchange_name)
+        self.cost_tracker = CostTracker(self.exchange_name, llm_provider=LLM_PROVIDER)
         self.technical_analysis = TechnicalAnalysis()
         self.session_id = None
         self.context = None

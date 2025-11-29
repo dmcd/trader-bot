@@ -6,6 +6,10 @@ load_dotenv()
 # Trading Mode
 TRADING_MODE = os.getenv('TRADING_MODE', 'PAPER') # PAPER or LIVE
 
+# LLM Provider
+LLM_PROVIDER = os.getenv('LLM_PROVIDER', 'GEMINI').upper()
+LLM_MODEL = os.getenv('LLM_MODEL', 'gemini-2.5-flash')
+
 # Connection Settings
 
 
@@ -53,6 +57,8 @@ TOOL_RATE_LIMIT_RECENT_TRADES = int(os.getenv('TOOL_RATE_LIMIT_RECENT_TRADES', '
 
 # API Keys
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '') # LLM Key
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+OPENAI_BASE_URL = os.getenv('OPENAI_BASE_URL', '')
 GEMINI_EXCHANGE_API_KEY = os.getenv('GEMINI_EXCHANGE_API_KEY', '') # Trading Key
 GEMINI_EXCHANGE_SECRET = os.getenv('GEMINI_EXCHANGE_SECRET', '') # Trading Secret
 GEMINI_SANDBOX_API_KEY = os.getenv('GEMINI_SANDBOX_API_KEY', '') # Sandbox Key
@@ -70,6 +76,9 @@ GEMINI_TAKER_FEE = float(os.getenv('GEMINI_TAKER_FEE', '0.0040'))  # 0.40%
 # LLM Costs (Gemini 2.5 Flash pricing per token)
 GEMINI_INPUT_COST_PER_TOKEN = float(os.getenv('GEMINI_INPUT_COST', '0.000000075'))   # $0.075 per 1M tokens
 GEMINI_OUTPUT_COST_PER_TOKEN = float(os.getenv('GEMINI_OUTPUT_COST', '0.00000030'))  # $0.30 per 1M tokens
+# LLM Costs (OpenAI GPT-4o pricing per token)
+OPENAI_INPUT_COST_PER_TOKEN = float(os.getenv('OPENAI_INPUT_COST_PER_TOKEN', '0.000005'))   # $5.00 per 1M tokens
+OPENAI_OUTPUT_COST_PER_TOKEN = float(os.getenv('OPENAI_OUTPUT_COST_PER_TOKEN', '0.000015'))  # $15.00 per 1M tokens
 
 # LLM cost/frequency guards
 LLM_MAX_SESSION_COST = float(os.getenv('LLM_MAX_SESSION_COST', '10.0'))  # USD cap per session before auto HOLD

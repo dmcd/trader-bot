@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This repo runs a single-symbol, Gemini-focused trading loop with an LLM-driven strategy, deterministic risk overlays, and rich telemetry. The runner orchestrates market data capture, strategy prompts, risk gating, execution, and persistence into SQLite plus structured logs.
+This repo runs a single-symbol trading loop with an LLM-driven strategy (Gemini by default, OpenAI optional), deterministic risk overlays, and rich telemetry. The runner orchestrates market data capture, strategy prompts, risk gating, execution, and persistence into SQLite plus structured logs.
 
 ## Component Map
 
@@ -17,7 +17,7 @@ flowchart TD
     Runner -->|risk state| Risk["risk_manager.py"]
     Runner -->|tool requests| Tools["data_fetch_coordinator.py"]
     Runner -->|decisions| Strategy["LLMStrategy (strategy.py)"]
-    Strategy -->|prompt+JSON| LLM["Gemini 2.5 Flash"]
+    Strategy -->|prompt+JSON| LLM["LLM Provider (Gemini/OpenAI)"]
     LLM -->|decision JSON| Strategy
     Strategy -->|signal| Runner
     Runner -->|orders| Trader["gemini_trader.py"]

@@ -6,6 +6,8 @@ from trader_bot.config import (
     GEMINI_MAKER_FEE,
     GEMINI_OUTPUT_COST_PER_TOKEN,
     GEMINI_TAKER_FEE,
+    OPENAI_INPUT_COST_PER_TOKEN,
+    OPENAI_OUTPUT_COST_PER_TOKEN,
 )
 
 logger = logging.getLogger(__name__)
@@ -13,8 +15,9 @@ logger = logging.getLogger(__name__)
 class CostTracker:
     """Tracks trading fees and LLM costs."""
     
-    def __init__(self, exchange: str):
+    def __init__(self, exchange: str, llm_provider: str = "GEMINI"):
         self.exchange = exchange
+        self.llm_provider = (llm_provider or "GEMINI").upper()
         
         # Fee rates per exchange
         self.fee_rates = {
@@ -24,11 +27,26 @@ class CostTracker:
             }
         }
         
-        # LLM costs (Gemini 2.5 Flash pricing)
-        self.llm_costs = {
-            'input_per_token': GEMINI_INPUT_COST_PER_TOKEN,
-            'output_per_token': GEMINI_OUTPUT_COST_PER_TOKEN,
+        # LLM costs by provider
+        self.llm_costs_by_provider = {
+            'GEMINI': {
+                'input_per_token': GEMINI_INPUT_COST_PER_TOKEN,
+                'output_per_token': GEMINI_OUTPUT_COST_PER_TOKEN,
+            },
+            'OPENAI': {
+                'input_per_token': OPENAI_INPUT_COST_PER_TOKEN,
+                'output_per_token': OPENAI_OUTPUT_COST_PER_TOKEN,
+            },
         }
+
+        self.llm_costs = self.llm_costs_by_provider.get(
+            self.llm_provider, self.llm_costs_by_provider['GEMINI']
+        )
+        if self.llm_provider not in self.llm_costs_by_provider:
+            logger.warning(
+                "Unknown LLM provider %s; defaulting cost tracking to GEMINI rates",
+                self.llm_provider,
+            )
     
     def calculate_trade_fee(self, symbol: str, quantity: float, price: float, 
                            action: str = 'BUY') -> float:

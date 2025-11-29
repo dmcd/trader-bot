@@ -83,7 +83,7 @@ If you prefer to run components individually:
 
 - `trader_bot/`: Core package (strategy runner, LLM strategy, risk manager, exchange adapter, dashboard, prompts).
 - `tests/`: Pytest suite and shared fixtures.
-- `docs/`: Architecture and per-component docs.
+- `docs/`: Single architecture overview.
 - `run.sh`: Helper launcher that starts the runner and dashboard together.
 - Runtime artifacts: `trading.db`, `bot.log`, `telemetry.log`, `console.log` in the repo root.
 
@@ -92,6 +92,4 @@ If you prefer to run components individually:
 For a deeper dive into how the bot works, check out the documentation:
 
 *   [**Repository Guidelines**](AGENTS.md): Structure, commands, and conventions.
-*   [**Component Docs**](docs/components/README.md): Per-component deep dives (strategy runner, risk manager, exchange adapter, dashboard, etc.).
-*   [**Architecture Overview**](docs/architecture.md): High-level system layout and data flows.
-*   [**Domain Model**](docs/domain_model.md): Entities, relationships, and persistence model with diagrams.
+*   [**Architecture Overview**](docs/architecture.md): Single-page map with diagrams and one-line component summaries.

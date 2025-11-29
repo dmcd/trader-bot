@@ -1,80 +1,67 @@
-# Architecture Overview
+# Architecture
 
-This repo runs a single-symbol trading loop with an LLM-driven strategy (Gemini by default, OpenAI optional), deterministic risk overlays, and rich telemetry. The runner orchestrates market data capture, strategy prompts, risk gating, execution, and persistence into SQLite plus structured logs.
+Concise view of how the bot fits together, with a sentence per component and two quick diagrams to keep it maintainable.
 
-## Component Map
+## System Diagram
 
 ```mermaid
 flowchart TD
-    subgraph Venue["Exchange (ccxt/Gemini)"]
-        Ticker["Ticker & Order Book"]
-        Orders["Order Placement/Cancel"]
-        Trades["My Trades"]
-        OHLCV["OHLCV"]
+    subgraph Exchange["Gemini via ccxt"]
+        Ticker["Ticker/Order Book"]
+        Orders["Orders/Fills"]
+        Trades["Trade History"]
     end
 
     Runner["strategy_runner.py"] -->|market data| TA["technical_analysis.py"]
-    Runner -->|risk state| Risk["risk_manager.py"]
-    Runner -->|tool requests| Tools["data_fetch_coordinator.py"]
-    Runner -->|decisions| Strategy["LLMStrategy (strategy.py)"]
-    Strategy -->|prompt+JSON| LLM["LLM Provider (Gemini/OpenAI)"]
-    LLM -->|decision JSON| Strategy
-    Strategy -->|signal| Runner
+    Runner -->|decisions| Strategy["strategy.py (LLMStrategy)"]
+    Runner -->|risk checks| Risk["risk_manager.py"]
+    Runner -->|fees| Costs["cost_tracker.py"]
     Runner -->|orders| Trader["gemini_trader.py"]
-    Trader -->|fills/orders| Runner
     Runner -->|persist| DB["database.py (SQLite)"]
-    Runner -->|logs| Logs["bot.log / telemetry.log / console.log"]
-    Tools -->|ccxt calls| Venue
-    Trader -->|ccxt calls| Venue
+    Runner -->|context| Context["trading_context.py"]
+    Runner -->|ui data| Dashboard["dashboard.py (Streamlit)"]
+    Strategy -->|LLM calls| LLM["Gemini/OpenAI"]
+    Trader --> Exchange
+    Trader <-->|fills| Runner
+    Exchange -->|trades/tickers| Runner
 ```
 
-## Loop Lifecycle (happy path)
+## Loop Sequence (happy path)
 
 ```mermaid
 sequenceDiagram
-    participant Exchange
-    participant Runner as StrategyRunner
-    participant Strategy as LLMStrategy
-    participant Tools as DataFetchCoordinator
+    participant Ex as Exchange
+    participant R as StrategyRunner
+    participant S as LLMStrategy
     participant Risk as RiskManager
-    participant Trader as GeminiTrader
+    participant T as GeminiTrader
     participant DB as TradingDatabase
 
-    Runner->>Exchange: fetch_ticker/order_book (market snapshot)
-    Runner->>DB: log market_data, refresh positions/open_orders
-    Runner->>Tools: (optional) tool requests from planner
-    Tools->>Exchange: fetch_ohlcv/fetch_trades/fetch_order_book
-    Tools-->>Runner: normalized tool_responses
-    Runner->>Strategy: generate_signal(session_id, market_data,…)
-    Strategy->>LLM: planner + decision prompts (telemetry logged)
-    LLM-->>Strategy: decision JSON
-    Strategy-->>Runner: StrategySignal(stop/target/plan ids)
-    Runner->>Risk: check_trade_allowed + exposure headroom
-    alt allowed & RR/liq/slippage pass
-        Runner->>Trader: place_order_async(prefer maker)
-        Trader-->>Runner: order result + liquidity
-        Runner->>DB: log_trade / trade_plan / stats cache
+    R->>Ex: fetch ticker/order book
+    R->>DB: log market snapshot
+    R->>S: ask for decision with context
+    S->>LLM: planner + decision prompts
+    LLM-->>S: JSON decision
+    S-->>R: StrategySignal (action/size/targets)
+    R->>Risk: check limits/spacing/liquidity
+    alt allowed
+        R->>T: place_order_async
+        T-->>R: order result + liquidity
+        R->>DB: log_trade + update stats
     else blocked
-        Runner->>Strategy: on_trade_rejected(reason)
+        R-->>S: on_trade_rejected
     end
-    Runner->>DB: telemetry + open_orders snapshot
-    Runner->>Runner: sleep LOOP_INTERVAL_SECONDS
+    R->>Dashboard: updated metrics/logs
 ```
 
-## Responsibilities (by module)
-- [`trader_bot/strategy_runner.py`](components/strategy_runner.md): main loop; wires exchange, risk, TA, cost tracking, tool coordinator; enforces spacing, slippage, liquidity, RR, plan monitoring; owns telemetry and session stats cache.
-- [`trader_bot/strategy.py` / `LLMStrategy`](components/strategy.md): builds planner+decision prompts, normalizes tool requests, clamps stop/target band, sizes within exposure/order caps, and tracks cooldown/break-glass/fee regimes.
-- [`trader_bot/trading_context.py`](components/trading_context.md): maintains the structured context surfaced to the LLM (positions, open orders, summaries) and supports regime flags.
-- [`trader_bot/data_fetch_coordinator.py`](components/strategy_runner.md#flow): validates tool requests, caches OHLCV/books/trades, and normalizes payloads with byte-size clamping before returning to the LLM.
-- [`trader_bot/risk_manager.py`](components/risk_manager.md): order value/min size, exposure caps, position count caps, pending order exposure tracking, and daily loss guard (percent & absolute) seeded from persisted equity.
-- [`trader_bot/gemini_trader.py`](components/gemini_trader.md): ccxt adapter with sandbox precision backfill, ticker/order book fetch, limit order placement with post-only retry, positions/open orders/equity sync, trade history fetch.
-- [`trader_bot/database.py`](components/database.md): SQLite schema and helpers for sessions, trades, prompts/traces, OHLCV, equity, positions/open orders, commands, and trade plans; caches session stats for restart resilience.
-- [`trader_bot/technical_analysis.py`](components/technical_analysis.md): RSI/MACD/Bollinger/SMA calculations and formatted signals for context or regime flags.
-- [`trader_bot/cost_tracker.py`](components/cost_tracker.md): calculates trading fees per exchange and LLM token costs; derives net PnL.
-- [`trader_bot/dashboard.py`](components/dashboard.md): Streamlit UI for monitoring session stats, trade history, exposure, logs, and issuing control commands (stop/close-all).
-
-## Data & Telemetry
-- SQLite (`trading.db`) stores sessions, trades, LLM calls/traces, OHLCV, equity snapshots, positions, open orders, commands, and trade plans; session stats cached for warm restarts.
-- Logs: `bot.log` (user-facing decisions), `console.log` (debug), `telemetry.log` (JSON prompts/responses/tool traces, execution outcomes).
-- Prompt artifacts: `trader_bot/llm_prompt_template.txt` drives both planner and decision prompts with context/rule blocks.
-- See also: [Domain Model](domain_model.md) for entity relationships and persistence layout.
+## Components (one-liners)
+- `strategy_runner.py`: Orchestrates the loop, wires services, enforces spacing/slippage/liquidity/risk, and logs everything.
+- `strategy.py` (`LLMStrategy`): Builds planner/decision prompts, normalizes tool hints, sizes trades, and handles cooldowns.
+- `trading_context.py`: Packages positions, orders, summaries, and regime flags for the LLM.
+- `technical_analysis.py`: Computes RSI, MACD, Bollinger Bands, SMAs, and simple signal summaries.
+- `risk_manager.py`: Enforces order value, exposure caps, position count, and daily loss guardrails.
+- `gemini_trader.py`: ccxt adapter for Gemini with precision fixes, post-only handling, and order/trade sync.
+- `cost_tracker.py`: Estimates exchange fees and LLM token costs for net PnL.
+- `database.py`: SQLite schema/helpers for sessions, trades, prompts/traces, OHLCV, equity, positions, open orders, commands, and trade plans.
+- `dashboard.py`: Streamlit UI for performance, costs, health, history, logs, and control commands.
+- `config.py`: Central tunables for API keys, limits, cadence, and modes.

@@ -12,39 +12,41 @@ def runner(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADING_DB_PATH", str(db_path))
     r = StrategyRunner(execute_orders=False)
     r._monotonic = lambda: 100.0
+    r.health_manager.monotonic = r._monotonic
     return r
 
 
 def test_exchange_circuit_breaker_trips_and_resets(runner):
-    runner.exchange_error_threshold = 2
-    runner.exchange_pause_seconds = 30
+    runner.health_manager.exchange_error_threshold = 2
+    runner.health_manager.exchange_pause_seconds = 30
 
-    runner._record_exchange_failure("get_equity", "boom")
-    assert runner._pause_until is None
+    runner.health_manager.record_exchange_failure("get_equity", "boom")
+    assert runner.health_manager.pause_until is None
 
-    runner._record_exchange_failure("ticker", "boom2")
-    assert runner._pause_until == pytest.approx(130.0)
+    runner.health_manager.record_exchange_failure("ticker", "boom2")
+    assert runner.health_manager.pause_until == pytest.approx(130.0)
 
     states = {row["key"]: row["value"] for row in runner.db.get_health_state()}
     assert states.get("exchange_circuit") == "tripped"
 
-    runner._reset_exchange_errors()
+    runner.health_manager.reset_exchange_errors()
     states = {row["key"]: row["value"] for row in runner.db.get_health_state()}
     assert states.get("exchange_circuit") == "ok"
 
 
 def test_tool_circuit_breaker_trips_and_recovers(runner):
-    runner.tool_error_threshold = 1
-    runner.tool_pause_seconds = 20
+    runner.health_manager.tool_error_threshold = 1
+    runner.health_manager.tool_pause_seconds = 20
     runner._monotonic = lambda: 50.0
+    runner.health_manager.monotonic = runner._monotonic
 
-    runner._record_tool_failure(context="get_market_data", error="oops")
-    assert runner._pause_until == pytest.approx(70.0)
+    runner.health_manager.record_tool_failure(context="get_market_data", error="oops")
+    assert runner.health_manager.pause_until == pytest.approx(70.0)
 
     states = {row["key"]: row["value"] for row in runner.db.get_health_state()}
     assert states.get("tool_circuit") == "tripped"
 
-    runner._record_tool_success()
+    runner.health_manager.record_tool_success()
     states = {row["key"]: row["value"] for row in runner.db.get_health_state()}
     assert states.get("tool_circuit") == "ok"
 

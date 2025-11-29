@@ -65,6 +65,7 @@ from trader_bot.risk_manager import RiskManager
 from trader_bot.strategy import LLMStrategy
 from trader_bot.services.command_processor import CommandProcessor
 from trader_bot.services.plan_monitor import PlanMonitor, PlanMonitorConfig
+from trader_bot.services.health_manager import HealthCircuitManager
 from trader_bot.technical_analysis import TechnicalAnalysis
 from trader_bot.trading_context import TradingContext
 from trader_bot.utils import get_client_order_id
@@ -107,18 +108,25 @@ class StrategyRunner:
         self.holdings = {}  # symbol -> {'qty': float, 'avg_cost': float}
         # Track estimated fees per order so we can reconcile with actual fills
         self._estimated_fees = {}  # order_id -> estimated fee
-        self._last_reconnect = 0.0
         self._kill_switch = False
-        self._exchange_error_streak = 0
-        self._tool_error_streak = 0
         self.exchange_error_threshold = EXCHANGE_ERROR_THRESHOLD
         self.exchange_pause_seconds = EXCHANGE_PAUSE_SECONDS
         self.tool_error_threshold = TOOL_ERROR_THRESHOLD
         self.tool_pause_seconds = TOOL_PAUSE_SECONDS
         self.ticker_max_age_ms = TICKER_MAX_AGE_SECONDS * 1000
         self.ticker_max_latency_ms = TICKER_MAX_LATENCY_MS
-        self._exchange_health = "ok"
-        self._tool_health = "ok"
+        self.health_manager = HealthCircuitManager(
+            record_health_state=self._record_health_state,
+            exchange_error_threshold=self.exchange_error_threshold,
+            exchange_pause_seconds=self.exchange_pause_seconds,
+            tool_error_threshold=self.tool_error_threshold,
+            tool_pause_seconds=self.tool_pause_seconds,
+            ticker_max_age_ms=self.ticker_max_age_ms,
+            ticker_max_latency_ms=self.ticker_max_latency_ms,
+            monotonic=self._monotonic,
+            actions_logger=bot_actions_logger,
+            logger=logger,
+        )
         self.maker_preference_default = MAKER_PREFERENCE_DEFAULT
         self.maker_preference_overrides = MAKER_PREFERENCE_OVERRIDES or {}
         # Seed a default stats container so background tasks don't crash before initialization completes
@@ -149,7 +157,6 @@ class StrategyRunner:
         self.max_plans_per_symbol = PLAN_MAX_PER_SYMBOL
         self.telemetry_logger = telemetry_logger
         self._apply_plan_trailing_pct = PLAN_TRAIL_TO_BREAKEVEN_PCT  # move stop to entry after move in favor
-        self._pause_until = None  # timestamp (monotonic seconds) when pause expires
         self.shutdown_reason: str | None = None  # track why we stop
         self.ohlcv_min_capture_spacing_seconds = OHLCV_MIN_CAPTURE_SPACING_SECONDS
         self.ohlcv_retention_limit = OHLCV_MAX_ROWS_PER_TIMEFRAME
@@ -323,76 +330,6 @@ class StrategyRunner:
         except Exception as exc:
             logger.debug(f"Could not emit LLM budget metrics: {exc}")
 
-    def _record_exchange_failure(self, context: str, error: Exception | str = None):
-        """Track consecutive exchange failures and trigger auto-pause."""
-        self._exchange_error_streak += 1
-        detail = {
-            "context": context,
-            "error": str(error) if error is not None else None,
-            "streak": self._exchange_error_streak,
-        }
-        if self._exchange_health != "degraded":
-            self._exchange_health = "degraded"
-            self._record_health_state("exchange_circuit", "degraded", detail)
-        if self._exchange_error_streak >= self.exchange_error_threshold:
-            pause_until = self._monotonic() + self.exchange_pause_seconds
-            self._pause_until = max(self._pause_until or 0, pause_until)
-            detail.update(
-                {
-                    "pause_seconds": self.exchange_pause_seconds,
-                    "tripped_at": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-            self._record_health_state("exchange_circuit", "tripped", detail)
-            bot_actions_logger.info(
-                f"🛑 Exchange circuit breaker tripped after {self.exchange_error_threshold} failures; pausing for {self.exchange_pause_seconds}s"
-            )
-            self._exchange_error_streak = 0
-            self._exchange_health = "tripped"
-
-    def _reset_exchange_errors(self):
-        """Mark exchange channel healthy and clear streak."""
-        if self._exchange_error_streak > 0 or self._exchange_health != "ok":
-            self._exchange_error_streak = 0
-            self._exchange_health = "ok"
-            self._record_health_state("exchange_circuit", "ok", {"note": "recovered"})
-
-    def _record_tool_failure(self, request: Any = None, error: Exception | str = None, context: str = None):
-        """Track consecutive tool failures and trigger auto-pause."""
-        self._tool_error_streak += 1
-        detail = {
-            "request": getattr(request, "id", None) if request is not None else None,
-            "tool": getattr(request, "tool", None).value if getattr(request, "tool", None) else None,
-            "context": context,
-            "error": str(error) if error is not None else None,
-            "streak": self._tool_error_streak,
-        }
-        if self._tool_health != "degraded":
-            self._tool_health = "degraded"
-            self._record_health_state("tool_circuit", "degraded", detail)
-        if self._tool_error_streak >= self.tool_error_threshold:
-            pause_until = self._monotonic() + self.tool_pause_seconds
-            self._pause_until = max(self._pause_until or 0, pause_until)
-            detail.update(
-                {
-                    "pause_seconds": self.tool_pause_seconds,
-                    "tripped_at": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-            self._record_health_state("tool_circuit", "tripped", detail)
-            bot_actions_logger.info(
-                f"🛑 Tool circuit breaker tripped after {self.tool_error_threshold} failures; pausing for {self.tool_pause_seconds}s"
-            )
-            self._tool_error_streak = 0
-            self._tool_health = "tripped"
-
-    def _record_tool_success(self):
-        """Mark tool path healthy and clear streak."""
-        if self._tool_error_streak > 0 or self._tool_health != "ok":
-            self._tool_error_streak = 0
-            self._tool_health = "ok"
-            self._record_health_state("tool_circuit", "ok", {"note": "recovered"})
-
     async def _reconcile_exchange_state(self):
         """
         Reconcile positions and open orders against the live exchange at startup.
@@ -458,37 +395,6 @@ class StrategyRunner:
             f"🧹 Startup reconciliation applied: positions {detail['positions_before']}→{detail['positions_after']}, "
             f"open orders {detail['orders_before']}→{detail['orders_after']}"
         )
-
-    def _is_stale_market_data(self, data: dict) -> tuple[bool, dict]:
-        """Return (stale, detail) using latency and age thresholds."""
-        if not data:
-            return True, {"reason": "empty"}
-        detail: dict[str, Any] = {}
-        now_mono = self._monotonic()
-        latency_ms = data.get("_latency_ms")
-        if latency_ms is not None:
-            detail["latency_ms"] = latency_ms
-        fetched_mono = data.get("_fetched_monotonic")
-        age_ms = None
-        if fetched_mono is not None:
-            age_ms = max(0.0, (now_mono - fetched_mono) * 1000)
-        ts_field = data.get("timestamp") or data.get("ts")
-        if ts_field is not None:
-            ts_ms = ts_field if ts_field > 1e12 else ts_field * 1000
-            wall_age = max(0.0, (time.time() * 1000) - ts_ms)
-            age_ms = age_ms if age_ms is not None else wall_age
-            detail["data_age_ms"] = wall_age
-        if age_ms is None and fetched_mono is not None:
-            age_ms = max(0.0, (now_mono - fetched_mono) * 1000)
-        if age_ms is not None:
-            detail["age_ms"] = age_ms
-        if latency_ms is not None and latency_ms > self.ticker_max_latency_ms:
-            detail["reason"] = "latency"
-            return True, detail
-        if age_ms is not None and age_ms > self.ticker_max_age_ms:
-            detail["reason"] = "age"
-            return True, detail
-        return False, detail
 
     def _log_execution_trace(self, trace_id: int, execution_result: dict):
         """Attach execution outcome to LLM trace when available."""
@@ -892,9 +798,10 @@ class StrategyRunner:
         elif signal.action == 'PAUSE_TRADING':
             duration = getattr(signal, 'duration_minutes', None) or 5
             pause_seconds = max(0, duration * 60)
-            self._pause_until = asyncio.get_event_loop().time() + pause_seconds
+            pause_until = self.health_manager.request_pause(pause_seconds)
             telemetry_record["status"] = "paused"
             telemetry_record["pause_seconds"] = pause_seconds
+            telemetry_record["pause_until"] = pause_until
             self._emit_telemetry(telemetry_record)
 
 
@@ -1010,8 +917,8 @@ class StrategyRunner:
         if getattr(self.bot, "exchange", None):
             self.data_fetch_coordinator = DataFetchCoordinator(
                 self.bot.exchange,
-                error_callback=self._record_tool_failure,
-                success_callback=self._record_tool_success,
+                error_callback=self.health_manager.record_tool_failure,
+                success_callback=self.health_manager.record_tool_success,
             )
             # Wire into strategy
             self.strategy.tool_coordinator = self.data_fetch_coordinator
@@ -1326,18 +1233,6 @@ class StrategyRunner:
             self._set_shutdown_reason("flatten-all failed")
             self._kill_switch = True
 
-    async def _reconnect_bot(self):
-        """Reconnect the broker client with a cooldown to avoid thrash."""
-        now = asyncio.get_event_loop().time()
-        if now - self._last_reconnect < 30:
-            return
-        try:
-            await self.bot.connect_async()
-            self._last_reconnect = now
-            logger.info("Reconnected to broker")
-        except Exception as e:
-            logger.error(f"Reconnect failed: {e}")
-
     async def sync_trades_from_exchange(self):
         """Sync recent trades from exchange to DB."""
         if not self.session_id:
@@ -1577,14 +1472,14 @@ class StrategyRunner:
                         current_equity = await self.bot.get_equity_async()
                     except Exception as e:
                         logger.warning(f"Could not fetch equity: {e}; skipping loop iteration.")
-                        self._record_exchange_failure("get_equity_async", e)
+                        self.health_manager.record_exchange_failure("get_equity_async", e)
                         exchange_error_seen = True
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
                     
                     if current_equity is None:
                         logger.warning("Could not fetch equity; skipping loop iteration to avoid false loss triggers.")
-                        self._record_exchange_failure("get_equity_async", "none")
+                        self.health_manager.record_exchange_failure("get_equity_async", "none")
                         exchange_error_seen = True
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
@@ -1624,8 +1519,9 @@ class StrategyRunner:
 
                     # 2. Fetch Market Data
                     now_monotonic = asyncio.get_event_loop().time()
-                    if self._pause_until and now_monotonic < self._pause_until:
-                        bot_actions_logger.info(f"⏸️ Trading paused for {self._pause_until - now_monotonic:.0f}s")
+                    if self.health_manager.should_pause(now_monotonic):
+                        remaining = self.health_manager.pause_remaining(now_monotonic)
+                        bot_actions_logger.info(f"⏸️ Trading paused for {remaining:.0f}s")
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
 
@@ -1640,7 +1536,7 @@ class StrategyRunner:
                             md = await self.bot.get_market_data_async(sym)
                         except Exception as e:
                             logger.warning(f"Market data fetch failed for {sym}: {e}")
-                            self._record_exchange_failure("get_market_data_async", e)
+                            self.health_manager.record_exchange_failure("get_market_data_async", e)
                             exchange_error_seen = True
                             if sym == primary_symbol:
                                 primary_fetch_failed = True
@@ -1681,7 +1577,7 @@ class StrategyRunner:
                         continue
 
                     primary_data = market_data.get(primary_symbol)
-                    stale, freshness_detail = self._is_stale_market_data(primary_data)
+                    stale, freshness_detail = self.health_manager.is_stale_market_data(primary_data)
                     if stale:
                         bot_actions_logger.info("⏸️ Skipping loop: market data stale or too latent")
                         self._record_health_state("market_data", "stale", freshness_detail)
@@ -1707,7 +1603,7 @@ class StrategyRunner:
                         self.db.replace_positions(self.session_id, live_positions)
                     except Exception as e:
                         logger.warning(f"Could not refresh positions: {e}")
-                        self._record_exchange_failure("get_positions_async", e)
+                        self.health_manager.record_exchange_failure("get_positions_async", e)
                         exchange_error_seen = True
                     # Refresh open orders for exposure headroom and context
                     open_orders = []
@@ -1717,7 +1613,7 @@ class StrategyRunner:
                         self.db.replace_open_orders(self.session_id, open_orders)
                     except Exception as e:
                         logger.warning(f"Could not refresh open orders: {e}")
-                        self._record_exchange_failure("get_open_orders_async", e)
+                        self.health_manager.record_exchange_failure("get_open_orders_async", e)
                         exchange_error_seen = True
                     # Enforce per-symbol open order cap proactively
                     capped_orders = {}
@@ -1796,7 +1692,7 @@ class StrategyRunner:
                         await self.sync_trades_from_exchange()
                     except Exception as e:
                         logger.warning(f"Trade sync failed: {e}")
-                        self._record_exchange_failure("sync_trades_from_exchange", e)
+                        self.health_manager.record_exchange_failure("sync_trades_from_exchange", e)
                         exchange_error_seen = True
                     # Keep session stats cache fresh if DB trades grew
                     try:
@@ -1904,9 +1800,10 @@ class StrategyRunner:
                         elif action == 'PAUSE_TRADING':
                             duration = getattr(signal, 'duration_minutes', None) or 5
                             pause_seconds = max(0, duration * 60)
-                            self._pause_until = asyncio.get_event_loop().time() + pause_seconds
+                            pause_until = self.health_manager.request_pause(pause_seconds)
                             telemetry_record["status"] = "paused"
                             telemetry_record["pause_seconds"] = pause_seconds
+                            telemetry_record["pause_until"] = pause_until
                             self._emit_telemetry(telemetry_record)
                             bot_actions_logger.info(f"⏸️ Trading paused for {pause_seconds/60:.1f} minutes by LLM request")
                             continue
@@ -2058,15 +1955,15 @@ class StrategyRunner:
                                     )
                                 except asyncio.TimeoutError:
                                     logger.error("Order placement timed out")
-                                    self._record_exchange_failure("place_order_async", "timeout")
+                                    self.health_manager.record_exchange_failure("place_order_async", "timeout")
                                     exchange_error_seen = True
-                                    await self._reconnect_bot()
+                                    await self.health_manager.maybe_reconnect(self.bot)
                                     retries += 1
                                 except Exception as e:
                                     logger.error(f"Order placement error: {e}")
-                                    self._record_exchange_failure("place_order_async", e)
+                                    self.health_manager.record_exchange_failure("place_order_async", e)
                                     exchange_error_seen = True
-                                    await self._reconnect_bot()
+                                    await self.health_manager.maybe_reconnect(self.bot)
                                     retries += 1
 
                             # Capture reported liquidity if present
@@ -2133,7 +2030,7 @@ class StrategyRunner:
                             self._emit_telemetry(telemetry_record)
 
                     if not exchange_error_seen:
-                        self._reset_exchange_errors()
+                        self.health_manager.reset_exchange_errors()
                     # 5. Sleep
                     logger.info(f"Sleeping for {LOOP_INTERVAL_SECONDS} seconds...")
                     await asyncio.sleep(LOOP_INTERVAL_SECONDS)

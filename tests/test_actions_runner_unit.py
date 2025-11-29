@@ -113,7 +113,7 @@ class TestActionHandling(unittest.IsolatedAsyncioTestCase):
         signal.trace_id = None
         signal.regime_flags = {}
         await self.runner._handle_signal(signal=signal, market_data={}, open_orders=[], current_equity=0, current_exposure=0)
-        self.assertIsNotNone(self.runner._pause_until)
+        self.assertIsNotNone(self.runner.health_manager.pause_until)
 
 
 if __name__ == '__main__':

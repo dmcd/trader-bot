@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 import json
 import logging
 import os
@@ -905,14 +904,11 @@ class StrategyRunner:
                             liquidity=order_result.get('liquidity') if order_result else 'taker',
                             realized_pnl=realized,
                         )
-                        fill_result = self._apply_fill_to_session_stats(order_result.get('order_id') if order_result else None, fee, realized)
-                        if inspect.isawaitable(fill_result):
-                            await fill_result
-                        else:
-                            try:
-                                await fill_result  # in case a mock/coroutine slips through
-                            except TypeError:
-                                pass
+                        self._apply_fill_to_session_stats(
+                            order_result.get('order_id') if order_result else None,
+                            fee,
+                            realized,
+                        )
                         self.db.update_trade_plan_status(plan_id, status='closed', closed_at=now_iso, reason=reason)
                     except Exception as e:
                         logger.error(f"Failed to close plan {plan_id}: {e}")

@@ -198,6 +198,35 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         await self.runner._monitor_trade_plans(price_lookup={"ETH/USD": 1500}, open_orders=[])
         self.runner.db.update_trade_plan_status.assert_called_once()
 
+    async def test_apply_fill_not_treated_as_awaitable(self):
+        now = datetime.now(timezone.utc)
+        self.runner.db = MagicMock()
+        self.runner.db.get_open_trade_plans.return_value = [{
+            'id': 8,
+            'symbol': 'ETH/USD',
+            'side': 'SELL',
+            'entry_price': 1500,
+            'stop_price': 1550,
+            'target_price': 1400,
+            'size': 0.5,
+            'opened_at': now.isoformat(),
+            'version': 1
+        }]
+        self.runner.risk_manager.positions = {"ETH/USD": {"quantity": 0.0, "current_price": 1500}}
+        self.runner.db.update_trade_plan_status = Mock()
+        self.runner.db.log_trade = Mock()
+        self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': 'trap', 'liquidity': 'taker'})
+
+        class AwaitTrap:
+            def __await__(self):
+                raise AssertionError("should not await session stats")
+
+        self.runner._apply_fill_to_session_stats = Mock(return_value=AwaitTrap())
+
+        await self.runner._monitor_trade_plans(price_lookup={"ETH/USD": 1500}, open_orders=[])
+
+        self.runner._apply_fill_to_session_stats.assert_called_once()
+
 
 if __name__ == '__main__':
     unittest.main()

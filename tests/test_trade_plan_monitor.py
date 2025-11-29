@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 # Ensure tests never write to the production trading.db
 _fd, _db_path = tempfile.mkstemp(prefix="trader-bot-test-", suffix=".db")
@@ -226,6 +227,54 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         await self.runner._monitor_trade_plans(price_lookup={"ETH/USD": 1500}, open_orders=[])
 
         self.runner._apply_fill_to_session_stats.assert_called_once()
+
+    async def test_partial_close_updates_plan_size(self):
+        self.runner.db = MagicMock()
+        self.runner.db.get_open_trade_plans.return_value = [{
+            'id': 10,
+            'symbol': 'BTC/USD',
+            'side': 'BUY',
+            'size': 1.0,
+        }]
+        self.runner.db.update_trade_plan_size = Mock()
+        self.runner.db.update_trade_plan_status = Mock()
+        self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': 'pc', 'liquidity': 'taker'})
+        self.runner._update_holdings_and_realized = Mock(return_value=0.0)
+        self.runner._apply_fill_to_session_stats = Mock()
+        self.runner.risk_manager.check_trade_allowed = Mock(return_value=SimpleNamespace(allowed=True, reason=None))
+
+        signal = SimpleNamespace(plan_id=10, close_fraction=0.5, symbol="BTC/USD", action="PARTIAL_CLOSE", reason="test")
+        telemetry_record = {}
+
+        await self.runner._handle_partial_close(signal, telemetry_record, trace_id=None, market_data={"BTC/USD": {"price": 100}}, current_exposure=0.0)
+
+        self.runner.db.update_trade_plan_size.assert_called_once()
+        self.runner.db.update_trade_plan_status.assert_not_called()
+        self.assertEqual(telemetry_record.get("status"), "partial_close_executed")
+
+    async def test_partial_close_closes_plan_when_fully_flat(self):
+        self.runner.db = MagicMock()
+        self.runner.db.get_open_trade_plans.return_value = [{
+            'id': 11,
+            'symbol': 'ETH/USD',
+            'side': 'SELL',
+            'size': 0.2,
+        }]
+        self.runner.db.update_trade_plan_size = Mock()
+        self.runner.db.update_trade_plan_status = Mock()
+        self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': 'pc2', 'liquidity': 'taker'})
+        self.runner._update_holdings_and_realized = Mock(return_value=0.0)
+        self.runner._apply_fill_to_session_stats = Mock()
+        self.runner.risk_manager.check_trade_allowed = Mock(return_value=SimpleNamespace(allowed=True, reason=None))
+
+        signal = SimpleNamespace(plan_id=11, close_fraction=1.0, symbol="ETH/USD", action="PARTIAL_CLOSE", reason="test")
+        telemetry_record = {}
+
+        await self.runner._handle_partial_close(signal, telemetry_record, trace_id=None, market_data={"ETH/USD": {"price": 1500}}, current_exposure=0.0)
+
+        self.runner.db.update_trade_plan_status.assert_called_once()
+        self.runner.db.update_trade_plan_size.assert_not_called()
+        self.assertEqual(telemetry_record.get("status"), "partial_close_executed")
 
 
 if __name__ == '__main__':

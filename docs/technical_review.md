@@ -27,7 +27,7 @@
 - [x] Equity sanity checks (`trader_bot/strategy_runner.py:117-205`) are info-level only and not surfaced to health state; discrepancies between broker equity and reconstructed PnL can go unnoticed.
 
 ## Testing Gaps / Suggestions
-- [ ] Add regression tests for partial close plan accounting to ensure plan size/status is updated and monitor does not double-close.
+- [x] Add regression tests for partial close plan accounting to ensure plan size/status is updated and monitor does not double-close.
 - [ ] Add coverage for volatility-aware trailing logic in `_monitor_trade_plans` to catch the undefined `regime_flags` reference and validate trail behavior across regimes.
 - [ ] Add integration coverage for multi-symbol exposure handling (positions without prices, open orders across symbols) and ensure the runner does not hard-code a single symbol.
 - [ ] Add tests for the order value buffer to assert it clamps to `MAX_ORDER_VALUE - ORDER_VALUE_BUFFER` and logs appropriately.

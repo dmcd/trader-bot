@@ -10,9 +10,6 @@ TRADING_MODE = os.getenv('TRADING_MODE', 'PAPER') # PAPER or LIVE
 LLM_PROVIDER = os.getenv('LLM_PROVIDER', 'GEMINI').upper()
 LLM_MODEL = os.getenv('LLM_MODEL', 'gemini-2.5-flash')
 
-# Connection Settings
-
-
 # Risk Management Limits
 MAX_DAILY_LOSS = float(os.getenv('MAX_DAILY_LOSS', '1000.0')) # absolute currency stop
 MAX_DAILY_LOSS_PERCENT = float(os.getenv('MAX_DAILY_LOSS_PERCENT', '3.0')) # percent of equity stop
@@ -46,6 +43,7 @@ OHLCV_MAX_ROWS_PER_TIMEFRAME = int(os.getenv('OHLCV_MAX_ROWS_PER_TIMEFRAME', '10
 MARKET_DATA_RETENTION_MINUTES = int(os.getenv('MARKET_DATA_RETENTION_MINUTES', '720'))  # minutes of market snapshots to keep per session
 LLM_TRACE_RETENTION_DAYS = int(os.getenv('LLM_TRACE_RETENTION_DAYS', '7'))  # days of full prompt/response traces to retain
 COMMAND_RETENTION_DAYS = int(os.getenv('COMMAND_RETENTION_DAYS', '7'))  # days to keep executed/cancelled commands
+DASHBOARD_REFRESH_SECONDS = int(os.getenv('DASHBOARD_REFRESH_SECONDS', '5'))  # Streamlit auto-refresh cadence
 
 # Market microstructure guards
 MAX_SPREAD_PCT = float(os.getenv('MAX_SPREAD_PCT', '0.20'))  # Skip trading if spread exceeds this % of mid
@@ -85,7 +83,6 @@ GEMINI_SANDBOX_SECRET = os.getenv('GEMINI_SANDBOX_SECRET', '') # Sandbox Secret
 # Exchange Fees
 GEMINI_MAKER_FEE = float(os.getenv('GEMINI_MAKER_FEE', '0.0020'))  # 0.20%
 GEMINI_TAKER_FEE = float(os.getenv('GEMINI_TAKER_FEE', '0.0040'))  # 0.40%
-
 
 # LLM Costs (Gemini 2.5 Flash pricing per token)
 GEMINI_INPUT_COST_PER_TOKEN = float(os.getenv('GEMINI_INPUT_COST', '0.000000075'))   # $0.075 per 1M tokens

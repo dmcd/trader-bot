@@ -12,6 +12,7 @@ import streamlit as st
 from trader_bot.config import (
     ACTIVE_EXCHANGE,
     BOT_VERSION,
+    DASHBOARD_REFRESH_SECONDS,
     LOOP_INTERVAL_SECONDS,
     LLM_MAX_SESSION_COST,
     LLM_PROVIDER,
@@ -325,6 +326,7 @@ current_trades_df = load_history(session_id, user_timezone)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🤖 Bot Status")
+st.sidebar.caption(f"Auto-refresh every {DASHBOARD_REFRESH_SECONDS} seconds")
 bot_running = is_bot_running()
 if bot_running:
     st.sidebar.success("✅ Bot Running")
@@ -656,3 +658,7 @@ with tab_history:
                 width="stretch",
                 height=600
             )
+
+# Auto-refresh by sleeping then rerunning the app
+time.sleep(DASHBOARD_REFRESH_SECONDS)
+st.rerun()

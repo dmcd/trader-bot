@@ -492,6 +492,9 @@ class LLMStrategy(BaseStrategy):
         plan_counts_str = ", ".join(f"{sym}:{cnt}/{PLAN_MAX_PER_SYMBOL}" for sym, cnt in plan_counts.items()) or "none"
 
         llm_cost_note = self._format_llm_burn_note(burn_stats)
+        plan_cap_note = ""
+        if any(count >= PLAN_MAX_PER_SYMBOL for count in plan_counts.values()):
+            plan_cap_note = "- Plan cap reached: you must UPDATE_PLAN/PARTIAL_CLOSE/CANCEL or rely on auto-replace if enabled.\n"
         prompt_context = (
             f"- Cooldown: {spacing_flag}\n"
             f"- Priority signal allowed: {priority_flag}\n"
@@ -502,7 +505,7 @@ class LLMStrategy(BaseStrategy):
             f"- Pending BUY exposure: ${pending_buy_exposure:,.2f}\n"
             f"- Max open orders per symbol: {MAX_POSITIONS}\n"
             f"- Plans per symbol (used/cap): {plan_counts_str}\n"
-            f"{'- Plan cap reached: you must UPDATE_PLAN/PARTIAL_CLOSE/CANCEL or rely on auto-replace if enabled.\n' if any(count >= PLAN_MAX_PER_SYMBOL for count in plan_counts.values()) else ''}"
+            f"{plan_cap_note}"
             f"- Order cap: ${order_cap_value:.2f}\n"
             f"- Min trade size: ${MIN_TRADE_SIZE:.2f}\n"
             f"- Open orders: {open_order_count} ({open_orders_summary})"

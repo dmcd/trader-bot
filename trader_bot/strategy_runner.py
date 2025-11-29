@@ -5,7 +5,7 @@ import logging
 import os
 import signal
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import google.generativeai as genai
 
@@ -36,6 +36,7 @@ from trader_bot.config import (
     PLAN_TRAIL_TO_BREAKEVEN_PCT,
     PRIORITY_LOOKBACK_MIN,
     PRIORITY_MOVE_PCT,
+    TRADE_SYNC_CUTOFF_MINUTES,
     TRADING_MODE,
 )
 from trader_bot.cost_tracker import CostTracker
@@ -946,6 +947,7 @@ class StrategyRunner:
                     since_ms = int(since_dt.timestamp() * 1000) - 5000
                 except Exception:
                     since_ms = None
+            cutoff_dt = datetime.now(timezone.utc) - timedelta(minutes=TRADE_SYNC_CUTOFF_MINUTES)
 
             for symbol in symbols:
                 cursor_since = since_ms
@@ -975,6 +977,13 @@ class StrategyRunner:
                         if existing:
                             self.processed_trade_ids.add(trade_id)
                             continue
+
+                        ts_ms = t.get('timestamp')
+                        if ts_ms:
+                            trade_dt = datetime.fromtimestamp(ts_ms / 1000, timezone.utc)
+                            if trade_dt < cutoff_dt:
+                                self.processed_trade_ids.add(trade_id)
+                                continue
 
                         order_id = t.get('order')
                         client_oid = t.get('_client_oid') or get_client_order_id(t)

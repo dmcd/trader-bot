@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timezone, timedelta
 
 import pytest
 
@@ -78,6 +79,7 @@ class StubBot:
 
 
 def build_trade(trade_id, client_oid=None, order_id="order-1", side="buy", price=100.0, amount=1.0, fee=0.0):
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000)
     payload = {
         "id": trade_id,
         "order": order_id,
@@ -85,7 +87,7 @@ def build_trade(trade_id, client_oid=None, order_id="order-1", side="buy", price
         "price": price,
         "amount": amount,
         "fee": {"cost": fee},
-        "timestamp": 1,
+        "timestamp": ts,
         "datetime": "2024-01-01T00:00:00Z",
     }
     if client_oid is not None:
@@ -150,6 +152,30 @@ async def test_sync_trades_skips_unattributed_trades():
     assert runner.db.logged_trades == []
     # Ensure we don't loop forever on the same trade id
     assert "t-unknown" in runner.processed_trade_ids
+
+
+@pytest.mark.asyncio
+async def test_sync_trades_respects_cutoff(monkeypatch):
+    client_oid = f"{CLIENT_ORDER_PREFIX}old"
+    # 2 hours old trade should be skipped when cutoff is 60 minutes
+    old_ts = int((datetime.now(timezone.utc) - timedelta(hours=2)).timestamp() * 1000)
+    old_trade = build_trade("t-old", client_oid=client_oid, order_id="order-old")
+    old_trade["timestamp"] = old_ts
+
+    runner = StrategyRunner(execute_orders=False)
+    runner.session_id = 6
+    runner.telemetry_logger = None
+    runner.db = StubDB(plan_reason=None)
+    runner.bot = StubBot([old_trade])
+    runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
+    runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
+    runner.order_reasons = {"order-old": "LLM reason"}
+
+    monkeypatch.setattr("trader_bot.strategy_runner.TRADE_SYNC_CUTOFF_MINUTES", 60)
+
+    await runner.sync_trades_from_exchange()
+
+    assert runner.db.logged_trades == []
 
 
 @pytest.mark.asyncio

@@ -82,3 +82,6 @@ PLAN_TRAIL_TO_BREAKEVEN_PCT = float(os.getenv('PLAN_TRAIL_TO_BREAKEVEN_PCT', '0.
 
 # Order routing
 CLIENT_ORDER_PREFIX = os.getenv('CLIENT_ORDER_PREFIX', 'BOT')
+
+# Trade sync guardrails
+TRADE_SYNC_CUTOFF_MINUTES = int(os.getenv('TRADE_SYNC_CUTOFF_MINUTES', '1440'))  # ignore trades older than this window when syncing

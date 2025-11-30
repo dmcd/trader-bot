@@ -146,11 +146,9 @@ class IBTrader(BaseTrader):
 
         try:
             ping_fn = getattr(self.ib, "reqCurrentTimeAsync", None)
-            if ping_fn:
-                await asyncio.wait_for(ping_fn(), timeout=self.connect_timeout)
-            else:
-                # ib_insync exposes a sync variant; offload to a thread to avoid blocking.
-                await asyncio.wait_for(asyncio.to_thread(self.ib.reqCurrentTime), timeout=self.connect_timeout)
+            if not ping_fn:
+                raise RuntimeError("IB client is missing reqCurrentTimeAsync")
+            await asyncio.wait_for(ping_fn(), timeout=self.connect_timeout)
             self._last_ping_mono = self._monotonic()
         except Exception as exc:
             self.connected = False
@@ -231,17 +229,7 @@ class IBTrader(BaseTrader):
 
         started = self._monotonic()
         try:
-            req_fn = getattr(self.ib, "reqMktDataAsync", None)
-            if req_fn:
-                ticker = await asyncio.wait_for(
-                    req_fn(contract, "", False, False),
-                    timeout=self.connect_timeout,
-                )
-            else:
-                ticker = await asyncio.wait_for(
-                    asyncio.to_thread(self.ib.reqMktData, contract, "", False, False),
-                    timeout=self.connect_timeout,
-                )
+            ticker = await self._request_ticker(contract)
         except Exception as exc:
             logger.error(f"Error fetching IB market data for {symbol}: {exc}")
             return None
@@ -816,17 +804,7 @@ class IBTrader(BaseTrader):
         contract = Forex(pair, exchange=self.fx_exchange)
 
         try:
-            req_fn = getattr(self.ib, "reqMktDataAsync", None)
-            if req_fn:
-                ticker = await asyncio.wait_for(
-                    req_fn(contract, "", False, False),
-                    timeout=self.connect_timeout,
-                )
-            else:
-                ticker = await asyncio.wait_for(
-                    asyncio.to_thread(self.ib.reqMktData, contract, "", False, False),
-                    timeout=self.connect_timeout,
-                )
+            ticker = await self._request_ticker(contract)
         except Exception as exc:
             logger.warning(f"FX quote request failed for {pair}: {exc}")
             return None
@@ -922,10 +900,7 @@ class IBTrader(BaseTrader):
         }
         if fetch_fn:
             return await asyncio.wait_for(fetch_fn(contract, **params), timeout=self.connect_timeout)
-        return await asyncio.wait_for(
-            asyncio.to_thread(self.ib.reqHistoricalData, contract, **params),
-            timeout=self.connect_timeout,
-        )
+        raise RuntimeError("IB client is missing reqHistoricalDataAsync")
 
     def _throttle_hist_requests(self):
         now = self._monotonic()
@@ -1047,7 +1022,45 @@ class IBTrader(BaseTrader):
         place_fn = getattr(self.ib, "placeOrderAsync", None)
         if place_fn:
             return await place_fn(contract, order)
-        return await asyncio.to_thread(self.ib.placeOrder, contract, order)
+        return self.ib.placeOrder(contract, order)
+
+    async def _request_ticker(self, contract):
+        """
+        Issue a market data request on the main asyncio loop and wait briefly
+        for the first update so ib_insync does not hop into a thread that
+        lacks an event loop.
+        """
+        req_fn = getattr(self.ib, "reqMktDataAsync", None)
+        if req_fn:
+            return await asyncio.wait_for(
+                req_fn(contract, "", False, False),
+                timeout=self.connect_timeout,
+            )
+
+        ticker = self.ib.reqMktData(contract, "", False, False)
+        if ticker is None:
+            return None
+
+        if not self._ticker_has_data(ticker):
+            try:
+                await asyncio.wait_for(ticker.updateEvent, timeout=self.connect_timeout)
+            except asyncio.TimeoutError:
+                # Return whatever we have; caller handles missing fields
+                pass
+            except Exception as exc:
+                logger.warning(f"Ticker update wait failed: {exc}")
+        return ticker
+
+    @staticmethod
+    def _ticker_has_data(ticker) -> bool:
+        for field in ("bid", "ask", "last", "close", "marketPrice"):
+            try:
+                value = getattr(ticker, field, None)
+            except Exception:
+                value = None
+            if value not in (None, 0):
+                return True
+        return False
 
     async def _await_order_status(self, trade):
         deadline = self._monotonic() + self.order_wait_timeout

@@ -765,3 +765,45 @@ async def test_ping_failure_schedules_backoff():
 
     assert trader.connected is False
     assert trader._next_reconnect_time > clock.now
+
+
+@pytest.mark.asyncio
+async def test_fetch_order_book_shapes_top_of_book():
+    fake_ib = FakeIB(
+        connected=True,
+        market_data={
+            "BHPAUD": FakeTicker(price=101.0, bid=100.5, ask=101.5, bid_size=200, ask_size=120)
+        },
+    )
+    trader = IBTrader(ib_client=fake_ib)
+    trader.connected = True
+
+    ob = await trader.fetch_order_book("BHP/AUD")
+
+    assert ob["bids"] == [[100.5, 200]]
+    assert ob["asks"] == [[101.5, 120]]
+    assert ob["symbol"] == "BHP/AUD"
+    assert "timestamp" in ob
+
+
+@pytest.mark.asyncio
+async def test_fetch_trades_returns_empty_list():
+    fake_ib = FakeIB(connected=True)
+    trader = IBTrader(ib_client=fake_ib)
+    trader.connected = True
+
+    trades = await trader.fetch_trades("BHP/AUD", limit=5)
+
+    assert trades == []
+
+
+@pytest.mark.asyncio
+async def test_hist_rate_limit_enforced():
+    bars = [FakeBar(1_700_000_000_000, 100, 101, 99, 100.5, 1000)]
+    fake_ib = FakeIB(connected=True, historical_data={"BHPAUD": bars})
+    trader = IBTrader(ib_client=fake_ib, hist_request_limit=1, hist_window_seconds=1000.0)
+    trader.connected = True
+
+    await trader.fetch_ohlcv("BHP/AUD", timeframe="1m", limit=1)
+    with pytest.raises(RuntimeError):
+        await trader.fetch_ohlcv("BHP/AUD", timeframe="1m", limit=1)

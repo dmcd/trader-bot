@@ -56,6 +56,8 @@ class IBTrader(BaseTrader):
         order_poll_interval: float = 0.25,
         reconnect_backoff_base: float = 1.0,
         reconnect_backoff_max: float = 30.0,
+        hist_request_limit: int = 60,
+        hist_window_seconds: float = 600.0,
         ib_client: Optional[IB] = None,
         monotonic: Optional[Callable[[], float]] = None,
     ):
@@ -81,6 +83,9 @@ class IBTrader(BaseTrader):
         self.reconnect_backoff_max = reconnect_backoff_max
         self._reconnect_failures = 0
         self._next_reconnect_time = 0.0
+        self.hist_request_limit = hist_request_limit
+        self.hist_window_seconds = hist_window_seconds
+        self._hist_requests: list[float] = []
         self.ib: IB = ib_client or IB()
         self.connected = False
         self._last_ping_mono: float | None = None
@@ -442,6 +447,24 @@ class IBTrader(BaseTrader):
 
         return results
 
+    async def fetch_order_book(self, symbol: str, limit: int = 5) -> dict[str, Any]:
+        md = await self.get_market_data_async(symbol)
+        if not md:
+            return {"bids": [], "asks": [], "symbol": symbol, "timestamp": int(time.time() * 1000)}
+        bid = md.get("bid")
+        ask = md.get("ask")
+        bid_size = md.get("bid_size") or md.get("bidSize")
+        ask_size = md.get("ask_size") or md.get("askSize")
+        bids = [[bid, bid_size]] if bid is not None else []
+        asks = [[ask, ask_size]] if ask is not None else []
+        ts = int(time.time() * 1000)
+        return {"bids": bids, "asks": asks, "symbol": md.get("symbol", symbol), "timestamp": ts}
+
+    async def fetch_trades(self, symbol: str, limit: int = 50) -> list[dict[str, Any]]:
+        # IB does not expose public tape in the same way; return empty list to satisfy interface.
+        _ = (symbol, limit)
+        return []
+
     async def cancel_open_order_async(self, order_id):  # pragma: no cover - placeholder
         raise NotImplementedError("Order cancellation not implemented for IB yet.")
 
@@ -555,6 +578,7 @@ class IBTrader(BaseTrader):
             logger.error(str(exc))
             raise
 
+        self._throttle_hist_requests()
         try:
             bars = await self._fetch_historical_data(contract, bar_size, duration)
         except Exception as exc:
@@ -833,6 +857,14 @@ class IBTrader(BaseTrader):
             asyncio.to_thread(self.ib.reqHistoricalData, contract, **params),
             timeout=self.connect_timeout,
         )
+
+    def _throttle_hist_requests(self):
+        now = self._monotonic()
+        window_start = now - self.hist_window_seconds
+        self._hist_requests = [ts for ts in self._hist_requests if ts >= window_start]
+        if len(self._hist_requests) >= self.hist_request_limit:
+            raise RuntimeError("IB historical data rate limit exceeded")
+        self._hist_requests.append(now)
 
     @staticmethod
     def _fill_timestamp_ms(fill) -> int | None:

@@ -525,6 +525,7 @@ class LLMStrategy(BaseStrategy):
             pending_buy_exposure=pending_buy_exposure,
             can_trade=can_trade,
             spacing_flag=spacing_flag,
+            priority_flag=priority_flag,
             plan_counts=plan_counts,
             burn_stats=burn_stats,
         )
@@ -917,7 +918,7 @@ class LLMStrategy(BaseStrategy):
         except Exception:
             return trimmed[: max(0, budget // 2)]
 
-    async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0, can_trade: bool = True, spacing_flag: str = "", plan_counts: dict = None, burn_stats: Dict[str, Any] | None = None):
+    async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0, can_trade: bool = True, spacing_flag: str = "", priority_flag: str = "false", plan_counts: dict = None, burn_stats: Dict[str, Any] | None = None):
         """Asks the configured LLM for a trading decision and logs full prompt/response; returns (decision_json, trace_id)."""
         if not self._llm_ready:
             return None, None

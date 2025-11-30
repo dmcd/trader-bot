@@ -73,11 +73,11 @@
      - [x] Confirm dashboards/consumers handle the shape without schema drift.
 
 8) **Dashboard & UX**
-   - [ ] Surface IB account summary (cash balances, margin available) and commission estimates on the Streamlit dashboard.
-     - [ ] Add a service/DTO for account summary + commission estimates decoupled from `ib_insync` objects.
-     - [ ] Expose account summary from IB adapter to the dashboard layer.
-     - [ ] Render balances/margin and per-order commission estimates with AUD labels.
-     - [ ] Add tests for dashboard data assembly (can be stubbed service).
+   - [x] Surface IB account summary (cash balances, margin available) and commission estimates on the Streamlit dashboard.
+     - [x] Add a service/DTO for account summary + commission estimates decoupled from `ib_insync` objects.
+     - [x] Expose account summary from IB adapter to the dashboard layer.
+     - [x] Render balances/margin and per-order commission estimates with AUD labels.
+     - [x] Add tests for dashboard data assembly (can be stubbed service).
    - [ ] Add venue badge and display base currency in PnL/equity cards. Clarify market hours status and recent connectivity/circuit state for IB.
      - [ ] Add dashboard-friendly status payload (venue, base currency, market hours, last circuit state).
      - [ ] Show venue indicator and base currency in equity/PnL widgets.

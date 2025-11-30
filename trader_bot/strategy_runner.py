@@ -10,6 +10,7 @@ from typing import Any
 
 import google.generativeai as genai
 
+from trader_bot.accounting import AccountSnapshot
 from trader_bot.config import (
     ACTIVE_EXCHANGE,
     AUTO_REPLACE_PLAN_ON_CAP,
@@ -423,6 +424,20 @@ class StrategyRunner:
             self._record_health_state("llm_budget", budget_status, burn_stats)
         except Exception as exc:
             logger.debug(f"Could not emit LLM budget metrics: {exc}")
+
+    async def _capture_account_snapshot(self) -> None:
+        """Fetch and persist latest broker account summary for dashboards."""
+        if self.session_id is None:
+            return
+        try:
+            summary_entries = await self.bot.get_account_summary_async()
+            snapshot = AccountSnapshot.from_entries(
+                summary_entries, base_currency=self.base_currency or "USD", source=self.exchange_name
+            )
+            if snapshot:
+                self.db.log_account_snapshot(self.session_id, snapshot)
+        except Exception as exc:
+            logger.debug(f"Could not capture account summary: {exc}")
 
     async def _reconcile_exchange_state(self):
         """
@@ -1078,6 +1093,10 @@ class StrategyRunner:
                             self.db.log_equity_snapshot(self.session_id, current_equity)
                         except Exception as e:
                             logger.warning(f"Could not log equity snapshot: {e}")
+                        try:
+                            await self._capture_account_snapshot()
+                        except Exception as e:
+                            logger.debug(f"Could not log account snapshot: {e}")
                     self.risk_manager.update_equity(current_equity)
                     
                     risk_result = await self.orchestrator.enforce_risk_budget(

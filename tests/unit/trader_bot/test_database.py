@@ -314,6 +314,24 @@ def test_equity_snapshot_logging_and_pruning(db_session):
     assert db.get_latest_equity(session_id) == 150.0
 
 
+def test_account_snapshot_round_trip(db_session):
+    db, session_id = db_session
+    snapshot = {
+        "base_currency": "AUD",
+        "net_liquidation": 10_000.0,
+        "available_funds": 4_000.0,
+        "excess_liquidity": 3_500.0,
+        "buying_power": 12_000.0,
+        "cash_balances": {"AUD": 500.0, "USD": 100.0},
+        "source": "IB",
+    }
+    db.log_account_snapshot(session_id, snapshot)
+    latest = db.get_latest_account_snapshot(session_id)
+
+    assert latest["net_liquidation"] == snapshot["net_liquidation"]
+    assert latest["cash_balances"]["AUD"] == snapshot["cash_balances"]["AUD"]
+
+
 def test_get_open_orders_handles_empty_table(db_session):
     db, session_id = db_session
     assert db.get_open_orders(session_id) == []

@@ -95,6 +95,12 @@ class FakeDB:
     def get_session_stats(self, _session_id):
         return {}
 
+    def get_open_orders(self, _session_id):
+        return []
+
+    def get_latest_account_snapshot(self, _session_id):
+        return None
+
 
 @pytest.fixture(scope="module")
 def dashboard_module(tmp_path_factory):

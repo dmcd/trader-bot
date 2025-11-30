@@ -174,6 +174,22 @@ class TradingDatabase:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS account_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                base_currency TEXT,
+                net_liquidation REAL,
+                available_funds REAL,
+                excess_liquidity REAL,
+                buying_power REAL,
+                cash_balances TEXT,
+                source TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        """)
         
         # Technical indicators table
         cursor.execute("""
@@ -599,6 +615,62 @@ class TradingDatabase:
             VALUES (?, ?, ?)
         """, (session_id, datetime.now().isoformat(), equity))
         self.conn.commit()
+
+    def log_account_snapshot(self, session_id: int, snapshot: Any):
+        """Persist normalized broker account summary for dashboard/telemetry."""
+        if snapshot is None:
+            return
+        record = snapshot.to_record() if hasattr(snapshot, "to_record") else snapshot
+        timestamp = record.get("timestamp") or datetime.now().isoformat()
+        cash_balances = record.get("cash_balances") or {}
+        try:
+            cash_json = json.dumps(cash_balances)
+        except Exception:
+            cash_json = "{}"
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO account_snapshots (
+                session_id, timestamp, base_currency, net_liquidation, available_funds,
+                excess_liquidity, buying_power, cash_balances, source
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                timestamp,
+                record.get("base_currency"),
+                record.get("net_liquidation"),
+                record.get("available_funds"),
+                record.get("excess_liquidity"),
+                record.get("buying_power"),
+                cash_json,
+                record.get("source"),
+            ),
+        )
+        self.conn.commit()
+
+    def get_latest_account_snapshot(self, session_id: int) -> Optional[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT *
+            FROM account_snapshots
+            WHERE session_id = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (session_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        try:
+            result["cash_balances"] = json.loads(result.get("cash_balances") or "{}")
+        except Exception:
+            result["cash_balances"] = {}
+        return result
 
     def log_ohlcv_batch(self, session_id: int, symbol: str, timeframe: str, bars: List[Dict[str, Any]]):
         """Persist a batch of OHLCV bars for a symbol/timeframe."""

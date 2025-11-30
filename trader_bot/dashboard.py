@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
+from trader_bot.accounting import estimate_commissions_for_orders
 from trader_bot.config import (
     ACTIVE_EXCHANGE,
     BOT_VERSION,
@@ -283,6 +284,24 @@ def load_health_state():
     finally:
         db.close()
 
+def load_account_snapshot(session_id):
+    if not session_id:
+        return None
+    db = TradingDatabase()
+    try:
+        return db.get_latest_account_snapshot(session_id)
+    finally:
+        db.close()
+
+def build_order_price_lookup(open_orders, latest_prices):
+    lookup = dict(latest_prices or {})
+    for order in open_orders or []:
+        sym = order.get("symbol")
+        price = order.get("price")
+        if sym and price and sym not in lookup:
+            lookup[sym] = price
+    return lookup
+
 def summarize_health_detail(detail):
     if not detail:
         return ""
@@ -317,6 +336,12 @@ db_version_lookup.close()
 health_states = load_health_state()
 session_stats, session_id = load_session_stats(current_session_id)
 current_trades_df = load_history(session_id, user_timezone)
+open_orders_cached = load_open_orders(session_id) if session_id else []
+account_snapshot = load_account_snapshot(session_id)
+current_prices = {}
+if session_stats and not current_trades_df.empty:
+    symbols = current_trades_df['symbol'].unique()
+    current_prices = get_latest_prices(session_id, symbols)
 
 # --- Sidebar ---
 
@@ -371,10 +396,8 @@ with tab_live:
         df = current_trades_df.copy()
         
         if session_stats and not df.empty:
-            symbols = df['symbol'].unique()
-            current_prices = get_latest_prices(session_id, symbols)
             realized_pnl, unrealized_pnl, active_positions, df, exposure, trade_spacing = calculate_pnl(df, current_prices)
-            open_orders = load_open_orders(session_id)
+            open_orders = list(open_orders_cached)
             pending_exposure = 0.0
             if open_orders:
                 for o in open_orders:
@@ -499,9 +522,36 @@ with tab_live:
             st.info("No trade history for this version yet.")
 
     with col2:
+        if account_snapshot:
+            st.subheader("🏦 Account Summary")
+            base_ccy = account_snapshot.get("base_currency") or "USD"
+            m_a, m_b = st.columns(2)
+            net_liq = account_snapshot.get("net_liquidation")
+            avail = account_snapshot.get("available_funds")
+            excess = account_snapshot.get("excess_liquidity")
+            buying = account_snapshot.get("buying_power")
+            m_a.metric(f"Net Liq ({base_ccy})", f"${net_liq:,.2f}" if net_liq is not None else "n/a")
+            m_b.metric(f"Avail Funds ({base_ccy})", f"${avail:,.2f}" if avail is not None else "n/a")
+            m_c, m_d = st.columns(2)
+            m_c.metric(f"Excess Liquidity ({base_ccy})", f"${excess:,.2f}" if excess is not None else "n/a")
+            m_d.metric(f"Buying Power ({base_ccy})", f"${buying:,.2f}" if buying is not None else "n/a")
+            cash_balances = account_snapshot.get("cash_balances") or {}
+            if cash_balances:
+                cash_rows = [{"currency": k, "cash": v} for k, v in cash_balances.items()]
+                st.dataframe(
+                    pd.DataFrame(cash_rows),
+                    hide_index=True,
+                    column_config={
+                        "currency": "Currency",
+                        "cash": st.column_config.NumberColumn("Cash", format="$%.2f"),
+                    },
+                    width="stretch",
+                    height=180,
+                )
+
         if session_stats and session_id:
             st.subheader("📌 Open Orders")
-            open_orders = load_open_orders(session_id)
+            open_orders = list(open_orders_cached)
             if open_orders:
                 oo_df = pd.DataFrame(open_orders)
                 oo_df = oo_df.rename(columns={"amount": "quantity"})
@@ -518,6 +568,27 @@ with tab_live:
                 )
             else:
                 st.info("No open orders")
+
+            price_lookup = build_order_price_lookup(open_orders, current_prices)
+            commission_rows = estimate_commissions_for_orders(open_orders, price_lookup, cost_tracker)
+            st.subheader("🧾 Commission Estimates")
+            if commission_rows:
+                commission_df = pd.DataFrame(commission_rows)
+                st.dataframe(
+                    commission_df,
+                    hide_index=True,
+                    column_config={
+                        "symbol": "Symbol",
+                        "side": "Side",
+                        "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
+                        "price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                        "estimated_fee": st.column_config.NumberColumn("Est. Fee", format="$%.4f"),
+                    },
+                    width="stretch",
+                    height=220,
+                )
+            else:
+                st.caption("No eligible orders to estimate commissions.")
 
             st.subheader("🎯 Trade Plans")
             plans = load_trade_plans(session_id)

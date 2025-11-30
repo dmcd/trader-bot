@@ -48,6 +48,11 @@ Notes on the current session model:
     - [x] `StrategyOrchestrator`
     - [x] `TradingContext`
   - [ ] Add portfolio-aware DAO calls in services (positions/orders/trades/market data).
+    - [ ] `PlanMonitor` uses `portfolio_id` when reading/updating plans and logging trades.
+    - [ ] `ResyncService` persists and reloads positions/orders/trade sync markers by `portfolio_id`.
+    - [ ] `StrategyRunner` helper lookups (active/sync symbols, rebuild stats) scope DB reads by `portfolio_id`.
+    - [ ] `MarketDataService`/OHLCV capture uses `portfolio_id` for logging/pruning.
+    - [ ] `TradingContext` fetches trades/LLM traces/market data with `portfolio_id` scope.
   - [ ] Adjust resync bootstrap to load prior positions/open orders for the portfolio without clearing across restarts.
   - [ ] Remove session-centric flows (daily session creation, start_of_day reset, session_id logging) and replace with portfolio_id/run_id usage across services and loggers.
 

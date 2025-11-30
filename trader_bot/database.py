@@ -15,6 +15,17 @@ class TradingDatabase:
         self.db_path = db_path or os.getenv("TRADING_DB_PATH", "trading.db")
         self.conn = None
         self.initialize_database()
+
+    @staticmethod
+    def _column_exists(cursor: sqlite3.Cursor, table: str, column: str) -> bool:
+        cursor.execute(f"PRAGMA table_info({table})")
+        return any(row["name"] == column for row in cursor.fetchall())
+
+    def _ensure_column(self, cursor: sqlite3.Cursor, table: str, column_def: str):
+        """Add a column if it is missing (idempotent for schema upgrades)."""
+        column_name = column_def.split()[0]
+        if not self._column_exists(cursor, table, column_name):
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
     
     def initialize_database(self):
         """Create database and tables if they don't exist."""
@@ -56,6 +67,7 @@ class TradingDatabase:
             CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
+                portfolio_id INTEGER,
                 timestamp TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 action TEXT NOT NULL,
@@ -67,7 +79,8 @@ class TradingDatabase:
                 reason TEXT,
                 trade_id TEXT,
                 UNIQUE(trade_id),
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
 
@@ -75,11 +88,13 @@ class TradingDatabase:
             CREATE TABLE IF NOT EXISTS processed_trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
+                portfolio_id INTEGER,
                 trade_id TEXT NOT NULL,
                 client_order_id TEXT,
                 recorded_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(session_id, trade_id),
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
         
@@ -88,13 +103,15 @@ class TradingDatabase:
             CREATE TABLE IF NOT EXISTS llm_calls (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
+                portfolio_id INTEGER,
                 timestamp TEXT NOT NULL,
                 input_tokens INTEGER DEFAULT 0,
                 output_tokens INTEGER DEFAULT 0,
                 total_tokens INTEGER DEFAULT 0,
                 cost REAL DEFAULT 0.0,
                 decision TEXT,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
 
@@ -103,13 +120,15 @@ class TradingDatabase:
             CREATE TABLE IF NOT EXISTS llm_traces (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
+                portfolio_id INTEGER,
                 timestamp TEXT NOT NULL,
                 prompt TEXT,
                 response TEXT,
                 decision_json TEXT,
                 market_context TEXT,
                 execution_result TEXT,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
         
@@ -118,6 +137,7 @@ class TradingDatabase:
             CREATE TABLE IF NOT EXISTS market_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
+                portfolio_id INTEGER,
                 timestamp TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 price REAL,
@@ -128,7 +148,8 @@ class TradingDatabase:
                 bid_size REAL,
                 ask_size REAL,
                 ob_imbalance REAL,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
 
@@ -137,6 +158,7 @@ class TradingDatabase:
             CREATE TABLE IF NOT EXISTS ohlcv_bars (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
+                portfolio_id INTEGER,
                 timestamp TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 timeframe TEXT NOT NULL,
@@ -145,7 +167,8 @@ class TradingDatabase:
                 low REAL,
                 close REAL,
                 volume REAL,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
         try:
@@ -158,9 +181,11 @@ class TradingDatabase:
             CREATE TABLE IF NOT EXISTS equity_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
+                portfolio_id INTEGER,
                 timestamp TEXT NOT NULL,
                 equity REAL,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
         
@@ -169,6 +194,7 @@ class TradingDatabase:
             CREATE TABLE IF NOT EXISTS indicators (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
+                portfolio_id INTEGER,
                 timestamp TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 rsi REAL,
@@ -176,7 +202,8 @@ class TradingDatabase:
                 macd_signal REAL,
                 bb_upper REAL,
                 bb_lower REAL,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
 
@@ -185,12 +212,14 @@ class TradingDatabase:
             CREATE TABLE IF NOT EXISTS positions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
+                portfolio_id INTEGER,
                 symbol TEXT NOT NULL,
                 quantity REAL NOT NULL,
                 avg_price REAL,
                 exchange_timestamp TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
 
@@ -199,6 +228,7 @@ class TradingDatabase:
             CREATE TABLE IF NOT EXISTS open_orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
+                portfolio_id INTEGER,
                 order_id TEXT,
                 symbol TEXT NOT NULL,
                 side TEXT,
@@ -208,9 +238,49 @@ class TradingDatabase:
                 status TEXT,
                 exchange_timestamp TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
+
+        # Portfolio column backfill for existing deployments
+        for table_name in [
+            "trades",
+            "processed_trades",
+            "llm_calls",
+            "llm_traces",
+            "market_data",
+            "ohlcv_bars",
+            "equity_snapshots",
+            "indicators",
+            "positions",
+            "open_orders",
+        ]:
+            try:
+                self._ensure_column(cursor, table_name, "portfolio_id INTEGER")
+            except Exception as e:
+                logger.debug(f"Could not add portfolio_id to {table_name}: {e}")
+
+        # Portfolio-aware indexes for common lookups
+        index_specs = [
+            ("trades", "idx_trades_portfolio_symbol_ts", "portfolio_id, symbol, timestamp DESC"),
+            ("processed_trades", "idx_processed_trades_portfolio_trade", "portfolio_id, trade_id"),
+            ("market_data", "idx_market_data_portfolio_symbol_ts", "portfolio_id, symbol, timestamp DESC"),
+            ("ohlcv_bars", "idx_ohlcv_portfolio_symbol_tf_ts", "portfolio_id, symbol, timeframe, timestamp DESC"),
+            ("equity_snapshots", "idx_equity_portfolio_ts", "portfolio_id, timestamp DESC"),
+            ("indicators", "idx_indicators_portfolio_symbol_ts", "portfolio_id, symbol, timestamp DESC"),
+            ("positions", "idx_positions_portfolio_symbol", "portfolio_id, symbol"),
+            ("open_orders", "idx_open_orders_portfolio_symbol", "portfolio_id, symbol"),
+            ("llm_calls", "idx_llm_calls_portfolio_ts", "portfolio_id, timestamp DESC"),
+            ("llm_traces", "idx_llm_traces_portfolio_ts", "portfolio_id, timestamp DESC"),
+        ]
+        for table_name, index_name, columns in index_specs:
+            if not self._column_exists(cursor, table_name, "portfolio_id"):
+                continue
+            try:
+                cursor.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({columns})")
+            except Exception as e:
+                logger.debug(f"Could not create index {index_name}: {e}")
         
         # Commands table for dashboard-to-bot communication
         cursor.execute("""
@@ -969,6 +1039,7 @@ class TradingDatabase:
             CREATE TABLE IF NOT EXISTS trade_plans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
+                portfolio_id INTEGER,
                 symbol TEXT NOT NULL,
                 side TEXT NOT NULL,
                 entry_price REAL NOT NULL,
@@ -982,9 +1053,20 @@ class TradingDatabase:
                 reason TEXT,
                 entry_order_id TEXT,
                 entry_client_order_id TEXT,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
+        try:
+            self._ensure_column(cursor, "trade_plans", "portfolio_id INTEGER")
+        except Exception as exc:
+            logger.debug(f"Could not add portfolio_id to trade_plans: {exc}")
+        try:
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_trade_plans_portfolio_symbol_status ON trade_plans (portfolio_id, symbol, status)"
+            )
+        except Exception as exc:
+            logger.debug(f"Could not create trade_plans index: {exc}")
         self.conn.commit()
 
     def create_trade_plan(self, session_id: int, symbol: str, side: str, entry_price: float, stop_price: float, target_price: float, size: float, reason: str = "", entry_order_id: str = None, entry_client_order_id: str = None) -> int:

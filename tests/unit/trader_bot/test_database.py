@@ -119,6 +119,50 @@ def test_portfolio_updates_metadata_when_reused(tmp_path):
     db.close()
 
 
+@pytest.mark.parametrize(
+    "table_name",
+    [
+        "trades",
+        "processed_trades",
+        "llm_calls",
+        "llm_traces",
+        "market_data",
+        "ohlcv_bars",
+        "equity_snapshots",
+        "indicators",
+        "positions",
+        "open_orders",
+    ],
+)
+def test_portfolio_column_added_to_core_tables(tmp_path, table_name):
+    db_path = tmp_path / f"{table_name}.db"
+    db = TradingDatabase(str(db_path))
+    cols = {row["name"] for row in db.conn.execute(f"PRAGMA table_info({table_name})")}
+    assert "portfolio_id" in cols
+    db.close()
+
+
+def test_trade_plan_portfolio_column_and_index(tmp_path):
+    db_path = tmp_path / "plans.db"
+    db = TradingDatabase(str(db_path))
+    db.ensure_trade_plans_table()
+    cols = {row["name"] for row in db.conn.execute("PRAGMA table_info(trade_plans)")}
+    assert "portfolio_id" in cols
+    indexes = {row["name"] for row in db.conn.execute("PRAGMA index_list(trade_plans)")}
+    assert "idx_trade_plans_portfolio_symbol_status" in indexes
+    db.close()
+
+
+def test_portfolio_indexes_created(tmp_path):
+    db_path = tmp_path / "portfolio-index.db"
+    db = TradingDatabase(str(db_path))
+    ohlcv_indexes = {row["name"] for row in db.conn.execute("PRAGMA index_list(ohlcv_bars)")}
+    market_indexes = {row["name"] for row in db.conn.execute("PRAGMA index_list(market_data)")}
+    assert "idx_ohlcv_portfolio_symbol_tf_ts" in ohlcv_indexes
+    assert "idx_market_data_portfolio_symbol_ts" in market_indexes
+    db.close()
+
+
 def test_market_data_preserves_integer_sizes(db_session):
     db, session_id = db_session
     db.log_market_data(

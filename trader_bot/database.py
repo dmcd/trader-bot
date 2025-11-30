@@ -2,8 +2,9 @@ import sqlite3
 import logging
 import os
 import json
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import Optional, List, Dict, Any
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -512,6 +513,81 @@ class TradingDatabase:
         row = cursor.fetchone()
         return dict(row) if row else {}
 
+    @staticmethod
+    def _normalize_timestamp(ts: datetime | str | None) -> datetime:
+        """Normalize timestamps for snapshot logging."""
+        if ts is None:
+            return datetime.now(timezone.utc)
+        if isinstance(ts, str):
+            try:
+                ts = datetime.fromisoformat(ts)
+            except ValueError:
+                return datetime.now(timezone.utc)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts
+
+    def update_portfolio_day_from_snapshot(
+        self,
+        portfolio_id: Optional[int],
+        as_of: datetime | str | None,
+        equity: float,
+        timezone_name: str | None = None,
+    ):
+        """
+        Update portfolio_days start/end equity and derived PnL based solely on mark-to-market snapshots.
+
+        This is reporting-only and does not gate risk checks.
+        """
+        if portfolio_id is None or equity is None:
+            return
+
+        ts = self._normalize_timestamp(as_of)
+        tz_label = timezone_name or "UTC"
+        try:
+            tzinfo = ZoneInfo(tz_label)
+        except Exception:
+            logger.debug(f"Unknown timezone '{tz_label}', falling back to UTC for portfolio_days")
+            tzinfo = timezone.utc
+            tz_label = "UTC"
+        day = ts.astimezone(tzinfo).date()
+
+        try:
+            equity_val = float(equity)
+        except (TypeError, ValueError):
+            return
+
+        row = self.ensure_portfolio_day(portfolio_id, day, tz_label)
+        row_id = row.get("id")
+        if row_id is None:
+            return
+        start_equity = row.get("start_equity")
+        if start_equity is None:
+            start_equity = equity_val
+        end_equity = equity_val
+        gross_pnl = None
+        net_pnl = None
+        if start_equity is not None:
+            gross_pnl = end_equity - start_equity
+            fees = row.get("fees") or 0.0
+            llm_cost = row.get("llm_cost") or 0.0
+            net_pnl = gross_pnl - fees - llm_cost
+
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE portfolio_days
+            SET start_equity = COALESCE(start_equity, ?),
+                end_equity = ?,
+                gross_pnl = ?,
+                net_pnl = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (start_equity, end_equity, gross_pnl, net_pnl, row_id),
+        )
+        self.conn.commit()
+
     def get_or_create_portfolio(self, name: str, base_currency: Optional[str] = None, bot_version: Optional[str] = None) -> Dict[str, Any]:
         """Return an existing portfolio by name or create one with the provided metadata."""
         normalized_base = base_currency.upper() if base_currency else None
@@ -924,14 +1000,36 @@ class TradingDatabase:
             row["ask_size"] = self._preserve_integer_if_whole(row.get("ask_size"))
         return rows
 
-    def log_equity_snapshot(self, session_id: int, equity: float, portfolio_id: int | None = None):
-        """Log mark-to-market equity snapshot."""
+    def log_equity_snapshot(
+        self,
+        session_id: int,
+        equity: float,
+        portfolio_id: int | None = None,
+        timestamp: datetime | str | None = None,
+        timezone_name: str | None = None,
+    ):
+        """Log mark-to-market equity snapshot and update portfolio-day reporting rows."""
         cursor = self.conn.cursor()
-        cursor.execute("""
+        ts = self._normalize_timestamp(timestamp)
+        ts_str = ts.isoformat()
+        portfolio_ref = portfolio_id or self.get_session_portfolio_id(session_id)
+        cursor.execute(
+            """
             INSERT INTO equity_snapshots (session_id, portfolio_id, timestamp, equity)
             VALUES (?, ?, ?, ?)
-        """, (session_id, portfolio_id or self.get_session_portfolio_id(session_id), datetime.now().isoformat(), equity))
+            """,
+            (session_id, portfolio_ref, ts_str, equity),
+        )
         self.conn.commit()
+        try:
+            self.update_portfolio_day_from_snapshot(
+                portfolio_ref,
+                ts,
+                equity,
+                timezone_name=timezone_name,
+            )
+        except Exception as exc:
+            logger.debug(f"Could not update portfolio_days from equity snapshot: {exc}")
 
     def log_ohlcv_batch(self, session_id: int, symbol: str, timeframe: str, bars: List[Dict[str, Any]], portfolio_id: int | None = None):
         """Persist a batch of OHLCV bars for a symbol/timeframe."""
@@ -1116,7 +1214,10 @@ class TradingDatabase:
         """Replace stored positions snapshot for the session."""
         cursor = self.conn.cursor()
         if portfolio_id is not None:
-            cursor.execute("DELETE FROM positions WHERE portfolio_id = ?", (portfolio_id,))
+            cursor.execute(
+                "DELETE FROM positions WHERE portfolio_id = ? OR (session_id = ? AND portfolio_id IS NULL)",
+                (portfolio_id, session_id),
+            )
         else:
             cursor.execute("DELETE FROM positions WHERE session_id = ?", (session_id,))
         portfolio_ref = portfolio_id or self.get_session_portfolio_id(session_id)
@@ -1153,7 +1254,10 @@ class TradingDatabase:
         """Replace stored open orders snapshot for the session."""
         cursor = self.conn.cursor()
         if portfolio_id is not None:
-            cursor.execute("DELETE FROM open_orders WHERE portfolio_id = ?", (portfolio_id,))
+            cursor.execute(
+                "DELETE FROM open_orders WHERE portfolio_id = ? OR (session_id = ? AND portfolio_id IS NULL)",
+                (portfolio_id, session_id),
+            )
         else:
             cursor.execute("DELETE FROM open_orders WHERE session_id = ?", (session_id,))
         portfolio_ref = portfolio_id or self.get_session_portfolio_id(session_id)

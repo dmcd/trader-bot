@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import sqlite3
 
 import pytest
@@ -449,9 +449,125 @@ def test_equity_snapshot_logging_and_pruning(db_session):
     assert db.get_latest_equity(session_id) == 150.0
 
 
+def test_portfolio_day_updates_from_equity_snapshots(tmp_path):
+    db_path = tmp_path / "portfolio-days.db"
+    db = TradingDatabase(str(db_path))
+    portfolio = db.get_or_create_portfolio(name="swing", base_currency="AUD", bot_version="v1")
+    session_id = db.get_or_create_portfolio_session(
+        portfolio_id=portfolio["id"],
+        starting_balance=1000.0,
+        bot_version="v1",
+    )
+
+    tz_name = "Australia/Melbourne"
+    first_ts = datetime(2024, 1, 1, 13, 0, tzinfo=timezone.utc)  # midnight local on Jan 2
+    db.log_equity_snapshot(
+        session_id,
+        equity=1000.0,
+        portfolio_id=portfolio["id"],
+        timestamp=first_ts,
+        timezone_name=tz_name,
+    )
+    second_ts = datetime(2024, 1, 1, 23, 0, tzinfo=timezone.utc)  # still Jan 2 locally
+    db.log_equity_snapshot(
+        session_id,
+        equity=1100.0,
+        portfolio_id=portfolio["id"],
+        timestamp=second_ts,
+        timezone_name=tz_name,
+    )
+
+    cursor = db.conn.cursor()
+    row = cursor.execute(
+        """
+        SELECT date, timezone, start_equity, end_equity, gross_pnl, net_pnl
+        FROM portfolio_days
+        WHERE portfolio_id = ?
+        """,
+        (portfolio["id"],),
+    ).fetchone()
+
+    assert row["date"] == "2024-01-02"
+    assert row["timezone"] == tz_name
+    assert row["start_equity"] == pytest.approx(1000.0)
+    assert row["end_equity"] == pytest.approx(1100.0)
+    assert row["gross_pnl"] == pytest.approx(100.0)
+    assert row["net_pnl"] == pytest.approx(100.0)
+
+    third_ts = datetime(2024, 1, 2, 14, 0, tzinfo=timezone.utc)  # Jan 3 locally
+    db.log_equity_snapshot(
+        session_id,
+        equity=1050.0,
+        portfolio_id=portfolio["id"],
+        timestamp=third_ts,
+        timezone_name=tz_name,
+    )
+
+    rows = cursor.execute(
+        """
+        SELECT date, start_equity, end_equity
+        FROM portfolio_days
+        WHERE portfolio_id = ?
+        ORDER BY date
+        """,
+        (portfolio["id"],),
+    ).fetchall()
+
+    assert len(rows) == 2
+    assert rows[0]["date"] == "2024-01-02"
+    assert rows[0]["start_equity"] == pytest.approx(1000.0)
+    assert rows[0]["end_equity"] == pytest.approx(1100.0)
+    assert rows[1]["date"] == "2024-01-03"
+    assert rows[1]["start_equity"] == pytest.approx(1050.0)
+    assert rows[1]["end_equity"] == pytest.approx(1050.0)
+
+
 def test_get_open_orders_handles_empty_table(db_session):
     db, session_id = db_session
     assert db.get_open_orders(session_id) == []
+
+
+def test_replace_positions_removes_legacy_session_rows(tmp_path):
+    db_path = tmp_path / "positions-clean.db"
+    db = TradingDatabase(str(db_path))
+    session_id = db.get_or_create_session(starting_balance=5000.0, bot_version="legacy")
+    portfolio = db.get_or_create_portfolio("swing", base_currency="USD", bot_version="v1")
+
+    db.replace_positions(session_id, [{"symbol": "ETH/USD", "quantity": 2.0, "avg_price": 2000.0}])
+    db.replace_positions(
+        session_id,
+        [{"symbol": "BTC/USD", "quantity": 1.0, "avg_price": 10000.0}],
+        portfolio_id=portfolio["id"],
+    )
+
+    positions = db.get_positions(session_id)
+    assert len(positions) == 1
+    assert positions[0]["symbol"] == "BTC/USD"
+    assert positions[0]["portfolio_id"] == portfolio["id"]
+    db.close()
+
+
+def test_replace_open_orders_removes_legacy_session_rows(tmp_path):
+    db_path = tmp_path / "orders-clean.db"
+    db = TradingDatabase(str(db_path))
+    session_id = db.get_or_create_session(starting_balance=5000.0, bot_version="legacy")
+    portfolio = db.get_or_create_portfolio("swing", base_currency="USD", bot_version="v1")
+
+    db.replace_open_orders(
+        session_id,
+        [{"order_id": "old", "symbol": "ETH/USD", "side": "sell", "price": 2100, "amount": 1, "remaining": 1}],
+    )
+    db.replace_open_orders(
+        session_id,
+        [{"order_id": "fresh", "symbol": "BTC/USD", "side": "buy", "price": 10100, "amount": 1, "remaining": 1}],
+        portfolio_id=portfolio["id"],
+    )
+
+    orders = db.get_open_orders(session_id)
+    assert len(orders) == 1
+    assert orders[0]["order_id"] == "fresh"
+    assert orders[0]["portfolio_id"] == portfolio["id"]
+    db.close()
 
 
 def test_log_llm_trace_handles_bad_json(db_session):

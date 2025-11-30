@@ -27,6 +27,10 @@ class StubDB:
         self.logged_trades = []
         self.conn = StubConn()
 
+    def close(self):
+        # Mirror TradingDatabase interface for tests that clean up explicitly
+        return None
+
     def get_distinct_trade_symbols(self, session_id):
         return ["BTC/USD"]
 
@@ -119,7 +123,7 @@ async def test_sync_trades_ignores_missing_client_ids():
     try:
         await runner.sync_trades_from_exchange()
     finally:
-        db.close()
+        runner.db.close()
 
     assert [t["trade_id"] for t in runner.db.logged_trades] == ["t-kept"]
 

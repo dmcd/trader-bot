@@ -76,8 +76,3 @@
 
 10) **Rollout & Safety**
    - [ ] Log telemetry fields for IB-specific diagnostics (contract id, exchange, commission source) to `telemetry.log` for early triage.
-
-## Open Questions
-- Do we need multi-currency reporting beyond AUD (e.g., USD-denominated FX or US equities) in the first iteration?
-- Should we support IBKR bracket orders for stop/target attachment instead of separate plan monitoring?
-- Are ASX tick-size/lot-size rules strict enough to require a symbol-specific metadata cache, or can we rely on IB’s `minTick`/`multiplier` at runtime?

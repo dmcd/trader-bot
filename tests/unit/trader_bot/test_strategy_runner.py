@@ -20,6 +20,7 @@ from trader_bot.services.strategy_orchestrator import RiskCheckResult
 from trader_bot.services.trade_action_handler import TradeActionHandler
 from trader_bot.strategy import StrategySignal
 from trader_bot.strategy_runner import (
+    TRADE_SYNC_CUTOFF_MINUTES,
     MAX_SLIPPAGE_PCT,
     MAX_SPREAD_PCT,
     MIN_TOP_OF_BOOK_NOTIONAL,
@@ -129,6 +130,84 @@ def test_order_value_buffer_logs_and_clamps(caplog):
     logger.propagate = original_propagate
     assert adjusted == 0.5
     assert any("Trimmed order" in msg for msg in caplog.messages)
+
+
+# --- Reconciliation helpers ---
+
+
+@pytest.mark.asyncio
+async def test_reconcile_exchange_state_refreshes_bindings(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRADING_DB_PATH", str(tmp_path / "reconcile.db"))
+    runner = StrategyRunner(execute_orders=False)
+    runner.session_id = 7
+    runner.resync_service = MagicMock()
+    runner.resync_service.set_session = MagicMock()
+    runner.resync_service.reconcile_exchange_state = AsyncMock()
+    await runner._reconcile_exchange_state()
+    assert runner.resync_service.db is runner.db
+    assert runner.resync_service.bot is runner.bot
+    assert runner.resync_service.risk_manager is runner.risk_manager
+    assert runner.resync_service.trade_sync_cutoff_minutes == TRADE_SYNC_CUTOFF_MINUTES
+    runner.resync_service.set_session.assert_called_with(7)
+    runner.resync_service.reconcile_exchange_state.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_open_orders_refreshes_bindings(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRADING_DB_PATH", str(tmp_path / "reconcile-orders.db"))
+    runner = StrategyRunner(execute_orders=False)
+    runner.session_id = 9
+    runner.resync_service = MagicMock()
+    runner.resync_service.set_session = MagicMock()
+    runner.resync_service.reconcile_open_orders = AsyncMock()
+    await runner._reconcile_open_orders()
+    runner.resync_service.set_session.assert_called_with(9)
+    runner.resync_service.reconcile_open_orders.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_monitor_trade_plans_refreshes_bindings(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRADING_DB_PATH", str(tmp_path / "monitor.db"))
+    runner = StrategyRunner(execute_orders=False)
+    runner.max_plan_age_minutes = 15
+    runner.day_end_flatten_hour_utc = 20
+    runner._apply_plan_trailing_pct = 0.25
+    runner.plan_monitor.refresh_bindings = MagicMock()
+    captured = {}
+
+    async def fake_monitor(session_id, price_lookup, open_orders, config, refresh_bindings_cb):
+        refresh_bindings_cb()
+        captured["session_id"] = session_id
+        captured["price_lookup"] = price_lookup
+        captured["open_orders"] = open_orders
+        captured["config"] = config
+
+    runner.orchestrator = SimpleNamespace(monitor_trade_plans=fake_monitor)
+    await runner._monitor_trade_plans(price_lookup={"BTC/USD": 100.0}, open_orders=[{"id": 1}])
+    runner.plan_monitor.refresh_bindings.assert_called_once()
+    args, kwargs = runner.plan_monitor.refresh_bindings.call_args
+    assert kwargs["bot"] is runner.bot
+    assert kwargs["db"] is runner.db
+    assert kwargs["risk_manager"] is runner.risk_manager
+    assert captured["session_id"] == runner.session_id
+    assert captured["price_lookup"] == {"BTC/USD": 100.0}
+    assert captured["open_orders"] == [{"id": 1}]
+    assert captured["config"].max_plan_age_minutes == 15
+    assert captured["config"].day_end_flatten_hour_utc == 20
+    assert captured["config"].trail_to_breakeven_pct == 0.25
+
+
+@pytest.mark.asyncio
+async def test_monitor_trade_plans_bubbles_errors(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRADING_DB_PATH", str(tmp_path / "monitor-error.db"))
+    runner = StrategyRunner(execute_orders=False)
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    runner.orchestrator = SimpleNamespace(monitor_trade_plans=boom)
+    with pytest.raises(RuntimeError):
+        await runner._monitor_trade_plans(price_lookup={}, open_orders=[])
 
 
 # --- Circuit breakers and health metrics ---
@@ -627,6 +706,39 @@ def test_fresh_market_data(fresh_runner):
     assert detail.get("reason") is None
 
 
+# --- Shutdown and rebuild helpers ---
+
+
+def test_set_shutdown_reason_only_keeps_first():
+    runner = StrategyRunner(execute_orders=False)
+    runner._set_shutdown_reason("first")
+    runner._set_shutdown_reason("second")
+    assert runner.shutdown_reason == "first"
+
+
+@pytest.mark.asyncio
+async def test_rebuild_session_stats_checks_equity(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRADING_DB_PATH", str(tmp_path / "rebuild-stats.db"))
+    runner = StrategyRunner(execute_orders=False)
+    runner.session_id = 1
+    runner.portfolio_tracker = MagicMock()
+    runner.portfolio_tracker.rebuild_session_stats_from_trades = MagicMock(return_value={"gross_pnl": 1.0})
+    runner._sanity_check_equity_vs_stats = MagicMock()
+    await runner._rebuild_session_stats_from_trades(current_equity=123.0)
+    runner.portfolio_tracker.set_session.assert_called_with(1)
+    runner._sanity_check_equity_vs_stats.assert_called_with(123.0)
+    assert runner.session_stats == {"gross_pnl": 1.0}
+
+
+@pytest.mark.asyncio
+async def test_run_loop_survives_ohlcv_failure():
+    sig = make_strategy_signal(action="BUY", quantity=0.1, symbol="BTC/USD")
+    runner = _build_runner(sig, execute_orders=False)
+    runner._capture_ohlcv = AsyncMock(side_effect=RuntimeError("boom"))
+    await asyncio.wait_for(runner.run_loop(max_loops=1), timeout=5)
+    runner._capture_ohlcv.assert_awaited()
+
+
 # --- Risk and exposure paths ---
 
 
@@ -1050,3 +1162,24 @@ async def test_runner_places_order_and_records_execution():
     await asyncio.wait_for(runner.run_loop(max_loops=1), timeout=5)
     assert runner.bot.place_calls == [("BTC/USD", "BUY", 0.1, True)]
     assert runner.strategy.executions == 1
+
+
+@pytest.mark.asyncio
+async def test_runner_skips_sell_when_price_missing():
+    sig = make_strategy_signal(action="SELL", quantity=0.2, symbol="BTC/USD")
+    runner = _build_runner(sig, execute_orders=True)
+    runner.bot = FakeBot(price=0.0, bid=0.0, ask=0.0, spread_pct=0.01, bid_size=1.0, ask_size=1.0)
+    await asyncio.wait_for(runner.run_loop(max_loops=1), timeout=5)
+    assert runner.bot.place_calls == []
+
+
+@pytest.mark.asyncio
+async def test_runner_blocks_sell_on_stacking():
+    sig = make_strategy_signal(action="SELL", quantity=0.1, symbol="BTC/USD")
+    runner = _build_runner(sig, execute_orders=True)
+    runner._stacking_block = lambda action, *_args, **_kwargs: action == "SELL"
+    runner.risk_manager.pending_orders_by_symbol = {"BTC/USD": {"sell": 50.0, "count_sell": 2}}
+    runner.risk_manager.positions = {"BTC/USD": {"quantity": 1.0}}
+    await asyncio.wait_for(runner.run_loop(max_loops=1), timeout=5)
+    assert runner.bot.place_calls == []
+    assert runner.strategy.rejections == ["Stacking blocked"]

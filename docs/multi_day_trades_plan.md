@@ -38,8 +38,16 @@ Notes on the current session model:
 - [ ] Service initialization changes
   - [x] Update `StrategyRunner` to resolve `portfolio_id` from config/DB (create if missing) and generate a `run_id` for telemetry.
     - [x] Persist `run_id` in telemetry/logging and thread into LLM calls/traces.
-  - [ ] Thread `portfolio_id` through service constructors (`PortfolioTracker`, `RiskManager`, `PlanMonitor`, `ResyncService`, `TradeActionHandler`, `MarketDataService`, `StrategyOrchestrator`, `TradingContext`).
-    - [ ] Add portfolio-aware DAO calls in services (positions/orders/trades/market data).
+  - [ ] Thread `portfolio_id` through service constructors and wiring
+    - [ ] `PortfolioTracker`
+    - [ ] `RiskManager`
+    - [ ] `PlanMonitor`
+    - [ ] `ResyncService`
+    - [ ] `TradeActionHandler`
+    - [ ] `MarketDataService`
+    - [ ] `StrategyOrchestrator`
+    - [ ] `TradingContext`
+  - [ ] Add portfolio-aware DAO calls in services (positions/orders/trades/market data).
   - [ ] Adjust resync bootstrap to load prior positions/open orders for the portfolio without clearing across restarts.
   - [ ] Remove session-centric flows (daily session creation, start_of_day reset, session_id logging) and replace with portfolio_id/run_id usage across services and loggers.
 

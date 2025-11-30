@@ -116,7 +116,10 @@ async def test_sync_trades_ignores_missing_client_ids():
     runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
     runner.order_reasons = {"order-1": "LLM signal"}
 
-    await runner.sync_trades_from_exchange()
+    try:
+        await runner.sync_trades_from_exchange()
+    finally:
+        db.close()
 
     assert [t["trade_id"] for t in runner.db.logged_trades] == ["t-kept"]
 
@@ -323,9 +326,8 @@ def test_trading_context_filters_foreign_open_orders():
 
 
 @pytest.mark.asyncio
-async def test_processed_trade_ids_persist_across_runs(tmp_path):
-    db_path = tmp_path / "dedupe.db"
-    db = TradingDatabase(db_path=str(db_path))
+async def test_processed_trade_ids_persist_across_runs(test_db_path):
+    db = TradingDatabase(db_path=str(test_db_path))
     session_id = db.get_or_create_session(starting_balance=0.0, bot_version="test-dedupe")
 
     orphan_trade = build_trade("t-repeat", client_oid=f"{CLIENT_ORDER_PREFIX}repeat", order_id="order-repeat")
@@ -339,20 +341,24 @@ async def test_processed_trade_ids_persist_across_runs(tmp_path):
     runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
     runner.order_reasons = {}
 
-    await runner.sync_trades_from_exchange()
+    try:
+        await runner.sync_trades_from_exchange()
 
-    assert db.get_trade_count(session_id) == 0
-    assert "t-repeat" in db.get_processed_trade_ids(session_id)
+        assert db.get_trade_count(session_id) == 0
+        assert "t-repeat" in db.get_processed_trade_ids(session_id)
 
-    runner2 = StrategyRunner(execute_orders=False)
-    runner2.session_id = session_id
-    runner2.telemetry_logger = None
-    runner2.db = db
-    runner2.bot = StubBot([orphan_trade])
-    runner2._update_holdings_and_realized = lambda *args, **kwargs: 0.0
-    runner2._apply_fill_to_session_stats = lambda *args, **kwargs: None
-    runner2.order_reasons = {"order-repeat": "Recovered reason"}
+        runner2 = StrategyRunner(execute_orders=False)
+        runner2.session_id = session_id
+        runner2.telemetry_logger = None
+        runner2.db = db
+        runner2.bot = StubBot([orphan_trade])
+        runner2._update_holdings_and_realized = lambda *args, **kwargs: 0.0
+        runner2._apply_fill_to_session_stats = lambda *args, **kwargs: None
+        runner2.order_reasons = {"order-repeat": "Recovered reason"}
 
-    await runner2.sync_trades_from_exchange()
+        await runner2.sync_trades_from_exchange()
 
-    assert db.get_trade_count(session_id) == 0
+        assert db.get_trade_count(session_id) == 0
+        assert "t-repeat" in db.get_processed_trade_ids(session_id)
+    finally:
+        db.close()

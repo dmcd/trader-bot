@@ -95,7 +95,7 @@ def test_metrics_drift_swallows_logging_failures():
 
 @pytest.fixture
 def metrics_db(test_db_path):
-    db = TradingDatabase()
+    db = TradingDatabase(db_path=str(test_db_path))
     session_id = db.get_or_create_session(starting_balance=1000.0, bot_version="test")
     db.log_equity_snapshot(session_id, 1010.0)
     db.update_session_totals(session_id, net_pnl=10.0)

@@ -48,6 +48,19 @@ class StubTrader(BaseTrader):
         return []
 
 
+class MissingMethodTrader(BaseTrader):
+    async def connect_async(self):
+        return None
+
+
+def test_base_trader_enforces_abstract_methods():
+    with pytest.raises(TypeError):
+        MissingMethodTrader()
+
+    stub = StubTrader()
+    assert isinstance(stub, BaseTrader)
+
+
 @pytest.mark.asyncio
 async def test_ensure_bot_connected_runs_connect_and_raises_when_missing():
     server.bot = None

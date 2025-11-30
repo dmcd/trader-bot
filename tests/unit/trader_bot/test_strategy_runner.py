@@ -471,9 +471,8 @@ class StubBot:
 
 
 @pytest.mark.asyncio
-async def test_capture_ohlcv_throttles_and_prunes(tmp_path):
-    db_path = tmp_path / "ohlcv.db"
-    db = TradingDatabase(db_path=str(db_path))
+async def test_capture_ohlcv_throttles_and_prunes(test_db_path):
+    db = TradingDatabase(db_path=str(test_db_path))
     session_id = db.get_or_create_session(starting_balance=1000.0, bot_version="ohlcv-test")
     bot = StubBot()
     runner = StrategyRunner(execute_orders=False)
@@ -484,22 +483,26 @@ async def test_capture_ohlcv_throttles_and_prunes(tmp_path):
     runner.ohlcv_retention_limit = 2
     runner.ohlcv_min_capture_spacing_seconds = 60
     runner._monotonic = lambda: 0.0
-    await runner._capture_ohlcv("BTC/USD")
-    assert len(bot.calls) == 4
-    count_1m = db.conn.execute(
-        "SELECT COUNT(*) as cnt FROM ohlcv_bars WHERE session_id = ? AND timeframe = '1m'", (session_id,)
-    ).fetchone()["cnt"]
-    assert count_1m == 1
-    runner._monotonic = lambda: 30.0
-    await runner._capture_ohlcv("BTC/USD")
-    assert len(bot.calls) == 4
-    runner._monotonic = lambda: 120.0
-    await runner._capture_ohlcv("BTC/USD")
-    assert len(bot.calls) == 5
-    latest_count = db.conn.execute(
-        "SELECT COUNT(*) as cnt FROM ohlcv_bars WHERE session_id = ? AND timeframe = '1m'", (session_id,)
-    ).fetchone()["cnt"]
-    assert latest_count == 2
+    try:
+        await runner._capture_ohlcv("BTC/USD")
+        assert len(bot.calls) == 4
+        count_1m = db.conn.execute(
+            "SELECT COUNT(*) as cnt FROM ohlcv_bars WHERE session_id = ? AND timeframe = '1m'", (session_id,)
+        ).fetchone()["cnt"]
+        assert count_1m == 1
+        runner._monotonic = lambda: 30.0
+        await runner._capture_ohlcv("BTC/USD")
+        assert len(bot.calls) == 4
+        runner._monotonic = lambda: 120.0
+        await runner._capture_ohlcv("BTC/USD")
+        assert len(bot.calls) == 5
+        latest_count = db.conn.execute(
+            "SELECT COUNT(*) as cnt FROM ohlcv_bars WHERE session_id = ? AND timeframe = '1m'", (session_id,)
+        ).fetchone()["cnt"]
+        assert latest_count == 2
+    finally:
+        db.close()
+
 
 
 # --- Symbol selection and rebuild ---

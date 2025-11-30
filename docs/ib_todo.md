@@ -54,9 +54,9 @@
    - [ ] Update auto-flatten and plan-monitor exits to prefer marketable limit orders when IB disallows true market for certain contracts.
 
 6) **Strategy Runner & Services Wiring**
-   - [ ] Switch `StrategyRunner` exchange selection to instantiate `IBTrader` when `ACTIVE_EXCHANGE=IB`; pass adapter exchange object (if any) into `DataFetchCoordinator` or stub a ccxt-like wrapper for tooling.
-   - [ ] Ensure `ResyncService` and `PlanMonitor` work with IB order ids and trade ids (may be alphanumeric). Verify `get_client_order_id` helper handles IB’s permId/clientId tuple.
-   - [ ] Add AUD baseline handling for sandbox-ignore positions logic (should be no airdrops, but keep compatibility).
+   - [x] Switch `StrategyRunner` exchange selection to instantiate `IBTrader` when `ACTIVE_EXCHANGE=IB`; pass adapter exchange object (if any) into `DataFetchCoordinator` or stub a ccxt-like wrapper for tooling.
+   - [x] Ensure `ResyncService` and `PlanMonitor` work with IB order ids and trade ids (may be alphanumeric). Verify `get_client_order_id` helper handles IB’s permId/clientId tuple.
+   - [x] Add AUD baseline handling for sandbox-ignore positions logic (should be no airdrops, but keep compatibility).
 
 7) **Database & Schema Considerations**
    - [ ] Decide on currency tagging: either store base currency at session level and rely on normalized symbols, or add optional `currency` columns to trades/positions if mixed-currency holdings are expected. Update writers/readers and migrations accordingly.

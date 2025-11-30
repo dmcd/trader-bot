@@ -15,8 +15,11 @@ def get_client_order_id(order: Dict[str, Any] | None) -> str:
         order.get("clientOrderId")
         or order.get("client_order_id")
         or order.get("client_order")
+        or order.get("orderRef")
+        or order.get("_client_oid")
         or order.get("info", {}).get("clientOrderId")
         or order.get("info", {}).get("client_order_id")
         or order.get("info", {}).get("client_order")
+        or order.get("info", {}).get("orderRef")
         or ""
     )

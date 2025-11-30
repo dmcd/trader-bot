@@ -61,6 +61,7 @@ from trader_bot.cost_tracker import CostTracker
 from trader_bot.data_fetch_coordinator import DataFetchCoordinator
 from trader_bot.database import TradingDatabase
 from trader_bot.gemini_trader import GeminiTrader
+from trader_bot.ib_trader import IBTrader
 from trader_bot.logger_config import setup_logging
 from trader_bot.risk_manager import RiskManager
 from trader_bot.strategy import LLMStrategy
@@ -92,6 +93,9 @@ class StrategyRunner:
         if ACTIVE_EXCHANGE == 'GEMINI':
             self.bot = GeminiTrader()
             self.exchange_name = 'GEMINI'
+        elif ACTIVE_EXCHANGE == 'IB':
+            self.bot = IBTrader()
+            self.exchange_name = 'IB'
         else:
             # Default to Gemini if not specified or invalid
             logger.warning(f"Unknown ACTIVE_EXCHANGE '{ACTIVE_EXCHANGE}', defaulting to GEMINI")
@@ -643,9 +647,13 @@ class StrategyRunner:
         await self.bot.connect_async()
 
         # Initialize tool coordinator after exchange connection
-        if getattr(self.bot, "exchange", None):
+        exchange_for_tools = getattr(self.bot, "exchange", None)
+        if not exchange_for_tools and hasattr(self.bot, "fetch_ohlcv"):
+            exchange_for_tools = self.bot
+
+        if exchange_for_tools:
             self.data_fetch_coordinator = DataFetchCoordinator(
-                self.bot.exchange,
+                exchange_for_tools,
                 error_callback=self.health_manager.record_tool_failure,
                 success_callback=self.health_manager.record_tool_success,
             )

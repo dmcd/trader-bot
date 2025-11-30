@@ -79,3 +79,4 @@ def test_get_client_order_id_fallbacks():
     assert get_client_order_id({"clientOrderId": "abc"}) == "abc"
     assert get_client_order_id({"client_order_id": 123}) == "123"
     assert get_client_order_id({"info": {"client_order": "xyz"}}) == "xyz"
+    assert get_client_order_id({"orderRef": "ib-ref"}) == "ib-ref"

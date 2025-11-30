@@ -52,7 +52,7 @@ class StubDB:
     def log_llm_call(self, *args, **kwargs):
         self.calls.append((args, kwargs))
 
-    def log_llm_trace(self, session_id, prompt, response_text, decision_json=None, market_context=None):
+    def log_llm_trace(self, session_id, prompt, response_text, decision_json=None, market_context=None, **kwargs):
         self.traces.append(
             {
                 "session_id": session_id,

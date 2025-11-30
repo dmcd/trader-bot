@@ -13,9 +13,10 @@ logger = logging.getLogger(__name__)
 class TradingContext:
     """Provides rich trading context for LLM decision-making."""
 
-    def __init__(self, db: TradingDatabase, session_id: int):
+    def __init__(self, db: TradingDatabase, session_id: int, portfolio_id: int | None = None):
         self.db = db
         self.session_id = session_id
+        self.portfolio_id = portfolio_id
         self.position_baseline: Dict[str, float] = {}
 
     @staticmethod
@@ -108,9 +109,9 @@ class TradingContext:
             if older_price:
                 price_trend_pct = ((recent_price - older_price) / older_price) * 100
 
-        positions = self.db.get_positions(self.session_id)
+        positions = self.db.get_positions(self.session_id, portfolio_id=self.portfolio_id)
         if open_orders is None:
-            open_orders = self.db.get_open_orders(self.session_id)
+            open_orders = self.db.get_open_orders(self.session_id, portfolio_id=self.portfolio_id)
         open_orders = self._filter_our_orders(open_orders)
 
         positions_summary = []

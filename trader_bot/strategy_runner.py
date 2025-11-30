@@ -5,6 +5,7 @@ import os
 import signal
 import sys
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -159,11 +160,13 @@ class StrategyRunner:
             actions_logger=bot_actions_logger,
             logger=logger,
         )
-        self.portfolio_tracker = PortfolioTracker(self.db, logger=logger)
+        self.portfolio_tracker = PortfolioTracker(self.db, portfolio_id=self.portfolio_id, logger=logger)
         self.holdings = self.portfolio_tracker.holdings
+        self.run_id: str | None = f"{BOT_VERSION}-{uuid.uuid4().hex[:12]}"
         self.market_data_service = MarketDataService(
             db=self.db,
             bot=self.bot,
+            portfolio_id=self.portfolio_id,
             monotonic=self._monotonic,
             ohlcv_min_capture_spacing_seconds=OHLCV_MIN_CAPTURE_SPACING_SECONDS,
             ohlcv_retention_limit=OHLCV_MAX_ROWS_PER_TIMEFRAME,
@@ -177,6 +180,7 @@ class StrategyRunner:
             session_stats_applier=self._apply_fill_to_session_stats,
             record_health_state=self._record_health_state,
             logger=logger,
+            portfolio_id=self.portfolio_id,
         )
         self.action_handler = TradeActionHandler(
             db=self.db,
@@ -190,6 +194,7 @@ class StrategyRunner:
             log_execution_trace=self._log_execution_trace,
             actions_logger=bot_actions_logger,
             logger=logger,
+            portfolio_id=self.portfolio_id,
         )
         self.maker_preference_default = MAKER_PREFERENCE_DEFAULT
         self.maker_preference_overrides = MAKER_PREFERENCE_OVERRIDES or {}
@@ -204,6 +209,8 @@ class StrategyRunner:
             open_orders_provider=self.bot.get_open_orders_async,
             ohlcv_provider=self.bot.fetch_ohlcv,
             tool_coordinator=None,  # set post-connect when exchange is ready
+            portfolio_id=self.portfolio_id,
+            run_id=self.run_id,
         )
         # Wire action handler rejection callback once strategy exists
         self.action_handler.on_trade_rejected = getattr(self.strategy, "on_trade_rejected", None)
@@ -238,6 +245,9 @@ class StrategyRunner:
         if not self.telemetry_logger:
             return
         try:
+            record.setdefault("run_id", self.run_id)
+            record.setdefault("portfolio_id", self.portfolio_id)
+            record.setdefault("session_id", self.session_id)
             self.telemetry_logger.info(json.dumps(record, default=str))
         except Exception as e:
             logger.debug(f"Telemetry emit failed: {e}")
@@ -751,7 +761,7 @@ class StrategyRunner:
         except Exception as exc:
             logger.debug(f"Could not attach portfolio_id to session {self.session_id}: {exc}")
         self.portfolio_tracker.set_session(self.session_id, portfolio_id=self.portfolio_id)
-        self.resync_service.set_session(self.session_id)
+        self.resync_service.set_session(self.session_id, portfolio_id=self.portfolio_id)
         # In PAPER mode, reset starting_balance baseline to current equity to avoid mismatch against old sandbox inventories
         if TRADING_MODE == 'PAPER' and self.session.get('starting_balance') != initial_equity:
             try:
@@ -769,7 +779,7 @@ class StrategyRunner:
             logger.debug(f"Could not prune commands: {e}")
         
         # Initialize trading context
-        self.context = TradingContext(self.db, self.session_id)
+        self.context = TradingContext(self.db, self.session_id, portfolio_id=self.portfolio_id)
         # Drop any stale open orders lingering from prior runs and sync with venue
         await self._reconcile_exchange_state()
 

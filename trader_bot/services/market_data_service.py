@@ -13,6 +13,7 @@ class MarketDataService:
         db: Any,
         bot: Any,
         session_id: Optional[int] = None,
+        portfolio_id: Optional[int] = None,
         monotonic: Optional[Callable[[], float]] = None,
         logger: Optional[logging.Logger] = None,
         ohlcv_min_capture_spacing_seconds: int = 0,
@@ -21,14 +22,17 @@ class MarketDataService:
         self.db = db
         self.bot = bot
         self.session_id = session_id
+        self.portfolio_id = portfolio_id
         self.monotonic = monotonic
         self.logger = logger or logging.getLogger(__name__)
         self.ohlcv_min_capture_spacing_seconds = ohlcv_min_capture_spacing_seconds
         self.ohlcv_retention_limit = ohlcv_retention_limit
         self._last_ohlcv_capture: dict[tuple[str, str], float] = {}
 
-    def set_session(self, session_id: int) -> None:
+    def set_session(self, session_id: int, portfolio_id: Optional[int] = None) -> None:
         self.session_id = session_id
+        if portfolio_id is not None:
+            self.portfolio_id = portfolio_id
 
     @staticmethod
     def timeframe_to_seconds(timeframe: str) -> int:
@@ -64,7 +68,7 @@ class MarketDataService:
 
                 bars = await self.bot.fetch_ohlcv(symbol, timeframe=tf, limit=50)
                 if self.session_id is not None:
-                    self.db.log_ohlcv_batch(self.session_id, symbol, tf, bars)
+                    self.db.log_ohlcv_batch(self.session_id, symbol, tf, bars, portfolio_id=self.portfolio_id)
                     if self.ohlcv_retention_limit:
                         try:
                             self.db.prune_ohlcv(self.session_id, symbol, tf, self.ohlcv_retention_limit)

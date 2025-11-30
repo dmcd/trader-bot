@@ -19,16 +19,16 @@ class StubDB:
         self.replace_calls = 0
         self.replace_fail = False
 
-    def get_positions(self, session_id):
+    def get_positions(self, session_id, portfolio_id=None):
         return self.positions
 
-    def get_open_orders(self, session_id):
+    def get_open_orders(self, session_id, portfolio_id=None):
         return self.orders
 
-    def replace_positions(self, session_id, positions):
+    def replace_positions(self, session_id, positions, portfolio_id=None):
         self.replaced_positions = positions
 
-    def replace_open_orders(self, session_id, orders):
+    def replace_open_orders(self, session_id, orders, portfolio_id=None):
         self.replace_calls += 1
         if self.replace_fail:
             raise RuntimeError("replace failed")
@@ -159,7 +159,7 @@ class SyncStubDB:
         self.recorded = None
         self.conn = SimpleNamespace(execute=lambda *args, **kwargs: SimpleNamespace(fetchone=lambda: None))
 
-    def get_processed_trade_ids(self, session_id):
+    def get_processed_trade_ids(self, session_id, portfolio_id=None):
         return set()
 
     def get_latest_trade_timestamp(self, session_id):
@@ -168,7 +168,7 @@ class SyncStubDB:
     def log_trade(self, *args, **kwargs):
         self.logged.append((args, kwargs))
 
-    def record_processed_trade_ids(self, session_id, processed):
+    def record_processed_trade_ids(self, session_id, processed, portfolio_id=None):
         self.recorded = processed
 
 
@@ -243,7 +243,7 @@ async def test_sync_trades_paginates_and_skips_duplicates():
         return []
 
     db = SyncStubDB()
-    db.record_processed_trade_ids = lambda session_id, processed: setattr(db, "recorded", processed) or (_ for _ in ()).throw(RuntimeError("persist failed"))
+    db.record_processed_trade_ids = lambda session_id, processed, portfolio_id=None: setattr(db, "recorded", processed) or (_ for _ in ()).throw(RuntimeError("persist failed"))
     bot = SyncStubBot(paged_trades)
     resync = ResyncService(
         db=db,

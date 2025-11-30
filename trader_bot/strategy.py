@@ -101,7 +101,7 @@ class BaseStrategy(ABC):
         pass
 
 class LLMStrategy(BaseStrategy):
-    def __init__(self, db, technical_analysis, cost_tracker, open_orders_provider=None, ohlcv_provider=None, tool_coordinator=None):
+    def __init__(self, db, technical_analysis, cost_tracker, open_orders_provider=None, ohlcv_provider=None, tool_coordinator=None, portfolio_id=None, run_id=None):
         super().__init__(db, technical_analysis, cost_tracker)
         self.system_prompt = self._load_system_prompt()
         self.llm_provider = (LLM_PROVIDER or "GEMINI").upper()
@@ -145,6 +145,8 @@ class LLMStrategy(BaseStrategy):
         self.ohlcv_provider = ohlcv_provider
         # Optional tool coordinator for LLM tool requests
         self.tool_coordinator = tool_coordinator
+        self.portfolio_id = portfolio_id
+        self.run_id = run_id
         self.prompt_template = self._load_prompt_template()
         self._last_llm_call_ts = 0.0
         self._consecutive_llm_errors = 0
@@ -551,7 +553,7 @@ class LLMStrategy(BaseStrategy):
                 except Exception as e:
                     logger.error(f"LLM decision failed schema validation: {e}")
                     try:
-                        self.db.log_llm_call(session_id, 0, 0, 0.0, f"schema_error:{str(e)}")
+                        self.db.log_llm_call(session_id, 0, 0, 0.0, f"schema_error:{str(e)}", run_id=self.run_id, portfolio_id=self.portfolio_id)
                     except Exception:
                         pass
                     return None
@@ -605,7 +607,7 @@ class LLMStrategy(BaseStrategy):
                             clamp_msg = f"clamped: stop {decision.get('stop_price')} -> {stop_price}, target {decision.get('target_price')} -> {target_price}"
                             logger.info(f"LLM stops/targets {clamp_msg}")
                             try:
-                                self.db.log_llm_call(session_id, 0, 0, 0.0, clamp_msg)
+                                self.db.log_llm_call(session_id, 0, 0, 0.0, clamp_msg, run_id=self.run_id, portfolio_id=self.portfolio_id)
                             except Exception:
                                 pass
 
@@ -799,7 +801,15 @@ class LLMStrategy(BaseStrategy):
                 return
 
             cost = self.cost_tracker.calculate_llm_cost(input_tokens, output_tokens)
-            self.db.log_llm_call(session_id, input_tokens, output_tokens, cost, response_text[:500])
+            self.db.log_llm_call(
+                session_id,
+                input_tokens,
+                output_tokens,
+                cost,
+                response_text[:500],
+                run_id=self.run_id,
+                portfolio_id=self.portfolio_id,
+            )
         except Exception as e:
             logger.warning(f"Error tracking LLM usage: {e}")
 
@@ -1249,6 +1259,8 @@ class LLMStrategy(BaseStrategy):
                     response.text,
                     decision_json=text,
                     market_context=market_context,
+                    run_id=self.run_id,
+                    portfolio_id=self.portfolio_id,
                 )
                 try:
                     self.db.prune_llm_traces(session_id, LLM_TRACE_RETENTION_DAYS)

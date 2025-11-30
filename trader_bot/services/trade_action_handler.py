@@ -24,6 +24,7 @@ class TradeActionHandler:
         on_trade_rejected: Optional[Callable[[str], None]] = None,
         actions_logger: Optional[logging.Logger] = None,
         logger: Optional[logging.Logger] = None,
+        portfolio_id: Optional[int] = None,
     ):
         self.db = db
         self.bot = bot
@@ -37,6 +38,7 @@ class TradeActionHandler:
         self.on_trade_rejected = on_trade_rejected
         self.actions_logger = actions_logger or logging.getLogger(__name__)
         self.logger = logger or logging.getLogger(__name__)
+        self.portfolio_id = portfolio_id
 
     @staticmethod
     def _merge_ib_order_metadata(telemetry_record: dict, order_result: dict | None):
@@ -270,6 +272,7 @@ class TradeActionHandler:
                 f"Partial close plan {plan_id} ({close_fraction*100:.0f}%)",
                 liquidity=order_result.get("liquidity") if order_result else "taker",
                 realized_pnl=realized,
+                portfolio_id=self.portfolio_id,
             )
             self.portfolio_tracker.apply_fill_to_session_stats(order_result.get("order_id") if order_result else None, fee, realized)
             remaining_size = max(plan_size - close_qty, 0.0)
@@ -307,7 +310,7 @@ class TradeActionHandler:
         telemetry_record = {"status": "close_position_none", "symbol": symbol}
         qty = 0.0
         try:
-            positions = self.db.get_positions(session_id)
+            positions = self.db.get_positions(session_id, portfolio_id=self.portfolio_id)
             for pos in positions:
                 if pos.get("symbol") == symbol:
                     qty = pos.get("quantity", 0.0) or 0.0
@@ -346,6 +349,7 @@ class TradeActionHandler:
                 f"Close position request ({qty})",
                 liquidity=order_result.get("liquidity") if order_result else "taker",
                 realized_pnl=realized,
+                portfolio_id=self.portfolio_id,
             )
             self.portfolio_tracker.apply_fill_to_session_stats(order_result.get("order_id") if order_result else None, fee, realized)
             telemetry_record["status"] = "close_position_executed"

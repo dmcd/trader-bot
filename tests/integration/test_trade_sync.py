@@ -34,22 +34,23 @@ class StubDB:
     def get_distinct_trade_symbols(self, session_id):
         return ["BTC/USD"]
 
-    def get_positions(self, session_id):
+    def get_positions(self, session_id, portfolio_id=None):
         return []
 
     def get_open_trade_plans(self, session_id):
         return []
 
-    def get_open_orders(self, session_id):
+    def get_open_orders(self, session_id, portfolio_id=None):
         return []
 
     def get_latest_trade_timestamp(self, session_id):
         return None
 
-    def log_trade(self, session_id, symbol, action, quantity, price, fee, reason, liquidity="unknown", realized_pnl=0.0, trade_id=None, timestamp=None):
+    def log_trade(self, session_id, symbol, action, quantity, price, fee, reason, liquidity="unknown", realized_pnl=0.0, trade_id=None, timestamp=None, portfolio_id=None):
         self.logged_trades.append(
             {
                 "session_id": session_id,
+                "portfolio_id": portfolio_id,
                 "symbol": symbol,
                 "action": action,
                 "quantity": quantity,
@@ -65,6 +66,12 @@ class StubDB:
 
     def get_trade_plan_reason_by_order(self, session_id, order_id=None, client_order_id=None):
         return self.plan_reason
+
+    def get_processed_trade_ids(self, session_id, portfolio_id=None):
+        return set()
+
+    def record_processed_trade_ids(self, session_id, processed, portfolio_id=None):
+        self.recorded = processed
 
 
 class StubBot:
@@ -274,13 +281,13 @@ async def test_reconcile_open_orders_removes_stale():
             super().__init__()
             self.replaced = None
 
-        def get_open_orders(self, session_id):
+        def get_open_orders(self, session_id, portfolio_id=None):
             return [
                 {"order_id": "live-1", "symbol": "BTC/USD"},
                 {"order_id": "stale-1", "symbol": "BTC/USD"},
             ]
 
-        def replace_open_orders(self, session_id, orders):
+        def replace_open_orders(self, session_id, orders, portfolio_id=None):
             self.replaced = orders
 
     runner.db = ReconDB()
@@ -311,10 +318,10 @@ def test_trading_context_filters_foreign_open_orders():
         def get_recent_market_data(self, session_id, symbol, limit=20, before_timestamp=None):
             return [{"price": 100}, {"price": 100}]
 
-        def get_positions(self, session_id):
+        def get_positions(self, session_id, portfolio_id=None):
             return []
 
-        def get_open_orders(self, session_id):
+        def get_open_orders(self, session_id, portfolio_id=None):
             return []
 
     db = CtxDB()

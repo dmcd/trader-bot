@@ -73,8 +73,10 @@ def extract_circuit_status(health_states):
     return summary
 
 
-def build_venue_status_payload(exchange: str, session_stats, health_states, now: datetime | None = None):
-    base_currency = resolve_base_currency(session_stats, "USD")
+def build_venue_status_payload(exchange: str, session_stats, ib_session_stats=None, health_states=None, now: datetime | None = None):
+    # Prefer explicit base currency hints from the current session; fall back to IB metadata if present.
+    fallback_ccy = resolve_base_currency(ib_session_stats, "USD")
+    base_currency = resolve_base_currency(session_stats, fallback_ccy)
     return {
         "venue": exchange or "Unknown",
         "base_currency": base_currency,
@@ -446,7 +448,7 @@ db_version_lookup.close()
 health_states = load_health_state()
 session_stats, session_id = load_session_stats(current_session_id)
 current_trades_df = load_history(session_id, user_timezone)
-venue_status = build_venue_status_payload(ACTIVE_EXCHANGE, session_stats, health_states)
+venue_status = build_venue_status_payload(ACTIVE_EXCHANGE, session_stats, health_states=health_states)
 base_currency_label = venue_status.get("base_currency") or "USD"
 
 col_header, col_status = st.columns([3, 1])

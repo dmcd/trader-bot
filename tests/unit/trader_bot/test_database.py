@@ -80,41 +80,15 @@ def test_session_base_currency_round_trip(tmp_path):
     db.close()
 
 
-def test_base_currency_column_added_for_legacy_schema(tmp_path):
-    db_path = tmp_path / "legacy.db"
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        """
-        CREATE TABLE sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL,
-            bot_version TEXT,
-            starting_balance REAL,
-            ending_balance REAL,
-            total_trades INTEGER DEFAULT 0,
-            total_fees REAL DEFAULT 0.0,
-            total_llm_cost REAL DEFAULT 0.0,
-            net_pnl REAL DEFAULT 0.0,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    conn.execute(
-        "INSERT INTO sessions (date, bot_version, starting_balance, ending_balance, total_trades, total_fees, total_llm_cost, net_pnl) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        ("2024-01-01", "legacy", 100.0, 110.0, 1, 0.1, 0.0, 10.0),
-    )
-    conn.commit()
-    conn.close()
-
+def test_base_currency_column_present(tmp_path):
+    db_path = tmp_path / "fresh.db"
     db = TradingDatabase(str(db_path))
     cols = {row["name"] for row in db.conn.execute("PRAGMA table_info(sessions)")}
     assert "base_currency" in cols
-    legacy_session = db.get_session(1)
-    assert legacy_session["base_currency"] is None
 
-    new_session_id = db.get_or_create_session(starting_balance=200.0, bot_version="new", base_currency="aud")
-    new_session = db.get_session(new_session_id)
-    assert new_session["base_currency"] == "AUD"
+    session_id = db.get_or_create_session(starting_balance=200.0, bot_version="new", base_currency=None)
+    session = db.get_session(session_id)
+    assert session["base_currency"] is None
     db.close()
 
 

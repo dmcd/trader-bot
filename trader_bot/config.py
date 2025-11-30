@@ -1,6 +1,8 @@
 import os
 from dotenv import load_dotenv
 
+from trader_bot.symbols import normalize_symbols
+
 load_dotenv()
 
 # Trading Mode
@@ -55,7 +57,7 @@ MIN_TOP_OF_BOOK_NOTIONAL = float(os.getenv('MIN_TOP_OF_BOOK_NOTIONAL', '100.0'))
 ACTIVE_EXCHANGE = os.getenv('ACTIVE_EXCHANGE', 'GEMINI').upper()
 # Comma-separated symbols to trade/monitor and allow for tool access; preserves order
 _ALLOWED_SYMBOLS_RAW = os.getenv('ALLOWED_SYMBOLS', 'BTC/USD')
-ALLOWED_SYMBOLS = [s.strip().upper() for s in _ALLOWED_SYMBOLS_RAW.split(',') if s.strip()]
+ALLOWED_SYMBOLS = normalize_symbols(_ALLOWED_SYMBOLS_RAW)
 
 # Interactive Brokers settings
 IB_HOST = os.getenv('IB_HOST', '127.0.0.1')

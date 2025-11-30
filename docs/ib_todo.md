@@ -27,9 +27,9 @@
    - [x] Update `README.md` and `AGENTS.md` venue section to list IB, setup steps, and required environment variables.
 
 2) **Symbol & Contract Normalization**
-   - [ ] Define a small contract resolver utility that maps `SYMBOL/CCY` plus optional exchange/sectype into an `ib_insync` `Contract` (e.g., `Stock("BHP", "ASX", "AUD")`, `Forex("AUDUSD")`).
-   - [ ] Introduce a canonical symbol formatter shared by IB adapter, TA capture, and LLM context to keep DB symbols stable (avoid IBKR local symbols leaking through).
-   - [ ] Add validation/translation for `ALLOWED_SYMBOLS` so mis-specified entries fail fast with actionable errors.
+   - [x] Define a small contract resolver utility that maps `SYMBOL/CCY` plus optional exchange/sectype into an `ib_insync` `Contract` (e.g., `Stock("BHP", "ASX", "AUD")`, `Forex("AUDUSD")`).
+   - [x] Introduce a canonical symbol formatter shared by IB adapter, TA capture, and LLM context to keep DB symbols stable (avoid IBKR local symbols leaking through).
+   - [x] Add validation/translation for `ALLOWED_SYMBOLS` so mis-specified entries fail fast with actionable errors.
 
 3) **IBTrader Adapter (implements BaseTrader)**
    - [ ] Connection lifecycle: manage `IB().connect()` with paper/live routing, heartbeat/ping, and graceful disconnects.

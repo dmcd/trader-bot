@@ -75,6 +75,7 @@ from trader_bot.services.strategy_orchestrator import StrategyOrchestrator
 from trader_bot.technical_analysis import TechnicalAnalysis
 from trader_bot.trading_context import TradingContext
 from trader_bot.utils import get_client_order_id
+from trader_bot.symbols import normalize_symbol
 
 # Configure logging
 bot_actions_logger = setup_logging()
@@ -280,19 +281,24 @@ class StrategyRunner:
         for sym in symbols:
             if not sym:
                 continue
-            sym_up = sym.upper()
-            if sym_up in seen:
+            try:
+                canonical = normalize_symbol(sym)
+            except ValueError:
                 continue
-            # Skip non-tradable cash-like symbols (e.g., "USD") that don't have an order book
-            if "/" not in sym_up:
+            if canonical in seen:
                 continue
-            seen.add(sym_up)
-            deduped.append(sym_up)
+            seen.add(canonical)
+            deduped.append(canonical)
         return deduped or ["BTC/USD"]
 
     def _get_rebuild_symbols(self) -> list[str]:
         """Return symbols to use when rebuilding stats from exchange history."""
-        allowed = [s.upper() for s in ALLOWED_SYMBOLS if s and "/" in s]
+        allowed = []
+        for sym in ALLOWED_SYMBOLS:
+            try:
+                allowed.append(normalize_symbol(sym))
+            except ValueError:
+                continue
         try:
             exchange_symbols = getattr(self.bot, "exchange", None)
             exchange_symbols = getattr(exchange_symbols, "symbols", []) or []
@@ -319,7 +325,15 @@ class StrategyRunner:
             symbols.update({o.get('symbol') for o in self.db.get_open_orders(self.session_id) or [] if o.get('symbol')})
         except Exception:
             pass
-        symbols = {s for s in symbols if isinstance(s, str) and '/' in s}
+        normalized = set()
+        for sym in symbols:
+            if not isinstance(sym, str):
+                continue
+            try:
+                normalized.add(normalize_symbol(sym))
+            except ValueError:
+                continue
+        symbols = normalized
         if not symbols:
             symbols = {"BTC/USD"}
         return symbols

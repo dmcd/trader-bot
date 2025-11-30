@@ -31,6 +31,7 @@ from trader_bot.llm_tools import (
     normalize_order_book,
     normalize_trades,
 )
+from trader_bot.symbols import normalize_symbol, normalize_symbols
 
 logger = logging.getLogger(__name__)
 telemetry_logger = logging.getLogger("telemetry")
@@ -66,7 +67,7 @@ class DataFetchCoordinator:
         self.cache_ttl_seconds = cache_ttl_seconds
         self.max_json_bytes = max_json_bytes
         self._cache: Dict[str, Dict[str, Any]] = {}
-        self.allowed_symbols = [s.upper() for s in (allowed_symbols or ALLOWED_SYMBOLS)]
+        self.allowed_symbols = normalize_symbols(allowed_symbols or ALLOWED_SYMBOLS)
         self.rate_limits = rate_limits or {
             ToolName.GET_MARKET_DATA: TOOL_RATE_LIMIT_MARKET_DATA,
             ToolName.GET_ORDER_BOOK: TOOL_RATE_LIMIT_ORDER_BOOK,
@@ -96,7 +97,11 @@ class DataFetchCoordinator:
             return False
         if "*" in self.allowed_symbols:
             return True
-        return symbol.upper() in self.allowed_symbols
+        try:
+            canonical = normalize_symbol(symbol)
+        except ValueError:
+            return False
+        return canonical in self.allowed_symbols
 
     def _prune_response_cache(self, now: float) -> None:
         if not self._recent_responses:
@@ -115,7 +120,10 @@ class DataFetchCoordinator:
 
     def _request_keys(self, req: ToolRequest) -> List[str]:
         symbol = getattr(req.params, "symbol", "") if hasattr(req, "params") else ""
-        symbol = symbol.upper() if symbol else ""
+        try:
+            symbol = normalize_symbol(symbol) if symbol else ""
+        except ValueError:
+            symbol = symbol.upper() if symbol else ""
         if req.tool == ToolName.GET_MARKET_DATA:
             timeframes = getattr(req.params, "timeframes", []) if hasattr(req, "params") else []
             limit = getattr(req.params, "limit", None)

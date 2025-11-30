@@ -13,6 +13,7 @@ from trader_bot.config import (
     TOOL_MAX_JSON_BYTES,
     TOOL_MAX_TRADES,
 )
+from trader_bot.symbols import normalize_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,10 @@ class MarketDataParams(ToolBaseModel):
     def validate_symbol(cls, value: str) -> str:
         if not value or not value.strip():
             raise ValueError("Symbol is required")
-        return value.strip().upper()
+        try:
+            return normalize_symbol(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class OrderBookParams(ToolBaseModel):
@@ -107,7 +111,10 @@ class OrderBookParams(ToolBaseModel):
     def validate_symbol(cls, value: str) -> str:
         if not value or not value.strip():
             raise ValueError("Symbol is required")
-        return value.strip().upper()
+        try:
+            return normalize_symbol(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class RecentTradesParams(ToolBaseModel):
@@ -119,7 +126,10 @@ class RecentTradesParams(ToolBaseModel):
     def validate_symbol(cls, value: str) -> str:
         if not value or not value.strip():
             raise ValueError("Symbol is required")
-        return value.strip().upper()
+        try:
+            return normalize_symbol(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class ToolName(str, Enum):

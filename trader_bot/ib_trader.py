@@ -58,6 +58,7 @@ class IBTrader(BaseTrader):
         reconnect_backoff_max: float = 30.0,
         hist_request_limit: int = 60,
         hist_window_seconds: float = 600.0,
+        market_data_cache_seconds: float = 1.0,
         ib_client: Optional[IB] = None,
         monotonic: Optional[Callable[[], float]] = None,
     ):
@@ -86,6 +87,8 @@ class IBTrader(BaseTrader):
         self.hist_request_limit = hist_request_limit
         self.hist_window_seconds = hist_window_seconds
         self._hist_requests: list[float] = []
+        self.market_data_cache_seconds = market_data_cache_seconds
+        self._md_cache: Dict[str, tuple[dict[str, Any], float]] = {}
         self.ib: IB = ib_client or IB()
         self.connected = False
         self._last_ping_mono: float | None = None
@@ -200,6 +203,11 @@ class IBTrader(BaseTrader):
         if not self.connected:
             return None
 
+        now_mono = self._monotonic()
+        cached = self._md_cache.get(symbol)
+        if cached and now_mono - cached[1] < self.market_data_cache_seconds:
+            return cached[0]
+
         try:
             contract, spec = build_ib_contract(
                 symbol,
@@ -272,7 +280,7 @@ class IBTrader(BaseTrader):
 
         latency_ms = (self._monotonic() - started) * 1000
 
-        return {
+        result = {
             "symbol": spec.symbol,
             "price": price,
             "bid": bid,
@@ -285,6 +293,9 @@ class IBTrader(BaseTrader):
             "ob_imbalance": ob_imbalance,
             "_latency_ms": latency_ms,
         }
+        result["_fetched_monotonic"] = self._monotonic()
+        self._md_cache[symbol] = (result, result["_fetched_monotonic"])
+        return result
 
     async def place_order_async(self, symbol, action, quantity, prefer_maker: bool = True, force_market: bool = False):
         if not self.connected:

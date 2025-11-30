@@ -798,6 +798,22 @@ async def test_fetch_trades_returns_empty_list():
 
 
 @pytest.mark.asyncio
+async def test_market_data_cache_throttles_requests():
+    clock = FakeClock()
+    fake_ib = FakeIB(
+        connected=True,
+        market_data={"BHPAUD": FakeTicker(price=101.0, bid=100.5, ask=101.5, bid_size=200, ask_size=120)},
+    )
+    trader = IBTrader(ib_client=fake_ib, monotonic=clock, market_data_cache_seconds=5.0)
+    trader.connected = True
+
+    await trader.get_market_data_async("BHP/AUD")
+    await trader.get_market_data_async("BHP/AUD")
+
+    assert fake_ib.req_mkt_data_calls == ["BHPAUD"]
+
+
+@pytest.mark.asyncio
 async def test_hist_rate_limit_enforced():
     bars = [FakeBar(1_700_000_000_000, 100, 101, 99, 100.5, 1000)]
     fake_ib = FakeIB(connected=True, historical_data={"BHPAUD": bars})

@@ -452,7 +452,13 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🤖 Dennis-Day Trading Bot")
+st.markdown("""
+    <style>
+        .block-container {
+            padding-top: 2rem;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 user_timezone = get_user_timezone()
 timezone_label = get_timezone_label(user_timezone)
@@ -471,6 +477,12 @@ if session_stats and not current_trades_df.empty:
     current_prices = get_latest_prices(session_id, symbols)
 venue_status = build_venue_status_payload(ACTIVE_EXCHANGE, session_stats, account_snapshot, health_states)
 base_currency_label = venue_status.get("base_currency") or "USD"
+
+col_header, col_status = st.columns([3, 1])
+with col_header:
+    st.title("🤖 Dennis-Day Trading Bot")
+with col_status:
+    st.markdown(f"<div style='padding-top: 20px;'>{format_venue_badge(venue_status.get('venue'), base_currency_label)}</div>", unsafe_allow_html=True)
 
 # --- Sidebar ---
 
@@ -523,14 +535,8 @@ with tab_live:
         for entry in (venue_status.get("market_hours") or [])
         if entry.get("label")
     )
-    status_col1, status_col2 = st.columns([1.4, 1])
-    status_col1.markdown(format_venue_badge(venue_status.get("venue"), base_currency_label), unsafe_allow_html=True)
     if mh_badges:
-        status_col1.markdown(f"<div style='display:flex;flex-wrap:wrap;gap:6px;'>{mh_badges}</div>", unsafe_allow_html=True)
-    circuit_html = format_circuit_badges(venue_status.get("circuit"))
-    if circuit_html:
-        status_col2.markdown("**Connectivity**")
-        status_col2.markdown(circuit_html, unsafe_allow_html=True)
+        st.markdown(f"<div style='display:flex;flex-wrap:wrap;gap:6px;'>{mh_badges}</div>", unsafe_allow_html=True)
 
     col1, col2 = st.columns([2, 1])
 

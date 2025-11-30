@@ -111,6 +111,7 @@ class StrategyRunner:
         self.sandbox_ignore_positions = TRADING_MODE == 'PAPER' and SANDBOX_IGNORE_INITIAL_POSITIONS
         self._sandbox_position_baseline = {}
         base_currency = IB_BASE_CURRENCY if self.exchange_name == 'IB' else None
+        self.base_currency = base_currency
         fx_rate_provider = getattr(self.bot, "get_cached_fx_rate", None)
         self.risk_manager = RiskManager(
             self.bot,
@@ -713,7 +714,11 @@ class StrategyRunner:
         logger.info(f"{self.exchange_name} Equity: {initial_equity}")
         
         # Create or load today's trading session (DB still used for logging/IDs)
-        self.session_id = self.db.get_or_create_session(starting_balance=initial_equity, bot_version=BOT_VERSION)
+        self.session_id = self.db.get_or_create_session(
+            starting_balance=initial_equity,
+            bot_version=BOT_VERSION,
+            base_currency=self.base_currency,
+        )
         self.session = self.db.get_session(self.session_id)
         self.portfolio_tracker.set_session(self.session_id)
         self.resync_service.set_session(self.session_id)
@@ -1132,7 +1137,7 @@ class StrategyRunner:
                                     md.get('price'),
                                     md.get('bid'),
                                     md.get('ask'),
-                                    md.get('volume') or 0.0,
+                                    md.get('volume'),
                                     spread_pct=md.get('spread_pct'),
                                     bid_size=md.get('bid_size'),
                                     ask_size=md.get('ask_size'),

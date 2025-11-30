@@ -63,14 +63,14 @@
    - [x] Add AUD baseline handling for sandbox-ignore positions logic (should be no airdrops, but keep compatibility).
 
 7) **Database & Schema Considerations**
-   - [ ] Decide on currency tagging: either store base currency at session level and rely on normalized symbols, or add optional `currency` columns to trades/positions if mixed-currency holdings are expected. Update writers/readers and migrations accordingly.
-     - [ ] Evaluate current schema usages and choose approach for base currency handling.
-     - [ ] Implement chosen schema/migration path and update ORM/helpers.
-     - [ ] Add tests validating reads/writes with AUD base and (if applicable) mixed currencies.
-   - [ ] Validate `market_data` logging supports equity fields (bid/ask sizes are integer shares; volume is shares). No schema changes anticipated beyond optional currency fields.
-     - [ ] Ensure serializers preserve integer sizes for bids/asks/volume.
-     - [ ] Add coverage for equity market data rows in logging pipeline.
-     - [ ] Confirm dashboards/consumers handle the shape without schema drift.
+   - [x] Decide on currency tagging: store base currency at session level (uppercase) and rely on normalized symbols; optional per-row currency fields not required yet. Update writers/readers and migrations accordingly.
+     - [x] Evaluate current schema usages and choose approach for base currency handling.
+     - [x] Implement chosen schema/migration path and update ORM/helpers.
+     - [x] Add tests validating reads/writes with AUD base and (if applicable) mixed currencies.
+   - [x] Validate `market_data` logging supports equity fields (bid/ask sizes are integer shares; volume is shares). No schema changes anticipated beyond optional currency fields.
+     - [x] Ensure serializers preserve integer sizes for bids/asks/volume.
+     - [x] Add coverage for equity market data rows in logging pipeline.
+     - [x] Confirm dashboards/consumers handle the shape without schema drift.
 
 8) **Dashboard & UX**
    - [ ] Surface IB account summary (cash balances, margin available) and commission estimates on the Streamlit dashboard.

@@ -31,6 +31,7 @@ class TradingDatabase:
                 bot_version TEXT,
                 starting_balance REAL,
                 ending_balance REAL,
+                base_currency TEXT,
                 total_trades INTEGER DEFAULT 0,
                 total_fees REAL DEFAULT 0.0,
                 total_llm_cost REAL DEFAULT 0.0,
@@ -280,6 +281,11 @@ class TradingDatabase:
             cursor.execute("ALTER TABLE sessions ADD COLUMN bot_version TEXT")
         except sqlite3.OperationalError:
             pass
+        # Backfill base_currency for existing databases
+        try:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN base_currency TEXT")
+        except sqlite3.OperationalError:
+            pass
         # Allow multiple sessions per version; keep a non-unique index for lookups
         try:
             cursor.execute("DROP INDEX IF EXISTS idx_sessions_bot_version")
@@ -293,17 +299,18 @@ class TradingDatabase:
         self.conn.commit()
         logger.info(f"Database initialized at {self.db_path}")
     
-    def get_or_create_session(self, starting_balance: float, bot_version: str) -> int:
+    def get_or_create_session(self, starting_balance: float, bot_version: str, base_currency: Optional[str] = None) -> int:
         """Create a new session for this run, tagged by bot version."""
         cursor = self.conn.cursor()
+        base_ccy = base_currency.upper() if base_currency else None
         cursor.execute("""
-            INSERT INTO sessions (date, bot_version, starting_balance)
-            VALUES (?, ?, ?)
-        """, (date.today().isoformat(), bot_version, starting_balance))
+            INSERT INTO sessions (date, bot_version, starting_balance, base_currency)
+            VALUES (?, ?, ?, ?)
+        """, (date.today().isoformat(), bot_version, starting_balance, base_ccy))
         self.conn.commit()
         
         session_id = cursor.lastrowid
-        logger.info(f"Created new session {session_id} for version {bot_version}")
+        logger.info(f"Created new session {session_id} for version {bot_version} (base_currency={base_ccy or 'unset'})")
         return session_id
 
     def get_session_id_by_version(self, bot_version: str) -> Optional[int]:
@@ -497,11 +504,26 @@ class TradingDatabase:
         """, (session_id, limit))
         return [dict(row) for row in cursor.fetchall()]
     
-    def log_market_data(self, session_id: int, symbol: str, price: float,
-                       bid: float, ask: float, volume: float = 0.0,
-                       spread_pct: float = None, bid_size: float = None,
-                       ask_size: float = None, ob_imbalance: float = None):
+    @staticmethod
+    def _preserve_integer_if_whole(value: Any) -> Any:
+        """Return ints for whole numbers (to preserve share counts) and pass through other values."""
+        if value is None or isinstance(value, bool):
+            return value
+        try:
+            if float(value).is_integer():
+                return int(value)
+        except Exception:
+            return value
+        return value
+
+    def log_market_data(self, session_id: int, symbol: str, price: float | int | None,
+                       bid: float | int | None, ask: float | int | None, volume: float | int | None = None,
+                       spread_pct: float | int | None = None, bid_size: float | int | None = None,
+                       ask_size: float | int | None = None, ob_imbalance: float | int | None = None):
         """Log market data snapshot."""
+        volume = self._preserve_integer_if_whole(volume)
+        bid_size = self._preserve_integer_if_whole(bid_size)
+        ask_size = self._preserve_integer_if_whole(ask_size)
         cursor = self.conn.cursor()
         cursor.execute("""
             INSERT INTO market_data (session_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
@@ -562,7 +584,12 @@ class TradingDatabase:
                 LIMIT ?
             """, (session_id, symbol, limit))
         
-        return [dict(row) for row in cursor.fetchall()]
+        rows = [dict(row) for row in cursor.fetchall()]
+        for row in rows:
+            row["volume"] = self._preserve_integer_if_whole(row.get("volume"))
+            row["bid_size"] = self._preserve_integer_if_whole(row.get("bid_size"))
+            row["ask_size"] = self._preserve_integer_if_whole(row.get("ask_size"))
+        return rows
 
     def log_equity_snapshot(self, session_id: int, equity: float):
         """Log mark-to-market equity snapshot."""

@@ -176,6 +176,7 @@ class TradingContext:
                     }
                 )
 
+        venue_base_currency = session.get("base_currency") or (IB_BASE_CURRENCY if ACTIVE_EXCHANGE == "IB" else "USD")
         summary = {
             "session": {
                 "date": session.get('date'),
@@ -196,7 +197,7 @@ class TradingContext:
             "recent_trades": trades_summary,
             "venue": {
                 "exchange": ACTIVE_EXCHANGE,
-                "base_currency": IB_BASE_CURRENCY if ACTIVE_EXCHANGE == "IB" else "USD",
+                "base_currency": venue_base_currency,
                 "instruments": "ASX equities/ETFs and FX (no crypto)" if ACTIVE_EXCHANGE == "IB" else "Crypto",
                 "market_hours_note": "ASX ~10:00-16:00 AEST; FX ~24/5" if ACTIVE_EXCHANGE == "IB" else "24/7 crypto",
             },

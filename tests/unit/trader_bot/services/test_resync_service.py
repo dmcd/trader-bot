@@ -16,6 +16,8 @@ class StubDB:
         self.replaced_positions = None
         self.replaced_orders = None
         self.health = {}
+        self.replace_calls = 0
+        self.replace_fail = False
 
     def get_positions(self, session_id):
         return self.positions
@@ -27,6 +29,9 @@ class StubDB:
         self.replaced_positions = positions
 
     def replace_open_orders(self, session_id, orders):
+        self.replace_calls += 1
+        if self.replace_fail:
+            raise RuntimeError("replace failed")
         self.replaced_orders = orders
 
     def set_health_state(self, key, value, detail_str=None):
@@ -104,6 +109,50 @@ async def test_reconcile_exchange_state_records_errors():
     assert db.health.get("restart_recovery") == "error"
 
 
+@pytest.mark.asyncio
+async def test_reconcile_open_orders_handles_exchange_failure():
+    db = StubDB()
+
+    async def boom():
+        raise RuntimeError("no orders")
+
+    bot = StubBot()
+    bot.get_open_orders_async = boom
+    resync = ResyncService(
+        db=db,
+        bot=bot,
+        risk_manager=SimpleNamespace(update_positions=lambda *_: None, update_pending_orders=lambda *_: None),
+        holdings_updater=lambda *args, **kwargs: 0.0,
+        session_stats_applier=lambda *args, **kwargs: None,
+    )
+    resync.set_session(1)
+
+    await resync.reconcile_open_orders()
+
+    assert db.replace_calls == 0  # early exit, no refresh attempted
+
+
+@pytest.mark.asyncio
+async def test_reconcile_open_orders_replaces_stale_snapshot(caplog):
+    db = StubDB()
+    db.orders = [{"order_id": "old"}]
+    bot = StubBot(orders=[{"order_id": "new", "clientOrderId": f"{CLIENT_ORDER_PREFIX}x"}])
+    resync = ResyncService(
+        db=db,
+        bot=bot,
+        risk_manager=SimpleNamespace(update_positions=lambda *_: None, update_pending_orders=lambda *_: None),
+        holdings_updater=lambda *args, **kwargs: 0.0,
+        session_stats_applier=lambda *args, **kwargs: None,
+    )
+    resync.set_session(1)
+
+    with caplog.at_level("INFO"):
+        await resync.reconcile_open_orders()
+
+    assert db.replaced_orders == bot.orders
+    assert any("stale open orders" in rec.message for rec in caplog.records)
+
+
 class SyncStubDB:
     def __init__(self):
         self.logged = []
@@ -126,9 +175,11 @@ class SyncStubDB:
 class SyncStubBot:
     def __init__(self, trades):
         self.trades = trades
+        self.calls = 0
 
     async def get_my_trades_async(self, symbol, since=None, limit=100):
-        return self.trades
+        self.calls += 1
+        return self.trades(self.calls)
 
 
 @pytest.mark.asyncio
@@ -146,7 +197,7 @@ async def test_sync_trades_processes_and_records_ids():
         "info": {"liquidity": "maker"},
     }]
     db = SyncStubDB()
-    bot = SyncStubBot(trades)
+    bot = SyncStubBot(lambda call: trades if call == 1 else [])
     resync = ResyncService(
         db=db,
         bot=bot,
@@ -167,3 +218,79 @@ async def test_sync_trades_processes_and_records_ids():
     assert db.logged
     assert db.recorded == {("t1", trades[0]["clientOrderId"])}
     assert "t1" in processed_ids
+
+
+@pytest.mark.asyncio
+async def test_sync_trades_paginates_and_skips_duplicates():
+    trade_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    def paged_trades(call_count):
+        if call_count == 1:
+            # 100 identical trades forces pagination; duplicates should be skipped after first
+            return [
+                {
+                    "id": "dup",
+                    "order": "o2",
+                    "side": "sell",
+                    "price": 200.0,
+                    "amount": 0.2,
+                    "fee": {"cost": 0.02},
+                    "timestamp": trade_ts,
+                    "clientOrderId": f"{CLIENT_ORDER_PREFIX}-999",
+                    "info": {"fillLiquidity": "taker"},
+                }
+            ] * 100
+        return []
+
+    db = SyncStubDB()
+    db.record_processed_trade_ids = lambda session_id, processed: setattr(db, "recorded", processed) or (_ for _ in ()).throw(RuntimeError("persist failed"))
+    bot = SyncStubBot(paged_trades)
+    resync = ResyncService(
+        db=db,
+        bot=bot,
+        risk_manager=SimpleNamespace(),
+        holdings_updater=lambda *args, **kwargs: 0.0,
+        session_stats_applier=lambda *args, **kwargs: None,
+    )
+
+    processed_ids: set[tuple[str, str | None]] = set()
+    await resync.sync_trades_from_exchange(
+        session_id=2,
+        processed_trade_ids=processed_ids,
+        order_reasons={"o2": "exit"},
+        plan_reason_lookup=lambda *_: None,
+        get_symbols=lambda: {"BTC/USD"},
+    )
+
+    # logged once despite duplicates, pagination handled, processed set recorded
+    assert db.logged
+    assert len(db.logged) == 1
+    assert "dup" in processed_ids
+    assert db.recorded == {("dup", f"{CLIENT_ORDER_PREFIX}-999")}
+
+
+@pytest.mark.asyncio
+async def test_sync_trades_noop_when_session_missing():
+    db = SyncStubDB()
+
+    def trades(_):
+        raise AssertionError("should not fetch trades")
+
+    bot = SyncStubBot(trades)
+    resync = ResyncService(
+        db=db,
+        bot=bot,
+        risk_manager=SimpleNamespace(),
+        holdings_updater=lambda *args, **kwargs: 0.0,
+        session_stats_applier=lambda *args, **kwargs: None,
+    )
+
+    await resync.sync_trades_from_exchange(
+        session_id=0,
+        processed_trade_ids=set(),
+        order_reasons={},
+        plan_reason_lookup=lambda *_: None,
+        get_symbols=lambda: set(),
+    )
+
+    assert db.logged == []

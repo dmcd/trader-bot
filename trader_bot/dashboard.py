@@ -25,14 +25,10 @@ from trader_bot.database import TradingDatabase
 cost_tracker = CostTracker(ACTIVE_EXCHANGE, llm_provider=LLM_PROVIDER)
 
 
-def resolve_base_currency(session_stats, account_snapshot, fallback="USD"):
-    """Prefer explicit base currency hints from session or account snapshots."""
-    for source in (session_stats, account_snapshot):
-        if not source:
-            continue
-        base = source.get("base_currency")
-        if base:
-            return base
+def resolve_base_currency(session_stats, fallback="USD"):
+    """Prefer explicit base currency hints from session stats."""
+    if session_stats:
+        return session_stats.get("base_currency") or fallback
     return fallback
 
 
@@ -77,8 +73,8 @@ def extract_circuit_status(health_states):
     return summary
 
 
-def build_venue_status_payload(exchange: str, session_stats, account_snapshot, health_states, now: datetime | None = None):
-    base_currency = resolve_base_currency(session_stats, account_snapshot, "USD")
+def build_venue_status_payload(exchange: str, session_stats, health_states, now: datetime | None = None):
+    base_currency = resolve_base_currency(session_stats, "USD")
     return {
         "venue": exchange or "Unknown",
         "base_currency": base_currency,

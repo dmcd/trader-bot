@@ -103,6 +103,37 @@ class TradesExchange:
         return [{"id": 1, "symbol": symbol, "ts": since}]
 
 
+class ConnectStubExchange:
+    def __init__(self):
+        self.urls = {"api": {}}
+        self.markets = {"BTC/USD": {"precision": {"price": 0.01, "amount": 0.001}}}
+        self.load_calls = 0
+        self.sandbox_mode = False
+        self.closed = False
+
+    async def load_markets(self):
+        self.load_calls += 1
+        return self.markets
+
+    def set_sandbox_mode(self, flag):
+        self.sandbox_mode = flag
+
+    async def close(self):
+        self.closed = True
+
+
+class MarketDataStub:
+    def __init__(self):
+        self.ticker_calls = 0
+
+    async def fetch_ticker(self, symbol):
+        self.ticker_calls += 1
+        return {"last": 10.0, "bid": 9.0, "ask": 11.0}
+
+    async def fetch_order_book(self, symbol, limit=5):
+        raise RuntimeError("order book down")
+
+
 @pytest.mark.asyncio
 async def test_populate_precisions_uses_fallback_metadata(monkeypatch):
     trader = GeminiTrader()
@@ -190,6 +221,107 @@ async def test_get_trades_from_timestamp_passes_since_and_handles_errors():
     trades = await trader.get_trades_from_timestamp("ETH/USD", 999)
     assert trades == []
     assert trader.exchange.calls == [("ETH/USD", 999, None)]
+
+
+@pytest.mark.asyncio
+async def test_connect_async_sets_sandbox_urls_and_is_idempotent(monkeypatch):
+    stub = ConnectStubExchange()
+    monkeypatch.setattr("trader_bot.gemini_trader.ccxt.gemini", lambda *_args, **_kwargs: stub)
+    trader = GeminiTrader()
+
+    await trader.connect_async()
+    await trader.connect_async()  # guard against duplicate connects
+
+    assert trader.connected is True
+    assert stub.sandbox_mode is True
+    assert stub.urls["api"]["public"] == "https://api.sandbox.gemini.com"
+    assert stub.load_calls == 1
+    assert stub.closed is False
+
+
+@pytest.mark.asyncio
+async def test_get_market_data_handles_order_book_failure_and_invalid_symbol():
+    trader = GeminiTrader()
+    trader.connected = True
+    trader.exchange = MarketDataStub()
+
+    result = await trader.get_market_data_async("BTC/USD")
+    assert result["symbol"] == "BTC/USD"
+    assert result["bid"] == pytest.approx(9.0)
+    assert result["ask"] == pytest.approx(11.0)
+    assert result["spread_pct"] is None  # order book unavailable
+
+    none_result = await trader.get_market_data_async("USD")
+    assert none_result is None
+    assert trader.exchange.ticker_calls == 1  # invalid symbol skipped
+
+
+@pytest.mark.asyncio
+async def test_calculate_total_usd_handles_inverted_and_missing_markets():
+    trader = GeminiTrader()
+    trader.connected = True
+
+    class ValuationExchange:
+        def __init__(self):
+            self.markets = {"USD/ETH": {}, "DOGE/USD": {}}
+
+        async def fetch_ticker(self, symbol):
+            if symbol == "USD/ETH":
+                return {"last": 0.002}  # invert to 500
+            if symbol == "DOGE/USD":
+                raise RuntimeError("no market")
+            return {}
+
+    trader.exchange = ValuationExchange()
+    balance = {"total": {"USD": 10.0, "ETH": 2.0, "DOGE": 5.0}}
+
+    total, price_map = await trader._calculate_total_usd(balance)
+
+    assert total == pytest.approx(1010.0)  # 10 USD + 2 * 500
+    assert price_map["ETH"] == pytest.approx(500.0)
+    assert "DOGE" not in price_map
+
+
+@pytest.mark.asyncio
+async def test_get_equity_async_handles_balance_errors():
+    trader = GeminiTrader()
+    trader.connected = True
+
+    class FailingExchange:
+        async def fetch_balance(self):
+            raise RuntimeError("fail")
+
+    trader.exchange = FailingExchange()
+
+    result = await trader.get_equity_async()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_place_order_returns_none_when_ticker_missing_prices():
+    trader = GeminiTrader()
+    trader.connected = True
+
+    class EmptyTickerExchange:
+        def __init__(self):
+            self.markets = {"BTC/USD": {"precision": {"price": 2, "amount": 3}}}
+
+        async def fetch_ticker(self, symbol):
+            return {}
+
+        def market(self, symbol):
+            return self.markets[symbol]
+
+        def price_to_precision(self, symbol, price):
+            raise AssertionError("should not format price when missing")
+
+        def amount_to_precision(self, symbol, amount):
+            raise AssertionError("should not format amount when missing")
+
+    trader.exchange = EmptyTickerExchange()
+
+    result = await trader.place_order_async("BTC/USD", "BUY", 1.0, prefer_maker=True)
+    assert result is None
 
 
 @pytest.mark.asyncio

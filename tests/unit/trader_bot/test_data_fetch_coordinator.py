@@ -49,6 +49,12 @@ class ErrorOhlcvExchange(StubExchange):
         raise RuntimeError("boom")
 
 
+class ErrorOrderBookExchange(StubExchange):
+    async def fetch_order_book(self, symbol, limit):
+        self.order_book_calls += 1
+        raise RuntimeError("order book down")
+
+
 @pytest.mark.asyncio
 async def test_market_data_uses_cache_between_calls():
     exchange = StubExchange()
@@ -367,3 +373,75 @@ async def test_handle_requests_invokes_clamp_and_success(monkeypatch):
     assert responses[0].error is None
     assert successes == ["ok"]
     assert clamp_calls
+
+
+def test_build_candles_from_out_of_order_trades_and_zero_volume():
+    coordinator = DataFetchCoordinator(exchange=None)  # type: ignore[arg-type]
+    trades = [
+        {"timestamp": 120_000, "price": 105, "amount": 0},
+        {"timestamp": 30_000, "price": 99, "amount": 1},
+        {"timestamp": 90_000, "price": 101, "amount": 0.5},
+        {"timestamp": 30_500, "price": 101, "amount": 0.25},
+    ]
+
+    candles = coordinator._build_candles_from_trades(trades, timeframe="1m", limit=5)
+
+    assert candles == [
+        [0, 99.0, 101.0, 99.0, 101.0, 1.25],
+        [60_000, 101.0, 101.0, 101.0, 101.0, 0.5],
+    ]
+    # Zero-amount trades are dropped and do not create empty buckets
+
+
+@pytest.mark.asyncio
+async def test_stale_cached_response_is_pruned(monkeypatch):
+    exchange = StubExchange()
+    clock = {"now": 0.0}
+    monkeypatch.setattr("time.time", lambda: clock["now"])
+    coordinator = DataFetchCoordinator(
+        exchange,
+        cache_ttl_seconds=0,
+        rate_limit_window_seconds=120,
+        dedup_window_seconds=1,
+    )
+    req = ToolRequest(
+        id="m1",
+        tool=ToolName.GET_MARKET_DATA,
+        params={"symbol": "BTC/USD", "timeframes": ["1m"], "limit": 2},
+    )
+
+    await coordinator.handle_requests([req])
+    assert exchange.ohlcv_calls == 1
+
+    clock["now"] = 2.5  # beyond dedup horizon so cache should prune
+    responses = await coordinator.handle_requests([req])
+
+    assert exchange.ohlcv_calls == 2
+    assert responses[0].data.get("meta", {}).get("deduped") is None
+
+
+@pytest.mark.asyncio
+async def test_order_book_error_surfaces_and_notifies_callback():
+    exchange = ErrorOrderBookExchange()
+    errors = []
+
+    def error_callback(req, reason):
+        errors.append((req.id, str(reason)))
+
+    coordinator = DataFetchCoordinator(
+        exchange,
+        cache_ttl_seconds=0,
+        rate_limit_window_seconds=120,
+        error_callback=error_callback,
+    )
+    req = ToolRequest(
+        id="ob_err",
+        tool=ToolName.GET_ORDER_BOOK,
+        params=OrderBookParams(symbol="BTC/USD", depth=5),
+    )
+
+    responses = await coordinator.handle_requests([req])
+
+    assert responses[0].error
+    assert ("ob_err", "order book down") in errors
+    assert exchange.order_book_calls == 1

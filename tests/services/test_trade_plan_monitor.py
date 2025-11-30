@@ -368,6 +368,62 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.db.update_trade_plan_size.assert_not_called()
         self.assertEqual(telemetry_record.get("status"), "partial_close_executed")
 
+    @patch('trader_bot.strategy_runner.datetime')
+    async def test_day_end_flatten_closes_active_plan(self, mock_dt):
+        now = datetime(2024, 1, 1, 12, tzinfo=timezone.utc)
+        mock_dt.now.return_value = now
+        mock_dt.fromisoformat.side_effect = datetime.fromisoformat
+        mock_dt.timezone = timezone
+
+        self.runner.day_end_flatten_hour_utc = now.hour
+        self.runner.max_plan_age_minutes = None
+        self.runner.db = MagicMock()
+        self.runner.risk_manager.positions = {"BTC/USD": {"quantity": 0.1, "current_price": 100}}
+        self.runner.db.get_open_trade_plans.return_value = [{
+            'id': 20,
+            'symbol': 'BTC/USD',
+            'side': 'BUY',
+            'entry_price': 100,
+            'stop_price': 90,
+            'target_price': 120,
+            'size': 0.1,
+            'opened_at': (now - timedelta(hours=2)).isoformat(),
+            'version': 1,
+        }]
+        self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': 'close', 'liquidity': 'taker'})
+        self.runner.db.update_trade_plan_status = Mock()
+        self.runner.db.log_trade = Mock()
+        self.runner.db.update_trade_plan_prices = Mock()
+
+        await self._run_monitor(price_lookup={"BTC/USD": 101}, open_orders=[])
+
+        self.runner.db.update_trade_plan_status.assert_called_once()
+
+    async def test_sell_plan_trails_stop_to_breakeven(self):
+        now = datetime.now(timezone.utc)
+        self.runner._apply_plan_trailing_pct = 0.05
+        self.runner.db = MagicMock()
+        self.runner.risk_manager.positions = {"BTC/USD": {"quantity": -0.1, "current_price": 100}}
+        self.runner.db.get_open_trade_plans.return_value = [{
+            'id': 21,
+            'symbol': 'BTC/USD',
+            'side': 'SELL',
+            'entry_price': 100,
+            'stop_price': 105,
+            'target_price': 90,
+            'size': 0.1,
+            'opened_at': now.isoformat(),
+            'version': 1,
+        }]
+        self.runner.db.update_trade_plan_prices = Mock()
+        self.runner.bot.place_order_async = AsyncMock(return_value={'order_id': 'trail', 'liquidity': 'taker'})
+
+        await self._run_monitor(price_lookup={"BTC/USD": 94}, open_orders=[])
+
+        self.runner.db.update_trade_plan_prices.assert_called_once()
+        args, kwargs = self.runner.db.update_trade_plan_prices.call_args
+        self.assertEqual(kwargs.get("stop_price"), 100)
+
 
 if __name__ == '__main__':
     unittest.main()

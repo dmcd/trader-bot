@@ -87,3 +87,42 @@ def test_liquidity_filter_blocks_wide_spread(handler, caplog):
     caplog.set_level(logging.INFO)
     ok = handler.liquidity_ok({"bid": 100, "ask": 110, "bid_size": 1, "ask_size": 1}, max_spread_pct=5.0, min_top_of_book_notional=10.0)
     assert ok is False
+
+
+def test_passes_rr_filter_requires_positive_reward(handler):
+    assert handler.passes_rr_filter("BUY", price=100, stop_price=99, target_price=101, min_rr=2.0) is False
+    assert handler.passes_rr_filter("SELL", price=100, stop_price=101, target_price=95, min_rr=1.5) is True
+    assert handler.passes_rr_filter("BUY", price=100, stop_price=None, target_price=None, min_rr=2.0) is True
+
+
+def test_slippage_guard_blocks_when_depth_thin(handler):
+    allowed, move_pct = handler.slippage_within_limit(
+        decision_price=100,
+        latest_price=102,
+        market_data_point={"spread_pct": 5.0, "bid": 100, "ask": 101, "bid_size": 0.1, "ask_size": 0.1},
+        max_slippage_pct=3.0,
+        max_spread_pct=1.0,
+        min_top_of_book_notional=50.0,
+    )
+    assert allowed is False
+    assert move_pct == pytest.approx(2.0)
+
+
+def test_apply_order_value_buffer_logs_trim():
+    actions_logger = MagicMock()
+    handler = TradeActionHandler(
+        db=MagicMock(),
+        bot=MagicMock(),
+        risk_manager=MagicMock(apply_order_value_buffer=MagicMock(return_value=(0.5, 1.0))),
+        cost_tracker=MagicMock(),
+        portfolio_tracker=MagicMock(),
+        prefer_maker=lambda symbol: True,
+        health_manager=MagicMock(),
+        emit_telemetry=lambda record: None,
+        log_execution_trace=lambda *args, **kwargs: None,
+        actions_logger=actions_logger,
+        logger=logging.getLogger("handler_test"),
+    )
+
+    handler.apply_order_value_buffer(1.0, 100.0)
+    actions_logger.info.assert_called_once()

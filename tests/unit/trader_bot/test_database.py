@@ -163,6 +163,20 @@ def test_portfolio_indexes_created(tmp_path):
     db.close()
 
 
+def test_run_id_columns_and_indexes(tmp_path):
+    db_path = tmp_path / "runid.db"
+    db = TradingDatabase(str(db_path))
+    call_cols = {row["name"] for row in db.conn.execute("PRAGMA table_info(llm_calls)")}
+    trace_cols = {row["name"] for row in db.conn.execute("PRAGMA table_info(llm_traces)")}
+    assert "run_id" in call_cols
+    assert "run_id" in trace_cols
+    call_indexes = {row["name"] for row in db.conn.execute("PRAGMA index_list(llm_calls)")}
+    trace_indexes = {row["name"] for row in db.conn.execute("PRAGMA index_list(llm_traces)")}
+    assert "idx_llm_calls_run_ts" in call_indexes
+    assert "idx_llm_traces_run_ts" in trace_indexes
+    db.close()
+
+
 def test_market_data_preserves_integer_sizes(db_session):
     db, session_id = db_session
     db.log_market_data(
@@ -416,11 +430,14 @@ def test_log_estimated_fee_persists_row(db_session):
 
 def test_llm_trace_roundtrip_and_prune(db_session):
     db, session_id = db_session
-    trace_id = db.log_llm_trace(session_id, prompt="p", response="r", decision_json="{}", market_context={"a": 1})
+    trace_id = db.log_llm_trace(session_id, prompt="p", response="r", decision_json="{}", market_context={"a": 1}, run_id="run-1")
     db.update_llm_trace_execution(trace_id, {"result": "ok"})
     traces = db.get_recent_llm_traces(session_id, limit=5)
     assert traces and traces[0]["id"] == trace_id
     assert '"result": "ok"' in (traces[0]["execution_result"] or "")
+    cursor = db.conn.cursor()
+    row = cursor.execute("SELECT run_id FROM llm_traces WHERE id = ?", (trace_id,)).fetchone()
+    assert row["run_id"] == "run-1"
 
     old_ts = (datetime.now() - timedelta(days=10)).isoformat()
     db.conn.execute(

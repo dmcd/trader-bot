@@ -104,6 +104,7 @@ class TradingDatabase:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
                 portfolio_id INTEGER,
+                run_id TEXT,
                 timestamp TEXT NOT NULL,
                 input_tokens INTEGER DEFAULT 0,
                 output_tokens INTEGER DEFAULT 0,
@@ -121,6 +122,7 @@ class TradingDatabase:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
                 portfolio_id INTEGER,
+                run_id TEXT,
                 timestamp TEXT NOT NULL,
                 prompt TEXT,
                 response TEXT,
@@ -281,6 +283,18 @@ class TradingDatabase:
                 cursor.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({columns})")
             except Exception as e:
                 logger.debug(f"Could not create index {index_name}: {e}")
+
+        # Optional run_id columns for telemetry/ops traceability
+        for table_name in ["llm_calls", "llm_traces"]:
+            try:
+                self._ensure_column(cursor, table_name, "run_id TEXT")
+            except Exception as exc:
+                logger.debug(f"Could not add run_id to {table_name}: {exc}")
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_llm_calls_run_ts ON llm_calls (run_id, timestamp DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_llm_traces_run_ts ON llm_traces (run_id, timestamp DESC)")
+        except Exception as exc:
+            logger.debug(f"Could not create run_id telemetry indexes: {exc}")
         
         # Commands table for dashboard-to-bot communication
         cursor.execute("""
@@ -498,16 +512,31 @@ class TradingDatabase:
         except Exception as e:
             logger.debug(f"Failed to log estimated fee: {e}")
     
-    def log_llm_call(self, session_id: int, input_tokens: int, output_tokens: int, 
-                     cost: float, decision: str = ""):
+    def log_llm_call(self, session_id: int, input_tokens: int, output_tokens: int,
+                     cost: float, decision: str = "", run_id: str | None = None, portfolio_id: int | None = None):
         """Log an LLM API call."""
         cursor = self.conn.cursor()
         total_tokens = input_tokens + output_tokens
         
         cursor.execute("""
-            INSERT INTO llm_calls (session_id, timestamp, input_tokens, output_tokens, total_tokens, cost, decision)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, datetime.now().isoformat(), input_tokens, output_tokens, total_tokens, cost, decision))
+            INSERT INTO llm_calls (session_id, portfolio_id, run_id, timestamp, input_tokens, output_tokens, total_tokens, cost, decision)
+            VALUES (
+                ?,
+                ?,
+                ?,
+                ?, ?, ?, ?, ?, ?
+            )
+        """, (
+            session_id,
+            portfolio_id,
+            run_id,
+            datetime.now().isoformat(),
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            cost,
+            decision,
+        ))
         
         # Update session LLM cost
         cursor.execute("""
@@ -519,7 +548,7 @@ class TradingDatabase:
         self.conn.commit()
         logger.debug(f"Logged LLM call: {total_tokens} tokens, ${cost:.6f}")
 
-    def log_llm_trace(self, session_id: int, prompt: str, response: str, decision_json: str = "", market_context: Any = None) -> int:
+    def log_llm_trace(self, session_id: int, prompt: str, response: str, decision_json: str = "", market_context: Any = None, run_id: str | None = None, portfolio_id: int | None = None) -> int:
         """Persist full LLM prompt/response plus parsed decision and context; returns trace id."""
         cursor = self.conn.cursor()
         try:
@@ -527,9 +556,14 @@ class TradingDatabase:
         except Exception:
             market_context_str = str(market_context)
         cursor.execute("""
-            INSERT INTO llm_traces (session_id, timestamp, prompt, response, decision_json, market_context)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (session_id, datetime.now().isoformat(), prompt, response, decision_json, market_context_str))
+            INSERT INTO llm_traces (session_id, portfolio_id, run_id, timestamp, prompt, response, decision_json, market_context)
+            VALUES (
+                ?,
+                ?,
+                ?,
+                ?, ?, ?, ?, ?
+            )
+        """, (session_id, portfolio_id, run_id, datetime.now().isoformat(), prompt, response, decision_json, market_context_str))
         self.conn.commit()
         return cursor.lastrowid
 

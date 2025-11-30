@@ -96,13 +96,16 @@ class DummyDB:
 
 class DummyRiskManager:
     def __init__(self):
-        self.daily_loss = 0.0
-        self.start_of_day_equity = 0.0
+        self.current_equity = 0.0
         self.positions = {}
         self.pending_orders_by_symbol = {}
 
     def update_equity(self, *_args, **_kwargs):
-        return None
+        if _args:
+            try:
+                self.current_equity = float(_args[0])
+            except Exception:
+                pass
 
     def update_positions(self, *_args, **_kwargs):
         return None
@@ -120,7 +123,6 @@ class DummyRiskManager:
 @pytest.mark.asyncio
 async def test_equity_fetch_failure_short_circuits(monkeypatch):
     runner = StrategyRunner(execute_orders=False)
-    runner.daily_loss_pct = 100.0
     runner.bot = FakeBot(price=101.0, spread_pct=0.5)
     runner.db = DummyDB()
     runner.risk_manager = DummyRiskManager()
@@ -167,12 +169,9 @@ def test_get_sync_symbols_dedupes_and_fallback():
 
 def test_record_operational_metrics_emits_budget_branches():
     runner = StrategyRunner(execute_orders=False)
-    runner.daily_loss_pct = 10.0
     runner.session = {"created_at": datetime.now(timezone.utc)}
     runner.session_stats = {"gross_pnl": 100.0, "total_fees": 50.0, "total_llm_cost": 2.0}
     runner.risk_manager = DummyRiskManager()
-    runner.risk_manager.daily_loss = 200.0
-    runner.risk_manager.start_of_day_equity = 1000.0
     runner._record_health_state = MagicMock()
     runner.cost_tracker = MagicMock()
     runner.cost_tracker.calculate_llm_burn.side_effect = [
@@ -186,12 +185,15 @@ def test_record_operational_metrics_emits_budget_branches():
     llm_statuses = [call.args[1] for call in runner._record_health_state.call_args_list if call.args[0] == "llm_budget"]
     assert "cap_hit" in llm_statuses
     assert "near_cap" in llm_statuses
+    risk_calls = [call for call in runner._record_health_state.call_args_list if call.args[0] == "risk_metrics"]
+    assert risk_calls
+    risk_detail = risk_calls[0].args[2]
+    assert risk_detail["net_pnl"] == pytest.approx(48.0)
 
 
 @pytest.mark.asyncio
 async def test_run_loop_pauses_when_health_manager_requests(monkeypatch):
     runner = StrategyRunner(execute_orders=False)
-    runner.daily_loss_pct = 100.0
     runner.bot = FakeBot(price=101.0, spread_pct=0.5)
     runner.db = DummyDB()
     runner.risk_manager = DummyRiskManager()
@@ -219,7 +221,6 @@ async def test_run_loop_pauses_when_health_manager_requests(monkeypatch):
 @pytest.mark.asyncio
 async def test_market_health_gating_records_stale(monkeypatch):
     runner = StrategyRunner(execute_orders=False)
-    runner.daily_loss_pct = 100.0
     runner.bot = FakeBot(price=101.0, spread_pct=0.5)
     runner.db = DummyDB()
     runner.risk_manager = DummyRiskManager()
@@ -248,7 +249,6 @@ async def test_market_health_gating_records_stale(monkeypatch):
 @pytest.mark.asyncio
 async def test_cancel_action_refreshes_open_orders(monkeypatch):
     runner = StrategyRunner(execute_orders=False)
-    runner.daily_loss_pct = 100.0
     runner.bot = FakeBot(price=101.0, spread_pct=0.5)
     runner.db = DummyDB()
     runner.risk_manager = DummyRiskManager()

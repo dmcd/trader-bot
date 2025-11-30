@@ -133,8 +133,8 @@ async def test_start_and_cleanup_sequence_runs_hooks(fake_logger):
 
 
 @pytest.mark.asyncio
-async def test_enforce_risk_budget_triggers_shutdown_and_kill_switch(fake_logger):
-    risk_manager = SimpleNamespace(start_of_day_equity=1000.0, daily_loss=200.0)
+async def test_enforce_risk_budget_is_noop_without_daily_limits(fake_logger):
+    risk_manager = SimpleNamespace(current_equity=1000.0)
     orchestrator = _build_orchestrator(risk_manager=risk_manager, logger=fake_logger, actions_logger=fake_logger)
     close_positions = AsyncMock()
     shutdown_reasons = []
@@ -144,17 +144,14 @@ async def test_enforce_risk_budget_triggers_shutdown_and_kill_switch(fake_logger
 
     result = await orchestrator.enforce_risk_budget(
         current_equity=750.0,
-        daily_loss_pct_limit=10.0,
-        max_daily_loss=150.0,
-        trading_mode="LIVE",
         close_positions_cb=close_positions,
         set_shutdown_reason=set_shutdown_reason,
     )
 
-    assert result.should_stop is True
-    assert result.kill_switch is True
-    assert shutdown_reasons == ["daily loss 20.00% > 10.0%"]
-    close_positions.assert_awaited_once()
+    assert result.should_stop is False
+    assert result.kill_switch is False
+    assert shutdown_reasons == []
+    close_positions.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -25,8 +25,6 @@ from trader_bot.config import (
     OHLCV_MIN_CAPTURE_SPACING_SECONDS,
     LOOP_INTERVAL_SECONDS,
     MARKET_DATA_RETENTION_MINUTES,
-    MAX_DAILY_LOSS,
-    MAX_DAILY_LOSS_PERCENT,
     MAX_ORDER_VALUE,
     MAX_POSITIONS,
     MAX_SLIPPAGE_PCT,
@@ -408,16 +406,11 @@ class StrategyRunner:
         """Emit health metrics for risk counters and LLM budget."""
         llm_cost = (self.session_stats or {}).get("total_llm_cost", 0.0) or 0.0
         try:
-            sod = self.risk_manager.start_of_day_equity or 0.0
-            loss_pct = (self.risk_manager.daily_loss / sod * 100) if sod else 0.0
             gross = (self.session_stats or {}).get("gross_pnl", 0.0) or 0.0
             fees = (self.session_stats or {}).get("total_fees", 0.0) or 0.0
+            net = gross - fees - llm_cost
             fee_ratio = fees / max(abs(gross), 1.0)
             risk_detail = {
-                "daily_loss": self.risk_manager.daily_loss,
-                "daily_loss_pct": loss_pct,
-                "daily_loss_pct_limit": self.daily_loss_pct,
-                "daily_loss_limit": MAX_DAILY_LOSS,
                 "exposure": current_exposure,
                 "exposure_limit": MAX_TOTAL_EXPOSURE,
                 "exposure_headroom": max(0.0, MAX_TOTAL_EXPOSURE - current_exposure),
@@ -426,6 +419,7 @@ class StrategyRunner:
                 "total_fees": fees,
                 "total_llm_cost": llm_cost,
                 "equity": current_equity,
+                "net_pnl": net,
             }
             self._record_health_state("risk_metrics", "ok", risk_detail)
         except Exception as exc:
@@ -725,8 +719,7 @@ class StrategyRunner:
             f"Max order ${MAX_ORDER_VALUE:,.2f} (buffer ${ORDER_VALUE_BUFFER:,.2f}), "
             f"Min trade ${MIN_TRADE_SIZE:,.2f}, "
             f"Max exposure ${MAX_TOTAL_EXPOSURE:,.2f}, "
-            f"Max positions {MAX_POSITIONS}, "
-            f"Max daily loss ${MAX_DAILY_LOSS:,.2f} / {MAX_DAILY_LOSS_PERCENT:.1f}%"
+            f"Max positions {MAX_POSITIONS}"
         )
         
         # Connect to the active exchange
@@ -799,10 +792,15 @@ class StrategyRunner:
             logger.info(f"Loaded portfolio stats from cache: {self.session_stats}")
         else:
             logger.info("No cached portfolio stats found; rebuilding from exchange trades...")
-            now = datetime.now(timezone.utc)
-            start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            start_ts_ms = int(start_of_day.timestamp() * 1000)
-            
+            start_ts_ms = 0
+            try:
+                latest_trade_ts = self.db.get_latest_trade_timestamp(self.session_id, portfolio_id=self.portfolio_id)
+                if latest_trade_ts:
+                    parsed = datetime.fromisoformat(latest_trade_ts)
+                    start_ts_ms = int(parsed.timestamp() * 1000)
+            except Exception as exc:
+                logger.debug(f"Could not derive rebuild start timestamp: {exc}")
+
             symbols = self._get_rebuild_symbols()
             trades = []
             for sym in symbols:
@@ -818,7 +816,7 @@ class StrategyRunner:
                 self.db.set_portfolio_stats_cache(self.portfolio_id, self.session_stats)
             logger.info(f"Portfolio Stats Rebuilt: {self.session_stats}")
 
-        # Seed risk manager baseline to current equity (no persisted daily baseline)
+        # Seed risk manager with current equity for telemetry
         self.risk_manager.update_equity(initial_equity)
 
         # No need to reconcile_exchange_state in the old way; we just trust the exchange now.
@@ -826,8 +824,6 @@ class StrategyRunner:
         live_positions = await self.bot.get_positions_async()
         self._capture_sandbox_position_baseline(live_positions)
         self.db.replace_positions(self.session_id, live_positions, portfolio_id=self.portfolio_id)
-        
-        self.daily_loss_pct = MAX_DAILY_LOSS_PERCENT
         bot_actions_logger.info(f"💰 Starting Equity: ${initial_equity:,.2f}")
 
     # reconcile_exchange_state removed as we trust exchange data directly now
@@ -1089,9 +1085,6 @@ class StrategyRunner:
                     
                     risk_result = await self.orchestrator.enforce_risk_budget(
                         current_equity=current_equity,
-                        daily_loss_pct_limit=self.daily_loss_pct,
-                        max_daily_loss=MAX_DAILY_LOSS,
-                        trading_mode=TRADING_MODE,
                         close_positions_cb=self._close_all_positions_safely,
                         set_shutdown_reason=self._set_shutdown_reason,
                     )

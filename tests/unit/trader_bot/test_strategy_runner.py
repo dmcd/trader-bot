@@ -348,8 +348,6 @@ async def test_kill_switch_stops_loop(circuit_runner):
 def test_operational_metrics_emit_health_state(circuit_runner):
     circuit_runner.session_id = circuit_runner.db.get_or_create_session(starting_balance=1000.0, bot_version="metric-test")
     circuit_runner.session = circuit_runner.db.get_session(circuit_runner.session_id)
-    circuit_runner.risk_manager.start_of_day_equity = 1000.0
-    circuit_runner.risk_manager.daily_loss = 50.0
     circuit_runner.session_stats = {"gross_pnl": 100.0, "total_fees": 10.0, "total_llm_cost": 2.0}
     circuit_runner.cost_tracker = MagicMock()
     circuit_runner.cost_tracker.calculate_llm_burn.return_value = {
@@ -357,12 +355,12 @@ def test_operational_metrics_emit_health_state(circuit_runner):
         "pct_of_budget": 0.2,
         "total_llm_cost": 2.0,
     }
-    circuit_runner.daily_loss_pct = 10.0
     circuit_runner._record_operational_metrics(current_exposure=250.0, current_equity=950.0)
     health = {row["key"]: row for row in circuit_runner.db.get_health_state()}
     risk_detail = json.loads(health["risk_metrics"]["detail"])
     assert risk_detail["exposure"] == 250.0
-    assert risk_detail["daily_loss"] == 50.0
+    assert risk_detail["gross_pnl"] == 100.0
+    assert risk_detail["net_pnl"] == pytest.approx(88.0)
     budget_detail = json.loads(health["llm_budget"]["detail"])
     assert budget_detail["total_llm_cost"] == 2.0
 
@@ -843,8 +841,6 @@ async def test_runner_handles_multi_symbol_exposure(monkeypatch, tmp_path):
     runner = StrategyRunner(execute_orders=False)
     runner.session_id = runner.db.get_or_create_session(starting_balance=1000.0, bot_version="multi-exposure")
     runner.session = runner.db.get_session(runner.session_id)
-    runner.daily_loss_pct = 50.0
-    runner.risk_manager.start_of_day_equity = 1000.0
     runner._get_active_symbols = lambda: ["BTC/USD", "ETH/USD"]
     runner.bot.get_equity_async = AsyncMock(return_value=1000.0)
     positions = [
@@ -928,53 +924,6 @@ async def test_runner_handles_multi_symbol_exposure(monkeypatch, tmp_path):
     assert runner.bot.get_market_data_async.call_count == 2
     assert set(price_overrides_seen.keys()) == {"BTC/USD", "ETH/USD"}
     assert price_overrides_seen["ETH/USD"] == 2000.0
-
-
-@pytest.mark.asyncio
-async def test_sandbox_daily_loss_check(monkeypatch):
-    mock_bot = AsyncMock()
-    mock_bot.connect_async = AsyncMock()
-    mock_bot.get_equity_async = AsyncMock(return_value=100000.0)
-    mock_bot.close = AsyncMock()
-    mock_bot.get_market_data_async = AsyncMock(return_value={"price": 50000.0})
-    mock_bot.get_positions_async = AsyncMock(return_value=[])
-    mock_bot.get_open_orders_async = AsyncMock(return_value=[])
-    with patch("trader_bot.strategy_runner.TRADING_MODE", "PAPER"), patch(
-        "trader_bot.strategy_runner.MAX_DAILY_LOSS", 500.0
-    ), patch("trader_bot.strategy_runner.MAX_DAILY_LOSS_PERCENT", 3.0), patch(
-        "trader_bot.strategy_runner.GeminiTrader", return_value=mock_bot
-    ):
-        runner = StrategyRunner(execute_orders=False)
-        runner.bot = mock_bot
-        runner.risk_manager = MagicMock(spec=RiskManager)
-        runner.risk_manager.start_of_day_equity = 100000.0
-        runner.daily_loss_pct = 3.0
-        runner.risk_manager.daily_loss = 600.0
-        runner.running = True
-        runner.initialize = AsyncMock()
-        runner.db = MagicMock()
-        runner.db.get_pending_commands.return_value = []
-        runner.risk_manager.update_equity = MagicMock()
-
-        async def break_loop(*_args, **_kwargs):
-            runner.running = False
-            return
-
-        with patch("trader_bot.strategy_runner.asyncio.sleep", side_effect=break_loop):
-            try:
-                await runner.run_loop()
-            except Exception:
-                pass
-        assert runner._kill_switch is False
-        runner.risk_manager.daily_loss = 3100.0
-        runner.running = True
-        runner._kill_switch = False
-        with patch("trader_bot.strategy_runner.asyncio.sleep", side_effect=break_loop):
-            try:
-                await runner.run_loop()
-            except Exception:
-                pass
-        assert runner._kill_switch is True
 
 
 class DummyDB:
@@ -1115,7 +1064,6 @@ class DummyStrategy:
 
 def _build_control_runner(*, command_result=None, risk_result=None, kill_switch=False):
     runner = StrategyRunner(execute_orders=False)
-    runner.daily_loss_pct = 100.0
     runner.bot = FakeBot(price=100.0)
     runner.db = DummyDB()
     runner.health_manager = DummyHealth()
@@ -1133,8 +1081,7 @@ def _build_control_runner(*, command_result=None, risk_result=None, kill_switch=
     runner.orchestrator = DummyOrchestrator(command_result=command_result, risk_result=risk_result)
     runner.risk_manager = SimpleNamespace(
         update_equity=lambda *_args, **_kwargs: None,
-        start_of_day_equity=runner.bot.equity,
-        daily_loss=0.0,
+        current_equity=runner.bot.equity,
         positions={},
         pending_orders_by_symbol={},
         get_total_exposure=lambda *_args, **_kwargs: 0.0,
@@ -1190,14 +1137,12 @@ def _build_runner(signal: StrategySignal, *, risk_allowed=True, slippage_ok=True
 
     runner.cleanup = _cleanup
     runner.orchestrator = DummyOrchestrator()
-    runner.daily_loss_pct = 10.0
     runner.bot = FakeBot(price=100.0)
     runner.db = DummyDB()
     runner.health_manager = DummyHealth()
     runner.risk_manager = SimpleNamespace(
         update_equity=lambda _eq: None,
-        start_of_day_equity=1_000.0,
-        daily_loss=0.0,
+        current_equity=1_000.0,
         positions={},
         pending_orders_by_symbol={},
         get_total_exposure=lambda *_args, **_kwargs: 0.0,

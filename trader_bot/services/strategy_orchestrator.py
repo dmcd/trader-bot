@@ -68,41 +68,13 @@ class StrategyOrchestrator:
     async def enforce_risk_budget(
         self,
         current_equity: float,
-        daily_loss_pct_limit: float,
-        max_daily_loss: float,
-        trading_mode: str,
         close_positions_cb: Callable[[], Awaitable[None]],
         set_shutdown_reason: Callable[[str], None],
     ) -> RiskCheckResult:
         """
-        Apply daily loss limits and trigger shutdown if breached.
+        Apply portfolio-level risk budget gates (no daily resets).
         Returns whether the loop should halt and whether to flip the kill switch.
         """
-        sod_equity = self.risk_manager.start_of_day_equity or 0.0
-        loss_percent = (self.risk_manager.daily_loss / sod_equity * 100) if sod_equity else 0.0
-
-        if sod_equity and loss_percent > daily_loss_pct_limit:
-            reason = f"daily loss {loss_percent:.2f}% > {daily_loss_pct_limit}%"
-            self.logger.error(f"Max daily loss exceeded: {loss_percent:.2f}% > {daily_loss_pct_limit}%. Stopping loop.")
-            set_shutdown_reason(reason)
-            self.actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded ({loss_percent:.2f}%)")
-            await close_positions_cb()
-            return RiskCheckResult(should_stop=True, kill_switch=True, shutdown_reason=reason)
-
-        if self.risk_manager.daily_loss > max_daily_loss:
-            reason = f"daily loss ${self.risk_manager.daily_loss:.2f} > ${max_daily_loss:.2f}"
-            if trading_mode == "PAPER":
-                self.logger.warning(
-                    f"Sandbox: Absolute daily loss exceeded (${self.risk_manager.daily_loss:.2f} > ${max_daily_loss:.2f}), but continuing loop."
-                )
-                return RiskCheckResult(should_stop=False, kill_switch=False)
-
-            self.logger.error(f"Max daily loss exceeded: ${self.risk_manager.daily_loss:.2f} > ${max_daily_loss:.2f}. Stopping loop.")
-            set_shutdown_reason(reason)
-            self.actions_logger.info(f"🛑 Trading Stopped: Daily loss limit exceeded (${self.risk_manager.daily_loss:.2f})")
-            await close_positions_cb()
-            return RiskCheckResult(should_stop=True, kill_switch=True, shutdown_reason=reason)
-
         return RiskCheckResult(should_stop=False, kill_switch=False)
 
     def emit_operational_metrics(self, current_exposure: float, current_equity: float):

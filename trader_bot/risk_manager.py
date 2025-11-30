@@ -2,8 +2,6 @@ import logging
 from dataclasses import dataclass
 
 from trader_bot.config import (
-    MAX_DAILY_LOSS,
-    MAX_DAILY_LOSS_PERCENT,
     MAX_ORDER_VALUE,
     MAX_POSITIONS,
     MAX_TOTAL_EXPOSURE,
@@ -97,8 +95,7 @@ class RiskManager:
         portfolio_id: int | None = None,
     ):
         self.bot = bot # Optional, mostly for position checks if needed
-        self.daily_loss = 0.0
-        self.start_of_day_equity = None
+        self.current_equity: float | None = None
         self.positions = {} # Symbol -> Quantity
         self.pending_buy_exposure = 0.0  # Notional of outstanding buy orders
         self.pending_sell_exposure = 0.0  # Notional of outstanding sell orders (short intent)
@@ -113,20 +110,17 @@ class RiskManager:
         self.portfolio_id = portfolio_id
 
     def seed_start_of_day(self, start_equity: float):
-        """Persist start-of-day equity so restarts keep loss limits consistent."""
-        if start_equity is not None:
-            self.start_of_day_equity = start_equity
+        """Backward-compatible alias for seeding current equity on startup."""
+        self.update_equity(start_equity)
 
     def update_equity(self, current_equity: float):
-        """Track drawdown off start-of-day equity (keeps loss limits consistent)."""
+        """Track latest portfolio equity for telemetry."""
         if current_equity is None:
             return
-
-        if self.start_of_day_equity is None:
-            self.start_of_day_equity = current_equity
-
-        drawdown = (self.start_of_day_equity or 0) - (current_equity or 0)
-        self.daily_loss = max(0.0, drawdown)
+        try:
+            self.current_equity = float(current_equity)
+        except (TypeError, ValueError):
+            return
 
     # Backward compatibility
     update_pnl = update_equity
@@ -228,22 +222,7 @@ class RiskManager:
             logger.warning(f"Risk Reject: {msg}")
             return RiskCheckResult(False, msg)
 
-        # 2. Check Daily Loss (both absolute and percentage)
-        # We need to fetch current equity to update PnL first, but assuming it's updated periodically
-        if self.start_of_day_equity and self.start_of_day_equity > 0:
-            loss_percent = (self.daily_loss / self.start_of_day_equity) * 100
-            if loss_percent > MAX_DAILY_LOSS_PERCENT:
-                msg = f"Daily loss {loss_percent:.2f}% exceeds limit of {MAX_DAILY_LOSS_PERCENT}%"
-                logger.warning(f"Risk Reject: {msg}")
-                return RiskCheckResult(False, msg)
-        
-        # Also check absolute loss for small accounts
-        if self.daily_loss > MAX_DAILY_LOSS:
-            msg = f"Daily loss ${self.daily_loss:.2f} exceeds limit of ${MAX_DAILY_LOSS:.2f}"
-            logger.warning(f"Risk Reject: {msg}")
-            return RiskCheckResult(False, msg)
-
-        # 3. Exposure and position caps
+        # 2. Exposure and position caps
         price_overrides = {symbol: price} if price else None
         current_exposure = self.get_total_exposure(price_overrides=price_overrides)
 

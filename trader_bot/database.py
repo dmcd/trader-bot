@@ -356,17 +356,7 @@ class TradingDatabase:
                 total_fees REAL DEFAULT 0.0,
                 gross_pnl REAL DEFAULT 0.0,
                 total_llm_cost REAL DEFAULT 0.0,
-                start_of_day_equity REAL,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Risk state table to persist daily loss baselines across restarts
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS risk_state (
-                session_id INTEGER PRIMARY KEY,
-                start_of_day_equity REAL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -385,11 +375,6 @@ class TradingDatabase:
             self._ensure_column(cursor, "sessions", "portfolio_id INTEGER")
         except Exception as exc:
             logger.debug(f"Could not add portfolio_id to sessions: {exc}")
-        try:
-            self._ensure_column(cursor, "session_stats_cache", "start_of_day_equity REAL")
-        except Exception:
-            # column may already exist; ignore errors
-            pass
         try:
             cursor.execute(
                 """
@@ -1497,7 +1482,7 @@ class TradingDatabase:
             return self.get_portfolio_stats_cache(portfolio_id)
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT session_id, total_trades, total_fees, gross_pnl, total_llm_cost, start_of_day_equity
+            SELECT session_id, total_trades, total_fees, gross_pnl, total_llm_cost
             FROM session_stats_cache
             WHERE session_id = ?
         """, (session_id,))
@@ -1514,14 +1499,13 @@ class TradingDatabase:
         merged = {**existing, **(stats or {})}
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO session_stats_cache (session_id, total_trades, total_fees, gross_pnl, total_llm_cost, start_of_day_equity, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO session_stats_cache (session_id, total_trades, total_fees, gross_pnl, total_llm_cost, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(session_id) DO UPDATE SET
                 total_trades=excluded.total_trades,
                 total_fees=excluded.total_fees,
                 gross_pnl=excluded.gross_pnl,
                 total_llm_cost=excluded.total_llm_cost,
-                start_of_day_equity=excluded.start_of_day_equity,
                 updated_at=CURRENT_TIMESTAMP
         """, (
             session_id,
@@ -1529,14 +1513,5 @@ class TradingDatabase:
             merged.get('total_fees', 0.0) or 0.0,
             merged.get('gross_pnl', 0.0) or 0.0,
             merged.get('total_llm_cost', 0.0) or 0.0,
-            merged.get('start_of_day_equity', None),
         ))
         self.conn.commit()
-
-    def get_start_of_day_equity(self, session_id: int) -> Optional[float]:
-        """Deprecated: start-of-day baselines are no longer persisted."""
-        return None
-
-    def set_start_of_day_equity(self, session_id: int, equity: float):
-        """Deprecated: start-of-day baselines are no longer persisted."""
-        return

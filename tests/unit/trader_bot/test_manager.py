@@ -9,8 +9,6 @@ def risk_config():
     originals = {
         "MAX_ORDER_VALUE": rm_module.MAX_ORDER_VALUE,
         "MAX_TOTAL_EXPOSURE": rm_module.MAX_TOTAL_EXPOSURE,
-        "MAX_DAILY_LOSS_PERCENT": rm_module.MAX_DAILY_LOSS_PERCENT,
-        "MAX_DAILY_LOSS": rm_module.MAX_DAILY_LOSS,
         "MIN_TRADE_SIZE": rm_module.MIN_TRADE_SIZE,
         "ORDER_VALUE_BUFFER": rm_module.ORDER_VALUE_BUFFER,
         "MAX_POSITIONS": rm_module.MAX_POSITIONS,
@@ -19,8 +17,6 @@ def risk_config():
     }
     rm_module.MAX_ORDER_VALUE = 500.0
     rm_module.MAX_TOTAL_EXPOSURE = 1000.0
-    rm_module.MAX_DAILY_LOSS_PERCENT = 5.0
-    rm_module.MAX_DAILY_LOSS = 50.0
     rm_module.MIN_TRADE_SIZE = 1.0
     rm_module.ORDER_VALUE_BUFFER = 1.0
     rm_module.MAX_POSITIONS = 3
@@ -34,7 +30,7 @@ def risk_config():
 @pytest.fixture
 def risk_manager():
     rm = RiskManager()
-    rm.seed_start_of_day(1000.0)
+    rm.update_equity(1000.0)
     return rm
 
 
@@ -50,12 +46,11 @@ def test_order_value_cap(risk_manager):
     assert "Order value" in result.reason
 
 
-def test_daily_loss_percent_and_absolute(risk_manager):
-    risk_manager.update_equity(890.0)
-    assert risk_manager.check_trade_allowed("BHP", "BUY", 1, 10.0).allowed is False
-
-    risk_manager.daily_loss = rm_module.MAX_DAILY_LOSS + 1
-    assert risk_manager.check_trade_allowed("BHP", "BUY", 1, 10.0).allowed is False
+def test_update_equity_tracks_current_value(risk_manager):
+    risk_manager.update_equity(1234.5)
+    assert risk_manager.current_equity == pytest.approx(1234.5)
+    allowed = risk_manager.check_trade_allowed("BHP", "BUY", 1, 10.0)
+    assert allowed.allowed
 
 
 def test_exposure_limit_with_existing_positions(risk_manager):
@@ -180,7 +175,6 @@ def test_exposure_converts_to_base_currency(risk_config):
 def test_order_value_conversion_blocks_when_fx_pushes_over_cap(risk_config):
     fx_provider = lambda currency, **_: 1.5 if currency == "USD" else None
     rm = RiskManager(base_currency="AUD", fx_rate_provider=fx_provider)
-    rm.seed_start_of_day(2000.0)
 
     result = rm.check_trade_allowed("AAPL/USD", "BUY", 5.0, price=200.0)
     assert result.allowed is False
@@ -190,7 +184,6 @@ def test_order_value_conversion_blocks_when_fx_pushes_over_cap(risk_config):
 def test_min_trade_size_uses_converted_value(risk_config):
     fx_provider = lambda currency, **_: 2.0 if currency == "USD" else None
     rm = RiskManager(base_currency="AUD", fx_rate_provider=fx_provider)
-    rm.seed_start_of_day(2000.0)
 
     result = rm.check_trade_allowed("AAPL/USD", "BUY", 0.2, price=2.0)
     assert result.allowed is False
@@ -218,7 +211,6 @@ def test_order_value_buffer_converts_fx_for_shorts(risk_config):
 
 def test_projected_exposure_for_shorts_adds_incremental_notional(risk_config):
     rm = RiskManager(base_currency="USD")
-    rm.seed_start_of_day(2000.0)
     rm.update_positions({"BBB/USD": {"quantity": -10.0, "current_price": 80.0}})
 
     result = rm.check_trade_allowed("BBB/USD", "SELL", 1.0, price=80.0)
@@ -228,7 +220,6 @@ def test_projected_exposure_for_shorts_adds_incremental_notional(risk_config):
 def test_max_positions_blocks_new_symbol_when_full(risk_config):
     rm_module.MAX_POSITIONS = 1
     rm = RiskManager()
-    rm.seed_start_of_day(1000.0)
     rm.update_positions({"AAA": {"quantity": 1.0, "current_price": 10.0}})
 
     result = rm.check_trade_allowed("BBB", "BUY", 1, price=10.0)
@@ -239,7 +230,6 @@ def test_max_positions_blocks_new_symbol_when_full(risk_config):
 def test_pending_order_cap_per_symbol(risk_config):
     rm_module.MAX_POSITIONS = 1
     rm = RiskManager()
-    rm.seed_start_of_day(1000.0)
     pending = [{"symbol": "AAA", "side": "buy", "price": 10.0, "amount": 1.0, "remaining": 1.0}]
     rm.update_pending_orders(pending)
 
@@ -295,10 +285,9 @@ def test_baseline_and_setters_cover_noops(risk_config):
 
     rm = RiskManager()
     rm.seed_start_of_day(None)
-    assert rm.start_of_day_equity is None
+    assert rm.current_equity is None
     rm.update_equity(None)
-    assert rm.start_of_day_equity is None
-    assert rm.daily_loss == 0.0
+    assert rm.current_equity is None
 
 
 def test_pending_order_update_skips_incomplete_rows(risk_manager):

@@ -136,6 +136,7 @@ class FakeIB:
         *,
         connected: bool = False,
         fail_connect: bool = False,
+        fail_ping: bool = False,
         async_disconnect: bool = False,
         account_values=None,
         market_data=None,
@@ -147,6 +148,7 @@ class FakeIB:
     ):
         self.connected = connected
         self.fail_connect = fail_connect
+        self.fail_ping = fail_ping
         self.connect_calls = []
         self.req_time_calls = 0
         self.disconnect_calls = 0
@@ -177,6 +179,8 @@ class FakeIB:
         return self.connected
 
     async def reqCurrentTimeAsync(self):
+        if self.fail_ping:
+            raise RuntimeError("ping failed")
         self.req_time_calls += 1
         return 123
 
@@ -719,3 +723,45 @@ async def test_fetch_ohlcv_unsupported_timeframe_raises():
 
     with pytest.raises(ValueError):
         await trader.fetch_ohlcv("BHP/AUD", timeframe="2m", limit=10)
+
+
+@pytest.mark.asyncio
+async def test_connect_respects_backoff_after_failure():
+    clock = FakeClock()
+    fake_ib = FakeIB(fail_connect=True)
+    trader = IBTrader(
+        ib_client=fake_ib,
+        monotonic=clock,
+        reconnect_backoff_base=2.0,
+        reconnect_backoff_max=5.0,
+    )
+
+    with pytest.raises(RuntimeError):
+        await trader.connect_async()
+    assert trader._next_reconnect_time == pytest.approx(clock.now + 2.0)
+
+    fake_ib.fail_connect = False
+    connect_calls_before = len(fake_ib.connect_calls)
+    with pytest.raises(RuntimeError):
+        await trader.connect_async()
+    assert len(fake_ib.connect_calls) == connect_calls_before
+
+    clock.advance(3.0)
+    await trader.connect_async()
+    assert trader.connected is True
+    assert trader._reconnect_failures == 0
+    assert trader._next_reconnect_time == 0
+
+
+@pytest.mark.asyncio
+async def test_ping_failure_schedules_backoff():
+    clock = FakeClock()
+    fake_ib = FakeIB(connected=True, fail_ping=True)
+    trader = IBTrader(ib_client=fake_ib, monotonic=clock, reconnect_backoff_base=1.0)
+    trader.connected = True
+
+    with pytest.raises(RuntimeError):
+        await trader.connect_async()
+
+    assert trader.connected is False
+    assert trader._next_reconnect_time > clock.now

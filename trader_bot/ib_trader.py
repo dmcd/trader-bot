@@ -54,6 +54,8 @@ class IBTrader(BaseTrader):
         fx_cache_ttl: float = 30.0,
         order_wait_timeout: float = 5.0,
         order_poll_interval: float = 0.25,
+        reconnect_backoff_base: float = 1.0,
+        reconnect_backoff_max: float = 30.0,
         ib_client: Optional[IB] = None,
         monotonic: Optional[Callable[[], float]] = None,
     ):
@@ -75,6 +77,10 @@ class IBTrader(BaseTrader):
         self.fx_cache_ttl = fx_cache_ttl
         self.order_wait_timeout = order_wait_timeout
         self.order_poll_interval = order_poll_interval
+        self.reconnect_backoff_base = reconnect_backoff_base
+        self.reconnect_backoff_max = reconnect_backoff_max
+        self._reconnect_failures = 0
+        self._next_reconnect_time = 0.0
         self.ib: IB = ib_client or IB()
         self.connected = False
         self._last_ping_mono: float | None = None
@@ -85,6 +91,10 @@ class IBTrader(BaseTrader):
         """
         Connect to IBKR Gateway/TWS with optional heartbeat refresh when already connected.
         """
+        now = self._monotonic()
+        if now < self._next_reconnect_time:
+            raise RuntimeError("Reconnect backoff in effect; skipping connect attempt.")
+
         if self.connected and self.ib.isConnected():
             await self._maybe_ping()
             return
@@ -98,13 +108,17 @@ class IBTrader(BaseTrader):
         except Exception as exc:
             self.connected = False
             logger.error(f"IB connection failed: {exc}")
+            self._schedule_backoff()
             raise
 
         if not self.ib.isConnected():
             self.connected = False
+            self._schedule_backoff()
             raise RuntimeError("IB connection attempt did not complete successfully.")
 
         self.connected = True
+        self._reconnect_failures = 0
+        self._next_reconnect_time = 0.0
         await self._ping()
         logger.info("IB connection established.")
 
@@ -125,6 +139,7 @@ class IBTrader(BaseTrader):
         except Exception as exc:
             self.connected = False
             logger.error(f"IB heartbeat failed: {exc}")
+            self._schedule_backoff()
             raise
 
     async def _maybe_ping(self) -> None:
@@ -831,6 +846,15 @@ class IBTrader(BaseTrader):
             return int(ts_attr.timestamp() * 1000)
         except Exception:
             return None
+
+    def _schedule_backoff(self):
+        self._reconnect_failures += 1
+        delay = min(
+            self.reconnect_backoff_max,
+            self.reconnect_backoff_base * (2 ** (self._reconnect_failures - 1)),
+        )
+        self._next_reconnect_time = self._monotonic() + delay
+        self.connected = False
 
     def _compute_limit_price(self, md: Optional[Dict[str, Any]], side: str, prefer_maker: bool) -> float | None:
         if not md:

@@ -40,7 +40,7 @@
    - [x] Open orders: list working orders filtered by our clientOrderId prefix; normalize to ccxt-like shape.
    - [x] Trades/history: implement `get_my_trades_async` and `get_trades_from_timestamp` via `executions()`/`fills()` with pagination guards; include commission and liquidity (fallback `unknown`).
    - [x] OHLCV: add `fetch_ohlcv` using `reqHistoricalData`; honor timeframe/limit from TA and tools, map to `[ts,o,h,l,c,v]`, clamp unsupported timeframes, and handle IB pacing/ordering quirks.
-   - [ ] Add reconnection/backoff hooks compatible with `HealthCircuitManager.maybe_reconnect`.
+   - [x] Add reconnection/backoff hooks compatible with `HealthCircuitManager.maybe_reconnect`.
 
 4) **Data Fetch & Tooling Integration**
    - [ ] Wrap IB market data/historical endpoints to mimic ccxt returns so `DataFetchCoordinator` continues to work (candles as `[ts, o, h, l, c, v]`, order book depth as bids/asks arrays, trades with `price/amount/timestamp`).

@@ -47,6 +47,7 @@ Notes on the current session model:
     - [x] `MarketDataService`
     - [x] `StrategyOrchestrator`
     - [x] `TradingContext`
+  - [ ] Add initialization tests covering portfolio/run wiring (session reuse, telemetry metadata) and fill any gaps found.
 - [x] Add portfolio-aware DAO calls in services (positions/orders/trades/market data).
   - [x] `PlanMonitor` uses `portfolio_id` when reading/updating plans and logging trades.
   - [x] `ResyncService` persists and reloads positions/orders/trade sync markers by `portfolio_id`.

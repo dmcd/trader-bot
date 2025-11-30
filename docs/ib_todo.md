@@ -39,7 +39,7 @@
    - [x] Positions: map IB portfolio to `symbol/quantity/avg_price/current_price/timestamp`; treat short positions as negative qty.
    - [x] Open orders: list working orders filtered by our clientOrderId prefix; normalize to ccxt-like shape.
    - [x] Trades/history: implement `get_my_trades_async` and `get_trades_from_timestamp` via `executions()`/`fills()` with pagination guards; include commission and liquidity (fallback `unknown`).
-   - [ ] OHLCV: add `fetch_ohlcv` using `reqHistoricalData`; honor timeframe/limit from TA and tools, map to `[ts,o,h,l,c,v]`, clamp unsupported timeframes, and handle IB pacing/ordering quirks.
+   - [x] OHLCV: add `fetch_ohlcv` using `reqHistoricalData`; honor timeframe/limit from TA and tools, map to `[ts,o,h,l,c,v]`, clamp unsupported timeframes, and handle IB pacing/ordering quirks.
    - [ ] Add reconnection/backoff hooks compatible with `HealthCircuitManager.maybe_reconnect`.
 
 4) **Data Fetch & Tooling Integration**

@@ -120,6 +120,16 @@ class FakeFill:
         self.liquidity = liquidity
 
 
+class FakeBar:
+    def __init__(self, date, open, high, low, close, volume):
+        self.date = date
+        self.open = open
+        self.high = high
+        self.low = low
+        self.close = close
+        self.volume = volume
+
+
 class FakeIB:
     def __init__(
         self,
@@ -133,6 +143,7 @@ class FakeIB:
         portfolio=None,
         open_orders=None,
         trades=None,
+        historical_data=None,
     ):
         self.connected = connected
         self.fail_connect = fail_connect
@@ -149,6 +160,8 @@ class FakeIB:
         self.portfolio_entries = portfolio or []
         self.open_orders_list = open_orders or []
         self.trades_list = trades or []
+        self.historical_data = historical_data or {}
+        self.hist_calls = []
         if not async_disconnect:
             # Shadow the coroutine so getattr returns None
             self.disconnectAsync = None
@@ -214,6 +227,11 @@ class FakeIB:
 
     async def tradesAsync(self):
         return list(self.trades_list)
+
+    async def reqHistoricalDataAsync(self, contract, **params):
+        key = self._contract_key(contract)
+        self.hist_calls.append({"key": key, "params": params})
+        return list(self.historical_data.get(key, []))
 
     def disconnect(self):
         self.disconnect_calls += 1
@@ -671,3 +689,33 @@ async def test_get_trades_from_timestamp_delegates_and_limits():
     assert len(trades) == 1
     assert trades[0]["symbol"] == "AUD/USD"
     assert trades[0]["price"] == 10
+
+
+@pytest.mark.asyncio
+async def test_fetch_ohlcv_maps_bars_and_clamps_limit():
+    bars = [
+        FakeBar(1_700_000_000_000, 100, 101, 99, 100.5, 1000),
+        FakeBar(1_700_000_060_000, 101, 102, 100, 101.5, 900),
+    ]
+    fake_ib = FakeIB(
+        connected=True,
+        historical_data={"BHPAUD": bars},
+    )
+    trader = IBTrader(ib_client=fake_ib)
+    trader.connected = True
+
+    ohlcv = await trader.fetch_ohlcv("BHP/AUD", timeframe="1m", limit=1)
+
+    assert fake_ib.hist_calls[0]["params"]["barSizeSetting"] == "1 min"
+    assert fake_ib.hist_calls[0]["params"]["durationStr"] == "1 M"
+    assert ohlcv == [[1_700_000_060_000, 101, 102, 100, 101.5, 900]]
+
+
+@pytest.mark.asyncio
+async def test_fetch_ohlcv_unsupported_timeframe_raises():
+    fake_ib = FakeIB(connected=True, historical_data={})
+    trader = IBTrader(ib_client=fake_ib)
+    trader.connected = True
+
+    with pytest.raises(ValueError):
+        await trader.fetch_ohlcv("BHP/AUD", timeframe="2m", limit=10)

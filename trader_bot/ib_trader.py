@@ -2,7 +2,9 @@
 
 import asyncio
 import logging
+import math
 import time
+from datetime import datetime
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from ib_insync import Forex, IB, LimitOrder, MarketOrder
@@ -516,7 +518,107 @@ class IBTrader(BaseTrader):
         return await self.get_my_trades_async(symbol, since=timestamp)
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str = "1m", limit: int = 100) -> list:  # pragma: no cover - placeholder
-        raise NotImplementedError("Historical data not implemented for IB yet.")
+        if not self.connected:
+            return []
+
+        try:
+            contract, spec = build_ib_contract(
+                symbol,
+                allowed_instrument_types=self.allowed_instrument_types,
+                default_exchange=self.default_exchange,
+                default_primary_exchange=self.default_primary_exchange,
+                base_currency=self.base_currency,
+                fx_exchange=self.fx_exchange,
+            )
+        except Exception as exc:
+            logger.error(f"Error building IB contract for OHLCV {symbol}: {exc}")
+            return []
+
+        try:
+            bar_size, duration = self._timeframe_to_ib(timeframe, limit)
+        except ValueError as exc:
+            logger.error(str(exc))
+            raise
+
+        try:
+            bars = await self._fetch_historical_data(contract, bar_size, duration)
+        except Exception as exc:
+            logger.error(f"Error fetching IB OHLCV for {symbol}: {exc}")
+            return []
+
+        shaped: list[list[Any]] = []
+        for bar in bars or []:
+            ts_ms = self._bar_timestamp_ms(bar)
+            shaped.append(
+                [
+                    ts_ms,
+                    getattr(bar, "open", None),
+                    getattr(bar, "high", None),
+                    getattr(bar, "low", None),
+                    getattr(bar, "close", None),
+                    getattr(bar, "volume", None),
+                ]
+            )
+
+        shaped_sorted = sorted(shaped, key=lambda row: row[0] or 0)
+        return shaped_sorted[-limit:]
+
+    @staticmethod
+    def _timeframe_to_ib(timeframe: str, limit: int) -> tuple[str, str]:
+        tf = (timeframe or "").lower()
+        mapping: dict[str, tuple[str, int]] = {
+            "1m": ("1 min", 60),
+            "5m": ("5 mins", 300),
+            "15m": ("15 mins", 900),
+            "30m": ("30 mins", 1800),
+            "1h": ("1 hour", 3600),
+            "6h": ("6 hours", 21_600),
+            "1d": ("1 day", 86_400),
+        }
+        if tf not in mapping:
+            raise ValueError(f"Unsupported timeframe for IB OHLCV: {timeframe}")
+        bar_size, seconds_per_bar = mapping[tf]
+        bars = max(1, int(limit) if limit is not None else 1)
+        duration_seconds = seconds_per_bar * bars
+        duration = IBTrader._seconds_to_duration(duration_seconds)
+        return bar_size, duration
+
+    @staticmethod
+    def _seconds_to_duration(seconds: float) -> str:
+        total = seconds if seconds > 0 else 1
+        if total >= 86_400:
+            days = math.ceil(total / 86_400)
+            return f"{days} D"
+        if total >= 3_600:
+            hours = math.ceil(total / 3_600)
+            return f"{hours} H"
+        if total >= 60:
+            minutes = math.ceil(total / 60)
+            return f"{minutes} M"
+        return f"{math.ceil(total)} S"
+
+    @staticmethod
+    def _bar_timestamp_ms(bar) -> int | None:
+        dt_val = getattr(bar, "date", None)
+        if dt_val is None:
+            return None
+        if isinstance(dt_val, datetime):
+            return int(dt_val.timestamp() * 1000)
+        if isinstance(dt_val, (int, float)):
+            val = int(dt_val)
+            return val if val > 1e12 else val * 1000
+        if isinstance(dt_val, str):
+            for fmt in ("%Y%m%d %H:%M:%S", "%Y%m%d"):
+                try:
+                    return int(datetime.strptime(dt_val, fmt).timestamp() * 1000)
+                except Exception:
+                    continue
+            try:
+                num = int(float(dt_val))
+                return num if num > 1e12 else num * 1000
+            except Exception:
+                return None
+        return None
 
     async def _fetch_account_values(self):
         fetch_fn = getattr(self.ib, "accountValuesAsync", None)
@@ -699,6 +801,23 @@ class IBTrader(BaseTrader):
         if fetch_fn:
             return await asyncio.wait_for(fetch_fn(), timeout=self.connect_timeout)
         return await asyncio.wait_for(asyncio.to_thread(self.ib.trades), timeout=self.connect_timeout)
+
+    async def _fetch_historical_data(self, contract, bar_size: str, duration: str):
+        fetch_fn = getattr(self.ib, "reqHistoricalDataAsync", None)
+        params = {
+            "endDateTime": "",
+            "durationStr": duration,
+            "barSizeSetting": bar_size,
+            "whatToShow": "TRADES",
+            "useRTH": False,
+            "formatDate": 1,
+        }
+        if fetch_fn:
+            return await asyncio.wait_for(fetch_fn(contract, **params), timeout=self.connect_timeout)
+        return await asyncio.wait_for(
+            asyncio.to_thread(self.ib.reqHistoricalData, contract, **params),
+            timeout=self.connect_timeout,
+        )
 
     @staticmethod
     def _fill_timestamp_ms(fill) -> int | None:

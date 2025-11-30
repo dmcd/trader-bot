@@ -12,6 +12,9 @@ import warnings
 from unittest.mock import MagicMock
 
 import pytest
+import pytest_asyncio
+import asyncio
+from types import SimpleNamespace
 
 # Flag that we are under pytest so logger_config can direct logs to test files
 os.environ.setdefault("PYTEST_RUNNING", "1")
@@ -22,6 +25,12 @@ os.environ.setdefault("EXCHANGE_PAUSE_SECONDS", "1")
 os.environ.setdefault("TOOL_PAUSE_SECONDS", "1")
 os.environ.setdefault("PYTHONWARNINGS", "ignore::ResourceWarning")
 warnings.simplefilter("ignore", ResourceWarning)
+
+# Ensure config picks up the short test cadence even if imported early
+import trader_bot.config as _config
+_config.LOOP_INTERVAL_SECONDS = int(os.environ.get("LOOP_INTERVAL_SECONDS", "1"))
+
+from trader_bot.strategy import LLMStrategy
 
 _original_showwarning = warnings.showwarning
 _original_warn = warnings.warn
@@ -101,3 +110,53 @@ def fake_logger():
     logger.error = MagicMock()
     logger.debug = MagicMock()
     return logger
+
+
+@pytest_asyncio.fixture
+async def set_loop_time(monkeypatch):
+    """Override asyncio loop time for deterministic cooldown checks."""
+    loop = asyncio.get_running_loop()
+    current_time = loop.time()
+
+    def fake_time():
+        return current_time
+
+    monkeypatch.setattr(loop, "time", fake_time, raising=False)
+
+    def _set(ts: float):
+        nonlocal current_time
+        current_time = ts
+
+    return _set
+
+
+@pytest.fixture
+def strategy_env(monkeypatch):
+    """Lightweight strategy harness with mocked dependencies."""
+    monkeypatch.setenv("ALLOW_UNKEYED_LLM", "true")
+    for attr in ("_prompt_template_cache", "_system_prompt_cache"):
+        if hasattr(LLMStrategy, attr):
+            delattr(LLMStrategy, attr)
+
+    db = MagicMock()
+    db.get_session_stats.return_value = {"gross_pnl": 0, "total_fees": 0}
+    db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    db.get_recent_ohlcv.return_value = [{"close": 100, "volume": 1}] * 2
+    db.get_open_orders.return_value = []
+    db.get_open_trade_plans.return_value = []
+    db.log_llm_trace.return_value = 42
+
+    ta = MagicMock()
+    ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
+    cost = MagicMock()
+    cost.calculate_llm_burn.return_value = {
+        "total_llm_cost": 0.0,
+        "budget": 1.0,
+        "pct_of_budget": 0.0,
+        "burn_rate_per_hour": 0.0,
+        "remaining_budget": 1.0,
+        "hours_to_cap": None,
+    }
+
+    strategy = LLMStrategy(db, ta, cost)
+    return SimpleNamespace(db=db, ta=ta, cost=cost, strategy=strategy)

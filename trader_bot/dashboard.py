@@ -2,7 +2,7 @@ import json
 import os
 import subprocess
 import time
-from datetime import date, datetime
+from datetime import date, datetime, time as dt_time, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -24,6 +24,133 @@ from trader_bot.database import TradingDatabase
 # --- Helper Functions ---
 
 cost_tracker = CostTracker(ACTIVE_EXCHANGE, llm_provider=LLM_PROVIDER)
+
+
+def resolve_base_currency(session_stats, account_snapshot, fallback="USD"):
+    """Prefer explicit base currency hints from session or account snapshots."""
+    for source in (session_stats, account_snapshot):
+        if not source:
+            continue
+        base = source.get("base_currency")
+        if base:
+            return base
+    return fallback
+
+
+def ib_market_hours_status(now: datetime | None = None):
+    """Return IB-focused market hours status for ASX cash session and FX."""
+    ts = now or datetime.now(timezone.utc)
+    syd = ZoneInfo("Australia/Sydney")
+    local = ts.astimezone(syd)
+    asx_open = local.weekday() < 5 and dt_time(10, 0) <= local.time() <= dt_time(16, 10)
+
+    utc_ts = ts.astimezone(timezone.utc)
+    utc_time = utc_ts.time()
+    weekday = utc_ts.weekday()
+    # FX weekend closure: Fri 21:00 UTC through Sun 21:00 UTC
+    fx_closed = (weekday == 4 and utc_time >= dt_time(21, 0)) or weekday == 5 or (weekday == 6 and utc_time < dt_time(21, 0))
+    fx_open = not fx_closed
+
+    return [
+        {"label": "ASX cash", "is_open": asx_open, "window": "10:00-16:00 AEST"},
+        {"label": "FX (~24/5)", "is_open": fx_open, "window": "Closes Fri 21:00 UTC; reopens Sun 21:00 UTC"},
+    ]
+
+
+def build_market_hours_status(exchange: str, now: datetime | None = None):
+    if exchange == "IB":
+        return ib_market_hours_status(now)
+    return []
+
+
+def extract_circuit_status(health_states):
+    """Summarize exchange/tool circuit state from persisted health rows."""
+    summary = {}
+    for entry in health_states or []:
+        key = entry.get("key")
+        if key not in {"exchange_circuit", "tool_circuit", "market_data"}:
+            continue
+        summary[key] = {
+            "status": (entry.get("value") or "unknown").lower(),
+            "detail": summarize_health_detail(entry.get("detail")),
+            "updated_at": entry.get("updated_at"),
+        }
+    return summary
+
+
+def build_venue_status_payload(exchange: str, session_stats, account_snapshot, health_states, now: datetime | None = None):
+    base_currency = resolve_base_currency(session_stats, account_snapshot, "USD")
+    return {
+        "venue": exchange or "Unknown",
+        "base_currency": base_currency,
+        "market_hours": build_market_hours_status(exchange, now),
+        "circuit": extract_circuit_status(health_states),
+    }
+
+
+def format_status_badge(label: str, is_open: bool, window: str | None = None) -> str:
+    """Lightweight badge HTML for market hours display."""
+    color = "#2ecc71" if is_open else "#e74c3c"
+    bg = "rgba(46, 204, 113, 0.12)" if is_open else "rgba(231, 76, 60, 0.12)"
+    state = "Open" if is_open else "Closed"
+    window_text = f"<span style='color:#7f8c8d;font-weight:500;'> — {window}</span>" if window else ""
+    return (
+        "<span style=\"display:inline-flex;align-items:center;gap:6px;"
+        "padding:4px 10px;border-radius:999px;font-weight:600;"
+        "font-size:0.9rem;line-height:1;background:%s;color:%s;\">"
+        "<span style='font-size:0.85rem;'>%s</span><span>%s</span>%s</span>"
+        % (bg, color, "●", f"{label}: {state}", window_text)
+    )
+
+
+def format_venue_badge(venue: str, base_currency: str) -> str:
+    """Small badge row highlighting active venue and base currency."""
+    venue_label = (venue or "Unknown").upper()
+    base_label = base_currency or "USD"
+    parts = [
+        "<div style=\"display:flex;align-items:center;gap:8px;flex-wrap:wrap;\">",
+        "<span style='padding:6px 12px;border-radius:12px;font-weight:700;"
+        "background:linear-gradient(135deg,#0fbcf9,#00a8ff);color:#0b1b2b;'>",
+        f"Venue: {venue_label}</span>",
+        "<span style='padding:6px 12px;border-radius:12px;font-weight:700;"
+        "background:rgba(0,0,0,0.05);color:#2c3e50;border:1px solid rgba(0,0,0,0.05);'>",
+        f"Base: {base_label}</span>",
+        "</div>",
+    ]
+    return "".join(parts)
+
+
+def format_circuit_badges(circuit_state: dict) -> str:
+    """Format exchange/tool circuit status into pill badges."""
+    if not circuit_state:
+        return ""
+    labels = {
+        "exchange_circuit": "Exchange",
+        "tool_circuit": "Tools",
+        "market_data": "Market Data",
+    }
+    parts = []
+    for key, label in labels.items():
+        entry = circuit_state.get(key)
+        if not entry:
+            continue
+        status = (entry.get("status") or "unknown").lower()
+        color = "#2ecc71" if status == "ok" else "#f39c12" if status == "degraded" else "#e74c3c"
+        bg = "rgba(46, 204, 113, 0.12)" if status == "ok" else "rgba(243, 156, 18, 0.12)" if status == "degraded" else "rgba(231, 76, 60, 0.12)"
+        detail = entry.get("detail") or ""
+        detail_text = f"<span style='color:#7f8c8d;font-weight:500;'> — {detail}</span>" if detail else ""
+        parts.append(
+            "<span style=\"display:inline-flex;align-items:center;gap:6px;"
+            "padding:4px 10px;border-radius:999px;font-weight:650;"
+            f"background:{bg};color:{color};\">"
+            f"<span style='font-size:0.85rem;'>●</span><span>{label}: {status.upper()}</span>{detail_text}</span>"
+        )
+    return "<div style='display:flex;flex-wrap:wrap;gap:6px;'>" + "".join(parts) + "</div>"
+
+
+def format_currency_value(amount: float, currency: str) -> str:
+    prefix = f"{currency} " if currency else ""
+    return f"{prefix}{amount:,.2f}"
 
 def format_ratio_badge(ratio):
     if ratio is None:
@@ -342,6 +469,8 @@ current_prices = {}
 if session_stats and not current_trades_df.empty:
     symbols = current_trades_df['symbol'].unique()
     current_prices = get_latest_prices(session_id, symbols)
+venue_status = build_venue_status_payload(ACTIVE_EXCHANGE, session_stats, account_snapshot, health_states)
+base_currency_label = venue_status.get("base_currency") or "USD"
 
 # --- Sidebar ---
 
@@ -389,6 +518,20 @@ db.close()
 tab_live, tab_costs, tab_health, tab_history = st.tabs(["Current Version", "Costs", "System Health", "History"])
 
 with tab_live:
+    mh_badges = "".join(
+        format_status_badge(entry.get("label"), entry.get("is_open", False), entry.get("window"))
+        for entry in (venue_status.get("market_hours") or [])
+        if entry.get("label")
+    )
+    status_col1, status_col2 = st.columns([1.4, 1])
+    status_col1.markdown(format_venue_badge(venue_status.get("venue"), base_currency_label), unsafe_allow_html=True)
+    if mh_badges:
+        status_col1.markdown(f"<div style='display:flex;flex-wrap:wrap;gap:6px;'>{mh_badges}</div>", unsafe_allow_html=True)
+    circuit_html = format_circuit_badges(venue_status.get("circuit"))
+    if circuit_html:
+        status_col2.markdown("**Connectivity**")
+        status_col2.markdown(circuit_html, unsafe_allow_html=True)
+
     col1, col2 = st.columns([2, 1])
 
     with col1:
@@ -412,12 +555,8 @@ with tab_live:
                         pending_exposure += px * qty
             total_exposure = exposure + pending_exposure
             
-            gross_pnl_usd = realized_pnl + unrealized_pnl
-            
-            gross_pnl = gross_pnl_usd
-            realized_disp = realized_pnl
-            unrealized_disp = unrealized_pnl
-            currency_symbol = 'USD'
+            gross_pnl = realized_pnl + unrealized_pnl
+            currency_symbol = base_currency_label
 
             fees = session_stats.get('total_fees', 0)
             llm_cost = session_stats.get('total_llm_cost', 0)
@@ -430,16 +569,16 @@ with tab_live:
             cost_badge = format_ratio_badge(cost_ratio if gross_pnl else None)
 
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric(f"Net PnL ({currency_symbol})", f"${net_pnl:,.2f}")
-            m2.metric(f"Gross PnL ({currency_symbol})", f"${gross_pnl:,.2f}")
-            m3.metric(f"Realized PnL", f"${realized_disp:,.2f}")
-            m4.metric(f"Unrealized PnL", f"${unrealized_disp:,.2f}")
+            m1.metric(f"Net PnL ({currency_symbol})", format_currency_value(net_pnl, currency_symbol))
+            m2.metric(f"Gross PnL ({currency_symbol})", format_currency_value(gross_pnl, currency_symbol))
+            m3.metric("Realized PnL", format_currency_value(realized_pnl, currency_symbol))
+            m4.metric("Unrealized PnL", format_currency_value(unrealized_pnl, currency_symbol))
 
             st.markdown("---")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Total Fees", f"${fees:.2f}")
-            c2.metric("LLM Costs", f"${llm_cost:.4f}")
-            c3.metric("Total Costs", f"${total_costs:.2f}")
+            c1.metric("Total Fees", format_currency_value(fees, currency_symbol))
+            c2.metric("LLM Costs", f"{currency_symbol} {llm_cost:,.4f}")
+            c3.metric("Total Costs", format_currency_value(total_costs, currency_symbol))
             c4.metric("Total Trades", session_stats.get('total_trades', 0))
             if fee_badge:
                 c1.markdown(f"<div style='margin-top:-8px;'>{fee_badge}</div>", unsafe_allow_html=True)
@@ -471,7 +610,11 @@ with tab_live:
             spacing_text = f"{avg_spacing:.0f}s avg" if avg_spacing else "n/a"
             spacing_delta = f"{last_spacing:.0f}s last" if last_spacing else None
             s1.metric("Trade Spacing", spacing_text, spacing_delta)
-            s2.metric("Exposure (incl pending)", f"${total_exposure:,.2f}", f"pending ${pending_exposure:,.2f}")
+            s2.metric(
+                f"Exposure (incl pending)",
+                format_currency_value(total_exposure, currency_symbol),
+                f"pending {format_currency_value(pending_exposure, currency_symbol)}",
+            )
             s3.metric("Positions", len(active_positions))
             loop_interval_display = f"{LOOP_INTERVAL_SECONDS}s loop"
             s4.metric("Loop Interval", loop_interval_display)
@@ -524,17 +667,17 @@ with tab_live:
     with col2:
         if account_snapshot:
             st.subheader("🏦 Account Summary")
-            base_ccy = account_snapshot.get("base_currency") or "USD"
+            base_ccy = base_currency_label
             m_a, m_b = st.columns(2)
             net_liq = account_snapshot.get("net_liquidation")
             avail = account_snapshot.get("available_funds")
             excess = account_snapshot.get("excess_liquidity")
             buying = account_snapshot.get("buying_power")
-            m_a.metric(f"Net Liq ({base_ccy})", f"${net_liq:,.2f}" if net_liq is not None else "n/a")
-            m_b.metric(f"Avail Funds ({base_ccy})", f"${avail:,.2f}" if avail is not None else "n/a")
+            m_a.metric(f"Net Liq ({base_ccy})", format_currency_value(net_liq, base_ccy) if net_liq is not None else "n/a")
+            m_b.metric(f"Avail Funds ({base_ccy})", format_currency_value(avail, base_ccy) if avail is not None else "n/a")
             m_c, m_d = st.columns(2)
-            m_c.metric(f"Excess Liquidity ({base_ccy})", f"${excess:,.2f}" if excess is not None else "n/a")
-            m_d.metric(f"Buying Power ({base_ccy})", f"${buying:,.2f}" if buying is not None else "n/a")
+            m_c.metric(f"Excess Liquidity ({base_ccy})", format_currency_value(excess, base_ccy) if excess is not None else "n/a")
+            m_d.metric(f"Buying Power ({base_ccy})", format_currency_value(buying, base_ccy) if buying is not None else "n/a")
             cash_balances = account_snapshot.get("cash_balances") or {}
             if cash_balances:
                 cash_rows = [{"currency": k, "cash": v} for k, v in cash_balances.items()]
@@ -627,13 +770,13 @@ with tab_costs:
         cost_ratio = (total_costs / abs(gross_pnl) * 100) if gross_pnl else None
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("Total Fees", f"${total_fees:.2f}")
-        c2.metric("LLM Costs", f"${total_llm_cost:.4f}")
-        c3.metric("Total Costs", f"${total_costs:.2f}", f"{cost_ratio:.1f}% of gross" if cost_ratio is not None else None)
+        c1.metric("Total Fees", format_currency_value(total_fees, base_currency_label))
+        c2.metric("LLM Costs", f"{base_currency_label} {total_llm_cost:,.4f}")
+        c3.metric("Total Costs", format_currency_value(total_costs, base_currency_label), f"{cost_ratio:.1f}% of gross" if cost_ratio is not None else None)
 
         c4, c5, c6 = st.columns(3)
-        c4.metric("Net PnL", f"${net_pnl:,.2f}")
-        c5.metric("Gross PnL", f"${gross_pnl:,.2f}")
+        c4.metric("Net PnL", format_currency_value(net_pnl, base_currency_label))
+        c5.metric("Gross PnL", format_currency_value(gross_pnl, base_currency_label))
         c6.metric("Total Trades", session_stats.get('total_trades', 0))
 
         burn_stats = get_llm_burn_stats(session_stats)

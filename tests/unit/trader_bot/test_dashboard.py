@@ -138,6 +138,41 @@ def test_format_ratio_badge_and_health_summary(dashboard_module):
     assert dashboard.summarize_health_detail("") == ""
 
 
+def test_venue_status_payload_and_badges(dashboard_module):
+    dashboard = dashboard_module
+    now = datetime(2024, 6, 3, 1, 0, tzinfo=timezone.utc)  # Monday 11:00am AEST
+    health = [
+        {"key": "exchange_circuit", "value": "tripped", "detail": '{"context":"md"}', "updated_at": "2024-06-03T01:00:00Z"}
+    ]
+    payload = dashboard.build_venue_status_payload(
+        "IB",
+        {"base_currency": "AUD"},
+        {"base_currency": "NZD"},
+        health,
+        now=now,
+    )
+    assert payload["base_currency"] == "AUD"
+    hours = payload.get("market_hours")
+    assert any(entry["label"] == "ASX cash" and entry["is_open"] for entry in hours)
+    circuit = payload.get("circuit", {}).get("exchange_circuit")
+    assert circuit["status"] == "tripped"
+    badge_html = dashboard.format_venue_badge(payload["venue"], payload["base_currency"])
+    assert "Venue" in badge_html and "AUD" in badge_html
+
+
+def test_ib_market_hours_weekend_gap(dashboard_module):
+    dashboard = dashboard_module
+    friday_close = datetime(2024, 6, 7, 22, 0, tzinfo=timezone.utc)
+    sunday_closed = datetime(2024, 6, 9, 12, 0, tzinfo=timezone.utc)
+    monday_open = datetime(2024, 6, 10, 0, 0, tzinfo=timezone.utc)
+    friday_hours = dashboard.ib_market_hours_status(friday_close)
+    sunday_hours = dashboard.ib_market_hours_status(sunday_closed)
+    monday_hours = dashboard.ib_market_hours_status(monday_open)
+    assert any(entry["label"] == "FX (~24/5)" and entry["is_open"] is False for entry in friday_hours)
+    assert any(entry["label"] == "FX (~24/5)" and entry["is_open"] is False for entry in sunday_hours)
+    assert any(entry["label"] == "FX (~24/5)" and entry["is_open"] is True for entry in monday_hours)
+
+
 def test_calculate_pnl_shapes_positions(dashboard_module):
     dashboard = dashboard_module
     ts0 = datetime.now(timezone.utc)

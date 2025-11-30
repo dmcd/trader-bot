@@ -78,11 +78,11 @@
      - [x] Expose account summary from IB adapter to the dashboard layer.
      - [x] Render balances/margin and per-order commission estimates with AUD labels.
      - [x] Add tests for dashboard data assembly (can be stubbed service).
-   - [ ] Add venue badge and display base currency in PnL/equity cards. Clarify market hours status and recent connectivity/circuit state for IB.
-     - [ ] Add dashboard-friendly status payload (venue, base currency, market hours, last circuit state).
-     - [ ] Show venue indicator and base currency in equity/PnL widgets.
-     - [ ] Add market hours/open status and last connectivity/circuit state.
-     - [ ] Add UI tests or snapshot coverage for the new elements.
+   - [x] Add venue badge and display base currency in PnL/equity cards. Clarify market hours status and recent connectivity/circuit state for IB.
+     - [x] Add dashboard-friendly status payload (venue, base currency, market hours, last circuit state).
+     - [x] Show venue indicator and base currency in equity/PnL widgets.
+     - [x] Add market hours/open status and last connectivity/circuit state.
+     - [x] Add UI tests or snapshot coverage for the new elements.
 
 9) **Testing & Validation**
    - [ ] Unit tests: fake IB client covering symbol resolution, market data normalization, order placement mapping, trade sync paths, and cost tracking. Add risk tests for AUD sizing and short exposure.

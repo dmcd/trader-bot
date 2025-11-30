@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List
 
-from trader_bot.config import CLIENT_ORDER_PREFIX
+from trader_bot.config import ACTIVE_EXCHANGE, CLIENT_ORDER_PREFIX, IB_BASE_CURRENCY
 from trader_bot.database import TradingDatabase
 from trader_bot.llm_tools import estimate_json_bytes
 from trader_bot.utils import get_client_order_id
@@ -194,6 +194,12 @@ class TradingContext:
             "total_exposure": total_exposure,
             "open_orders": orders_summary,
             "recent_trades": trades_summary,
+            "venue": {
+                "exchange": ACTIVE_EXCHANGE,
+                "base_currency": IB_BASE_CURRENCY if ACTIVE_EXCHANGE == "IB" else "USD",
+                "instruments": "ASX equities/ETFs and FX (no crypto)" if ACTIVE_EXCHANGE == "IB" else "Crypto",
+                "market_hours_note": "ASX ~10:00-16:00 AEST; FX ~24/5" if ACTIVE_EXCHANGE == "IB" else "24/7 crypto",
+            },
         }
 
         try:

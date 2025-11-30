@@ -37,6 +37,7 @@ from trader_bot.config import (
     MAX_TOTAL_EXPOSURE,
     MIN_TRADE_INTERVAL_SECONDS,
     MIN_TRADE_SIZE,
+    IB_BASE_CURRENCY,
     PLAN_MAX_PER_SYMBOL,
     PRIORITY_LOOKBACK_MIN,
     PRIORITY_MOVE_PCT,
@@ -680,6 +681,14 @@ class LLMStrategy(BaseStrategy):
         LLMStrategy._system_prompt_cache = system_text
         return system_text
 
+    def _venue_note(self) -> str:
+        if ACTIVE_EXCHANGE == "IB":
+            return (
+                f"Interactive Brokers (ASX equities/ETFs and IB FX; base currency {IB_BASE_CURRENCY}. "
+                "ASX cash hours ~10:00-16:00 AEST; FX roughly 24/5. No crypto via IB AU.)"
+            )
+        return "Gemini crypto (USD base)."
+
     def _build_prompt(self, **kwargs) -> str:
         """Render prompt with a forgiving formatter so optional fields can be empty."""
 
@@ -1047,6 +1056,7 @@ class LLMStrategy(BaseStrategy):
 
         base_prompt = self._build_prompt(
             asset_class="crypto" if is_crypto else "stock",
+            venue_note=self._venue_note(),
             equity_line=f"${equity_now:,.2f} USD" if is_crypto else f"${equity_now:,.2f} AUD",
             market_summary=market_summary or "  - No market data available",
             max_order_value=f"${MAX_ORDER_VALUE:.2f} USD" if is_crypto else f"${MAX_ORDER_VALUE:.2f} AUD",

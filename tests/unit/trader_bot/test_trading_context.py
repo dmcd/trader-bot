@@ -38,6 +38,7 @@ class TestTradingContext(unittest.TestCase):
         self.assertIn("recent_trades", parsed)
         self.assertIn("trend_pct", parsed)
         self.assertIn("win_rate_pct", parsed["session"])
+        self.assertIn("venue", parsed)
 
     def test_memory_snapshot_is_capped_and_includes_plans_and_traces(self):
         # Create a plan and traces to populate memory

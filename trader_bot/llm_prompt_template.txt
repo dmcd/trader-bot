@@ -1,5 +1,6 @@
 Current Status:
 - Asset class: {asset_class}
+- Venue: {venue_note}
 - Equity: {equity_line}
 - Market Data:
 {market_summary}

@@ -144,6 +144,22 @@ def test_prompt_template_loaded_and_rendered(strategy_env):
     assert "TEMPLATE crypto BTC/USD CTX" in rendered
 
 
+def test_venue_note_for_ib(monkeypatch, strategy_env):
+    _reset_prompt_cache()
+    monkeypatch.setattr("trader_bot.strategy.ACTIVE_EXCHANGE", "IB")
+    monkeypatch.setattr("trader_bot.strategy.IB_BASE_CURRENCY", "AUD")
+
+    with patch("trader_bot.strategy.Path.read_text", return_value="PROMPT {venue_note}"):
+        strategy = LLMStrategy(strategy_env.db, strategy_env.ta, strategy_env.cost)
+
+    note = strategy._venue_note()
+    rendered = strategy._build_prompt(venue_note=note)
+
+    assert "Interactive Brokers" in note
+    assert "AUD" in note
+    assert "Interactive Brokers" in rendered
+
+
 def test_priority_signal_respects_context_and_move(strategy_env):
     strategy = strategy_env.strategy
     context = SimpleNamespace(current_iso_time="2024-01-01T00:00:00Z")

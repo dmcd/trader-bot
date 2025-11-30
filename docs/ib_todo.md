@@ -45,7 +45,7 @@
 4) **Data Fetch & Tooling Integration**
    - [x] Wrap IB market data/historical endpoints to mimic ccxt returns so `DataFetchCoordinator` continues to work (candles as `[ts, o, h, l, c, v]`, order book depth as bids/asks arrays, trades with `price/amount/timestamp`).
    - [x] Ensure rate limits and pacing respect IBKR restrictions (max 60 hist requests/10min; streaming top-of-book reuse where possible). Add guardrails to tool coordinator for IB (e.g., clamp timeframe combinations IB supports).
-   - [ ] Update `TradingContext` and LLM prompt scaffolding to describe IB venue, instrument universe (ASX/FX), and market hours so the LLM doesn’t request unsupported products.
+   - [x] Update `TradingContext` and LLM prompt scaffolding to describe IB venue, instrument universe (ASX/FX), and market hours so the LLM doesn’t request unsupported products.
 
 5) **Risk, Sizing, and Fees**
    - [ ] Extend `CostTracker` to include IB commission model (per-share with min, FX spread buffer). Allow config overrides for taker/maker not used on IB.

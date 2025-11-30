@@ -363,6 +363,11 @@ class IBTrader(BaseTrader):
 
         status = await self._await_order_status(trade)
 
+        perm_id = getattr(status, "permId", None) if status else None
+        commission_source = None
+        if status is not None and getattr(status, "commission", None) is not None:
+            commission_source = "ib_order_status"
+
         return {
             "order_id": getattr(status, "orderId", None) if status else None,
             "status": self._normalize_order_status(status),
@@ -372,6 +377,11 @@ class IBTrader(BaseTrader):
             "liquidity": getattr(status, "liquidity", None) or getattr(status, "lastLiquidity", None) if status else None,
             "fee": getattr(status, "commission", None) if status else None,
             "client_order_id": client_order_id,
+            "contract_id": perm_id,
+            "exchange": spec.exchange,
+            "primary_exchange": spec.primary_exchange,
+            "instrument_type": spec.instrument_type,
+            "commission_source": commission_source,
         }
 
     async def get_equity_async(self):
@@ -573,6 +583,10 @@ class IBTrader(BaseTrader):
                             "fee": getattr(fill, "commission", None),
                             "liquidity": getattr(fill, "liquidity", None),
                             "timestamp": ts_ms,
+                            "contract_id": perm_id,
+                            "exchange": spec.exchange,
+                            "primary_exchange": spec.primary_exchange,
+                            "commission_source": "fill" if getattr(fill, "commission", None) is not None else None,
                         }
                     )
             else:
@@ -581,18 +595,22 @@ class IBTrader(BaseTrader):
                 if since is not None and ts_ms < since:
                     continue
                 normalized.append(
-                    {
-                        "trade_id": perm_id or order_id,
-                        "order_id": order_id,
-                        "symbol": trade_symbol,
-                        "side": side,
-                        "price": getattr(status, "avgFillPrice", None),
-                        "amount": getattr(status, "filled", None),
-                        "fee": getattr(status, "commission", None),
-                        "liquidity": getattr(status, "liquidity", None),
-                        "timestamp": ts_ms,
-                    }
-                )
+                        {
+                            "trade_id": perm_id or order_id,
+                            "order_id": order_id,
+                            "symbol": trade_symbol,
+                            "side": side,
+                            "price": getattr(status, "avgFillPrice", None),
+                            "amount": getattr(status, "filled", None),
+                            "fee": getattr(status, "commission", None),
+                            "liquidity": getattr(status, "liquidity", None),
+                            "timestamp": ts_ms,
+                            "contract_id": perm_id,
+                            "exchange": spec.exchange,
+                            "primary_exchange": spec.primary_exchange,
+                            "commission_source": "ib_order_status" if getattr(status, "commission", None) is not None else None,
+                        }
+                    )
 
         normalized_sorted = sorted(
             normalized,

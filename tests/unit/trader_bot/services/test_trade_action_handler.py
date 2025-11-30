@@ -127,6 +127,29 @@ async def test_close_position_handles_missing_positions(handler):
     assert handler.telemetry[-1]["status"] == "close_position_none"
 
 
+@pytest.mark.asyncio
+async def test_close_position_emits_ib_metadata(handler):
+    handler.db.get_positions.return_value = [{"symbol": "ETH/USD", "quantity": 1.0, "current_price": 2000.0}]
+    handler.bot.place_order_async.return_value = {
+        "order_id": "99",
+        "status": "filled",
+        "liquidity": "maker",
+        "contract_id": 12345,
+        "exchange": "ASX",
+        "primary_exchange": "SMART",
+        "commission_source": "ib_order_status",
+        "instrument_type": "STK",
+    }
+
+    result = await handler.handle_close_position(session_id=1, symbol="ETH/USD", price=2000.0, trace_id="t-1")
+
+    assert result["status"] == "close_position_executed"
+    record = handler.telemetry[-1]
+    assert record["ib_contract_id"] == 12345
+    assert record["ib_exchange"] == "ASX"
+    assert record["ib_commission_source"] == "ib_order_status"
+
+
 def test_liquidity_filter_blocks_wide_spread(handler, caplog):
     caplog.set_level(logging.INFO)
     ok = handler.liquidity_ok({"bid": 100, "ask": 110, "bid_size": 1, "ask_size": 1}, max_spread_pct=5.0, min_top_of_book_notional=10.0)

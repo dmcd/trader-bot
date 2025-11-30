@@ -629,6 +629,21 @@ class StrategyRunner:
         """Delegate order value buffer to action handler for compatibility."""
         return self.action_handler.apply_order_value_buffer(quantity, price, symbol=symbol)
 
+    def _merge_ib_order_metadata(self, telemetry_record: dict, order_result: dict | None):
+        if self.exchange_name != "IB" or not isinstance(order_result, dict):
+            return
+        mapping = {
+            "contract_id": "ib_contract_id",
+            "exchange": "ib_exchange",
+            "primary_exchange": "ib_primary_exchange",
+            "commission_source": "ib_commission_source",
+            "instrument_type": "instrument_type",
+        }
+        for source, target in mapping.items():
+            val = order_result.get(source)
+            if val is not None:
+                telemetry_record[target] = val
+
     def _microstructure_thresholds(self, market_data_point: dict | None) -> tuple[float, float, float | None]:
         md = market_data_point or {}
         instrument_type = md.get("instrument_type")
@@ -1634,6 +1649,7 @@ class StrategyRunner:
 
                             telemetry_record["status"] = order_result.get('status') if isinstance(order_result, dict) else "order_unknown"
                             telemetry_record["order_result"] = order_result
+                            self._merge_ib_order_metadata(telemetry_record, order_result)
                             self._log_execution_trace(trace_id, telemetry_record)
                             self._emit_telemetry(telemetry_record)
 

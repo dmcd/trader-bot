@@ -38,6 +38,22 @@ class TradeActionHandler:
         self.actions_logger = actions_logger or logging.getLogger(__name__)
         self.logger = logger or logging.getLogger(__name__)
 
+    @staticmethod
+    def _merge_ib_order_metadata(telemetry_record: dict, order_result: dict | None):
+        if not isinstance(order_result, dict):
+            return
+        mapping = {
+            "contract_id": "ib_contract_id",
+            "exchange": "ib_exchange",
+            "primary_exchange": "ib_primary_exchange",
+            "commission_source": "ib_commission_source",
+            "instrument_type": "instrument_type",
+        }
+        for source, target in mapping.items():
+            val = order_result.get(source)
+            if val is not None:
+                telemetry_record[target] = val
+
     # --- Helper sizing/microstructure utilities ---
     def apply_order_value_buffer(self, quantity: float, price: float, symbol: str | None = None):
         """Trim quantity so the notional sits under the order cap minus buffer."""
@@ -272,6 +288,7 @@ class TradeActionHandler:
                 self.logger.debug(f"Could not update plan size after partial close: {exc}")
             telemetry_record["status"] = "partial_close_executed"
             telemetry_record["order_result"] = order_result
+            self._merge_ib_order_metadata(telemetry_record, order_result)
         except Exception as exc:  # pragma: no cover - defensive
             telemetry_record["status"] = "partial_close_error"
             telemetry_record["error"] = str(exc)
@@ -333,6 +350,7 @@ class TradeActionHandler:
             self.portfolio_tracker.apply_fill_to_session_stats(order_result.get("order_id") if order_result else None, fee, realized)
             telemetry_record["status"] = "close_position_executed"
             telemetry_record["order_result"] = order_result
+            self._merge_ib_order_metadata(telemetry_record, order_result)
         except Exception as exc:  # pragma: no cover - defensive
             telemetry_record["status"] = "close_position_error"
             telemetry_record["error"] = str(exc)

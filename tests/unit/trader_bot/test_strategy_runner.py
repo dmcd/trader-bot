@@ -58,6 +58,21 @@ def fresh_runner(tmp_path, monkeypatch):
     return runner
 
 
+def test_merge_ib_order_metadata_helper():
+    runner = StrategyRunner.__new__(StrategyRunner)
+    runner.exchange_name = "IB"
+    record = {}
+
+    runner._merge_ib_order_metadata(
+        record,
+        {"contract_id": 77, "exchange": "ASX", "primary_exchange": "SMART", "commission_source": "ib_order_status"},
+    )
+
+    assert record["ib_contract_id"] == 77
+    assert record["ib_exchange"] == "ASX"
+    assert record["ib_commission_source"] == "ib_order_status"
+
+
 # --- Core runner helper tests (volatility, RR, stacking, slippage, maker prefs) ---
 
 

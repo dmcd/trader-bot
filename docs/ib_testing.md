@@ -24,3 +24,8 @@ This repo ships with IB-focused unit doubles plus an integration smoke that can 
 - `IB_PLAYBACK_FIXTURE`: path to a JSON fixture for playback mode.
 - `IB_HOST`/`IB_PORT`/`IB_CLIENT_ID`/`IB_ACCOUNT_ID`: required for live capture or live integration runs.
 - Optional: `IB_INTEGRATION_HOST`, `IB_INTEGRATION_PORT`, `IB_INTEGRATION_CLIENT_ID`, `IB_INTEGRATION_ACCOUNT` mirror values for test-only configs; see `.env.example` for defaults.
+
+## Telemetry Fields
+- IB order telemetry now includes `ib_contract_id`, `ib_exchange`, `ib_primary_exchange`, `ib_commission_source`, and `instrument_type` alongside the nested `order_result` in `telemetry.log`.
+- `commission_source` is tagged as `ib_order_status` when commission arrives in the order status, or `fill` when it comes from individual fills.
+- Partial closes and full position closes propagate the same IB diagnostics so early triage can correlate fills back to IB permIds and exchanges.

@@ -104,7 +104,7 @@
      - [x] Explain CI stub mode and how to enable fixture playback.
 
 10) **Rollout & Safety**
-   - [ ] Log telemetry fields for IB-specific diagnostics (contract id, exchange, commission source) to `telemetry.log` for early triage.
-     - [ ] Extend telemetry payloads to include IB contract id/exchange/commission source.
-     - [ ] Add tests/fixtures to assert telemetry entries for IB orders/trades.
-     - [ ] Document telemetry fields and sampling strategy for IB traffic.
+   - [x] Log telemetry fields for IB-specific diagnostics (contract id, exchange, commission source) to `telemetry.log` for early triage.
+     - [x] Extend telemetry payloads to include IB contract id/exchange/commission source.
+     - [x] Add tests/fixtures to assert telemetry entries for IB orders/trades.
+     - [x] Document telemetry fields and sampling strategy for IB traffic.

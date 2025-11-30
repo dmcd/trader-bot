@@ -57,6 +57,10 @@ Notes on the current session model:
     - [x] Load stored portfolio positions/open orders into risk manager at startup before exchange fetch.
     - [x] Add restart coverage tests for bootstrap loading without wiping DB snapshots.
   - [ ] Remove session-centric flows (daily session creation, start_of_day reset, session_id logging) and replace with portfolio_id/run_id usage across services and loggers.
+    - [ ] Stop creating daily sessions in `StrategyRunner`; hydrate portfolio/run context once per start.
+    - [ ] Remove start_of_day equity reset logic tied to session creation; rely on portfolio stats cache instead.
+    - [ ] Thread portfolio_id/run_id into log/telemetry metadata where session_id was used.
+    - [ ] Add regression tests covering restart without new session creation and logging scope.
 
 - [ ] Accounting and risk
   - [ ] Make `PortfolioTracker` portfolio-scoped: load/apply trades by portfolio_id; persist stats cache keyed by portfolio.

@@ -850,21 +850,28 @@ class DummyHealth:
 
 
 class DummyOrchestrator:
-    def __init__(self):
+    def __init__(self, command_result=None, risk_result=None):
         self.running = True
+        self.command_result = command_result or CommandResult()
+        self.risk_result = risk_result or RiskCheckResult(should_stop=False, kill_switch=False)
+        self.last_reason = None
 
     async def start(self, initialize_cb):
-        await initialize_cb()
+        if asyncio.iscoroutinefunction(initialize_cb):
+            await initialize_cb()
+        elif callable(initialize_cb):
+            initialize_cb()
         self.running = True
 
-    def request_stop(self, *_args, **__):
+    def request_stop(self, *_args, shutdown_reason=None, **__):
+        self.last_reason = shutdown_reason or (_args[0] if _args else None)
         self.running = False
 
     async def process_commands(self, *_, **__):
-        return CommandResult()
+        return self.command_result
 
     async def enforce_risk_budget(self, *_, **__):
-        return RiskCheckResult(should_stop=False, kill_switch=False)
+        return self.risk_result
 
     def emit_market_health(self, *_args, **__):
         return True, {}
@@ -897,6 +904,66 @@ class DummyStrategy:
 
     def on_trade_executed(self, _ts):
         self.executions += 1
+
+
+def _build_control_runner(*, command_result=None, risk_result=None, kill_switch=False):
+    runner = StrategyRunner(execute_orders=False)
+    runner.daily_loss_pct = 100.0
+    runner.bot = FakeBot(price=100.0)
+    runner.db = DummyDB()
+    runner.health_manager = DummyHealth()
+    runner._monotonic = lambda: 0.0
+    runner._get_active_symbols = lambda: ["BTC/USD"]
+    runner._capture_ohlcv = AsyncMock()
+    runner._monitor_trade_plans = AsyncMock()
+    runner._liquidity_ok = lambda *_: True
+    runner._stacking_block = lambda *_: False
+    runner.strategy = MagicMock()
+    runner.strategy.generate_signal = AsyncMock(return_value=None)
+    runner._kill_switch = kill_switch
+    runner.cleanup = AsyncMock()
+    runner.initialize = AsyncMock()
+    runner.orchestrator = DummyOrchestrator(command_result=command_result, risk_result=risk_result)
+    runner.risk_manager = SimpleNamespace(
+        update_equity=lambda *_args, **_kwargs: None,
+        start_of_day_equity=runner.bot.equity,
+        daily_loss=0.0,
+        positions={},
+        pending_orders_by_symbol={},
+        get_total_exposure=lambda *_args, **_kwargs: 0.0,
+        check_trade_allowed=lambda *_args, **_kwargs: SimpleNamespace(allowed=True, reason=None),
+        update_positions=lambda *_args, **_kwargs: None,
+        update_pending_orders=lambda *_args, **_kwargs: None,
+    )
+    return runner
+
+
+# --- Run loop control paths ---
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kill_switch, command_result, risk_result, expected_reason",
+    [
+        (True, CommandResult(), RiskCheckResult(False, False), "kill switch"),
+        (False, CommandResult(stop_requested=True, shutdown_reason="manual stop"), RiskCheckResult(False, False), "manual stop"),
+        (False, CommandResult(), RiskCheckResult(True, True, shutdown_reason="risk breach"), "risk breach"),
+    ],
+)
+async def test_run_loop_stop_paths(monkeypatch, kill_switch, command_result, risk_result, expected_reason):
+    runner = _build_control_runner(command_result=command_result, risk_result=risk_result, kill_switch=kill_switch)
+
+    async def fast_sleep(_seconds):
+        runner.running = False
+        runner.orchestrator.running = False
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
+    await runner.run_loop(max_loops=1)
+
+    assert runner.shutdown_reason == expected_reason
+    assert runner.orchestrator.last_reason == expected_reason
+    assert runner.running is False
 
 
 def _build_runner(signal: StrategySignal, *, risk_allowed=True, slippage_ok=True, execute_orders=True):

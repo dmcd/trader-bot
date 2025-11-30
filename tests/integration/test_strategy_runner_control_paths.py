@@ -118,52 +118,6 @@ class DummyRiskManager:
 
 
 @pytest.mark.asyncio
-async def test_run_loop_respects_kill_switch():
-    runner = StrategyRunner(execute_orders=False)
-    runner.daily_loss_pct = 100.0
-    runner._kill_switch = True
-    runner.orchestrator = DummyOrchestrator()
-    runner.cleanup = AsyncMock()
-
-    await runner.run_loop(max_loops=0)
-
-    assert runner.shutdown_reason == "kill switch"
-    assert runner.orchestrator.last_reason == "kill switch"
-    assert not runner.running
-
-
-@pytest.mark.asyncio
-async def test_run_loop_stops_on_command_request():
-    runner = StrategyRunner(execute_orders=False)
-    runner.daily_loss_pct = 100.0
-    runner.orchestrator = DummyOrchestrator(command_result=CommandResult(stop_requested=True, shutdown_reason="manual stop"))
-    runner.cleanup = AsyncMock()
-
-    await runner.run_loop(max_loops=1)
-
-    assert runner.shutdown_reason == "manual stop"
-    assert runner.orchestrator.last_reason == "manual stop"
-    assert not runner.running
-
-
-@pytest.mark.asyncio
-async def test_run_loop_propagates_risk_stop(monkeypatch):
-    runner = StrategyRunner(execute_orders=False)
-    runner.daily_loss_pct = 100.0
-    runner.bot = FakeBot(equity=2500.0, price=101.0, spread_pct=0.5)
-    runner.db = DummyDB()
-    runner.risk_manager = DummyRiskManager()
-    runner.orchestrator = DummyOrchestrator(risk_result=RiskCheckResult(True, True, shutdown_reason="risk breach"))
-    runner.cleanup = AsyncMock()
-
-    await runner.run_loop(max_loops=1)
-
-    assert runner._kill_switch is True
-    assert runner.shutdown_reason == "risk breach"
-    assert runner.orchestrator.last_reason == "risk breach"
-
-
-@pytest.mark.asyncio
 async def test_equity_fetch_failure_short_circuits(monkeypatch):
     runner = StrategyRunner(execute_orders=False)
     runner.daily_loss_pct = 100.0

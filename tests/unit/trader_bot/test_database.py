@@ -674,15 +674,18 @@ def test_recent_llm_stats_counts_flags(db_session):
     assert stats["clamped"] == 1
 
 
-def test_session_stats_cache_upsert_and_merge(db_session):
+def test_session_stats_aggregates_without_cache(db_session):
     db, session_id = db_session
-    db.set_session_stats_cache(session_id, {"total_trades": 2, "gross_pnl": 5.0})
-    db.set_session_stats_cache(session_id, {"total_fees": 1.5})
+    db.log_trade(session_id, "BTC/USD", "BUY", 0.1, 20000.0, fee=1.0, realized_pnl=2.5)
+    db.log_trade(session_id, "BTC/USD", "SELL", 0.1, 21000.0, fee=1.5, realized_pnl=3.5)
+    db.log_llm_call(session_id, input_tokens=1, output_tokens=1, cost=0.2, decision="ok")
 
-    cached = db.get_session_stats_cache(session_id)
-    assert cached["total_trades"] == 2
-    assert cached["gross_pnl"] == pytest.approx(5.0)
-    assert cached["total_fees"] == pytest.approx(1.5)
+    stats = db.get_session_stats(session_id)
+
+    assert stats["total_trades"] == 2
+    assert stats["gross_pnl"] == pytest.approx(6.0)
+    assert stats["total_fees"] == pytest.approx(2.5)
+    assert stats["total_llm_cost"] == pytest.approx(0.2)
 
 
 def test_session_stats_prefers_portfolio_cache(tmp_path):
@@ -695,7 +698,6 @@ def test_session_stats_prefers_portfolio_cache(tmp_path):
         bot_version="v1",
         base_currency="USD",
     )
-    db.set_session_stats_cache(session_id, {"total_trades": 1, "gross_pnl": 10.0, "total_fees": 1.0})
     db.set_portfolio_stats_cache(
         portfolio["id"],
         {

@@ -14,15 +14,15 @@ Notes on the current session model:
 - Dashboard and MetricsDrift read/write via `session_id` (version → session lookup, session_stats_cache, equity snapshots), so UI/ops flows still depend on the legacy session row.
 - We can assume a **fresh DB** (no backfill/migration needed); sessions only remain to let us split refactors while tests still pass mid-flight.
 
-## New cleanup tasks (blockers before further portfolio work)
+## Cleanup tasks (blockers before further portfolio work)
 
-- [ ] **Schema: make portfolio first-class, session optional**
+- [x] **Schema: make portfolio first-class, session optional**
   - [x] Update table definitions so `portfolio_id` is `NOT NULL` everywhere (fresh DB) and `session_id` is nullable; keep `sessions` table only for compatibility.
-  - [ ] Remove `session_stats_cache` creation and session-side fee/trade counters (stats come from `portfolio_stats_cache`); keep compatibility view for tests that still read sessions.
-    - [ ] Drop `session_stats_cache` creation/accessors in `database.py` and migrate callers to portfolio cache.
-    - [ ] Stop incrementing session totals (trades/fees/llm_cost) on writes; rely on portfolio cache and leave `sessions` read-only for legacy metadata.
-    - [ ] Update tests/fixtures to use portfolio stats cache and adjust assertions.
-  - [ ] Add a lightweight compatibility shim (view/trigger or DAO guard) to map legacy session writes to portfolio_id during the transition.
+  - [x] Remove `session_stats_cache` creation and session-side fee/trade counters (stats come from `portfolio_stats_cache`); keep compatibility view for tests that still read sessions.
+    - [x] Drop `session_stats_cache` creation/accessors in `database.py` and migrate callers to portfolio cache.
+    - [x] Stop incrementing session totals (trades/fees/llm_cost) on writes; rely on portfolio cache and leave `sessions` read-only for legacy metadata.
+    - [x] Update tests/fixtures to use portfolio stats cache and adjust assertions.
+  - [x] Add a lightweight compatibility shim (view/trigger or DAO guard) to map legacy session writes to portfolio_id during the transition.
   - [x] Ensure legacy session constructors attach/issue a portfolio automatically so inserts satisfy the new `portfolio_id` NOT NULL constraints (used by older tests/helpers).
 - [ ] **Database API: flip to portfolio-first signatures**
   - [ ] Add portfolio-scoped DAO entry points (`log_trade`, `log_market_data`, `log_llm_*`, `replace_positions/open_orders`, `get_recent_*`) that require `portfolio_id`; keep session-aware shims with deprecation warnings.

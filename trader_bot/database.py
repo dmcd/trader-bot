@@ -349,18 +349,6 @@ class TradingDatabase:
             )
         """)
 
-        # Session stats cache to persist in-memory aggregates across restarts
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS session_stats_cache (
-                session_id INTEGER PRIMARY KEY,
-                total_trades INTEGER DEFAULT 0,
-                total_fees REAL DEFAULT 0.0,
-                gross_pnl REAL DEFAULT 0.0,
-                total_llm_cost REAL DEFAULT 0.0,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
         # Allow multiple sessions per version; keep a non-unique index for lookups
         try:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_bot_version ON sessions(bot_version)")
@@ -749,15 +737,7 @@ class TradingDatabase:
             INSERT INTO trades (session_id, portfolio_id, timestamp, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (session_id, portfolio_ref, ts, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id))
-        
-        # Update session trade count and fees
-        cursor.execute("""
-            UPDATE sessions 
-            SET total_trades = total_trades + 1,
-                total_fees = total_fees + ?
-            WHERE id = ?
-        """, (fee, session_id))
-        
+
         self.conn.commit()
         logger.debug(f"Logged trade: {action} {quantity} {symbol} @ ${price}")
 
@@ -810,14 +790,7 @@ class TradingDatabase:
             cost,
             decision,
         ))
-        
-        # Update session LLM cost
-        cursor.execute("""
-            UPDATE sessions 
-            SET total_llm_cost = total_llm_cost + ?
-            WHERE id = ?
-        """, (cost, session_id))
-        
+
         self.conn.commit()
         logger.debug(f"Logged LLM call: {total_tokens} tokens, ${cost:.6f}")
 
@@ -1160,63 +1133,55 @@ class TradingDatabase:
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
         row = cursor.fetchone()
-        session = dict(row) if row else {}
-        if not session:
+        session_meta = dict(row) if row else {}
+        if not session_meta:
             return {}
 
-        portfolio_ref = portfolio_id if portfolio_id is not None else session.get("portfolio_id")
-        portfolio_cache = {}
+        portfolio_ref = portfolio_id if portfolio_id is not None else session_meta.get("portfolio_id")
+        stats: Dict[str, Any] = {}
         if portfolio_ref is not None:
             try:
-                portfolio_cache = self.get_portfolio_stats_cache(portfolio_ref) or {}
+                stats = self.get_portfolio_stats_cache(portfolio_ref) or {}
             except Exception as exc:
                 logger.debug(f"Could not load portfolio stats cache for session {session_id}: {exc}")
-        session_cache = self.get_session_stats_cache(session_id) or {}
 
-        def _apply_cached_field(key: str):
-            if key in portfolio_cache and portfolio_cache[key] is not None:
-                session[key] = portfolio_cache[key]
-            elif key in session_cache and session_cache[key] is not None:
-                session[key] = session_cache[key]
+        scope_clause = "portfolio_id = ?" if portfolio_ref is not None else "session_id = ?"
+        scope_value = portfolio_ref if portfolio_ref is not None else session_id
 
-        for key in ["total_trades", "total_fees", "gross_pnl", "total_llm_cost", "exposure_notional"]:
-            _apply_cached_field(key)
-
-        # If gross_pnl is missing, rebuild fee-exclusive realized PnL from trades
-        if session.get('gross_pnl') is None:
-            cursor.execute("""
-                SELECT action, quantity, price, fee
+        if stats.get("gross_pnl") is None or stats.get("total_trades") is None or stats.get("total_fees") is None:
+            cursor.execute(
+                f"""
+                SELECT COUNT(*) as cnt,
+                       COALESCE(SUM(fee), 0) as total_fees,
+                       COALESCE(SUM(realized_pnl), 0) as realized
                 FROM trades
-                WHERE session_id = ?
-                ORDER BY timestamp ASC
-            """, (session_id,))
-            trades = cursor.fetchall()
-            holdings = {}  # symbol-agnostic average cost; one-symbol assumption
-            realized = 0.0
-            total_fees = 0.0
-            total_trades = 0
-            avg_cost = 0.0
-            qty_held = 0.0
-            for t in trades:
-                total_trades += 1
-                fee = t['fee'] or 0.0
-                total_fees += fee
-                if t['action'].upper() == 'BUY':
-                    new_qty = qty_held + t['quantity']
-                    avg_cost = ((qty_held * avg_cost) + (t['quantity'] * t['price'])) / new_qty if new_qty > 0 else 0.0
-                    qty_held = new_qty
-                else:
-                    realized += (t['price'] - avg_cost) * t['quantity']
-                    qty_held = max(0.0, qty_held - t['quantity'])
-            session['gross_pnl'] = realized
-            session['total_trades'] = max(session.get('total_trades', 0) or 0, total_trades)
-            session['total_fees'] = session.get('total_fees', 0.0) or total_fees
+                WHERE {scope_clause}
+                """,
+                (scope_value,),
+            )
+            trade_row = dict(cursor.fetchone() or {})
+            stats.setdefault("total_trades", trade_row.get("cnt") or 0)
+            stats.setdefault("total_fees", trade_row.get("total_fees") or 0.0)
+            stats.setdefault("gross_pnl", trade_row.get("realized") or 0.0)
 
-        # Derive net_pnl if missing
-        if session.get('net_pnl') is None:
-            session['net_pnl'] = (session.get('gross_pnl', 0.0) or 0.0) - (session.get('total_fees', 0.0) or 0.0) - (session.get('total_llm_cost', 0.0) or 0.0)
+        if stats.get("total_llm_cost") is None:
+            cursor.execute(
+                f"SELECT COALESCE(SUM(cost), 0) as total_cost FROM llm_calls WHERE {scope_clause}",
+                (scope_value,),
+            )
+            cost_row = dict(cursor.fetchone() or {})
+            stats["total_llm_cost"] = cost_row.get("total_cost") or 0.0
 
-        return session
+        merged = {**session_meta, **stats}
+        merged.setdefault("total_trades", 0)
+        merged.setdefault("total_fees", 0.0)
+        merged.setdefault("gross_pnl", 0.0)
+        merged.setdefault("total_llm_cost", 0.0)
+        merged.setdefault("exposure_notional", 0.0)
+        if merged.get('net_pnl') is None:
+            merged['net_pnl'] = (merged.get('gross_pnl', 0.0) or 0.0) - (merged.get('total_fees', 0.0) or 0.0) - (merged.get('total_llm_cost', 0.0) or 0.0)
+
+        return merged
     
     def update_session_balance(self, session_id: int, ending_balance: float, net_pnl: float):
         """Update session ending balance and net PnL."""
@@ -1609,45 +1574,3 @@ class TradingDatabase:
         cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id), symbol))
         row = cursor.fetchone()
         return row['cnt'] if row else 0
-
-    # Session stats cache helpers
-    def get_session_stats_cache(self, session_id: int) -> Optional[Dict[str, Any]]:
-        """Return persisted session stats aggregates if present."""
-        portfolio_id = self.get_session_portfolio_id(session_id)
-        if portfolio_id is not None:
-            return self.get_portfolio_stats_cache(portfolio_id)
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT session_id, total_trades, total_fees, gross_pnl, total_llm_cost
-            FROM session_stats_cache
-            WHERE session_id = ?
-        """, (session_id,))
-        row = cursor.fetchone()
-        return dict(row) if row else None
-
-    def set_session_stats_cache(self, session_id: int, stats: Dict[str, Any]):
-        """Upsert session stats aggregates for restart resilience."""
-        portfolio_id = self.get_session_portfolio_id(session_id)
-        if portfolio_id is not None:
-            self.set_portfolio_stats_cache(portfolio_id, stats)
-            return
-        existing = self.get_session_stats_cache(session_id) or {}
-        merged = {**existing, **(stats or {})}
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT INTO session_stats_cache (session_id, total_trades, total_fees, gross_pnl, total_llm_cost, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(session_id) DO UPDATE SET
-                total_trades=excluded.total_trades,
-                total_fees=excluded.total_fees,
-                gross_pnl=excluded.gross_pnl,
-                total_llm_cost=excluded.total_llm_cost,
-                updated_at=CURRENT_TIMESTAMP
-        """, (
-            session_id,
-            merged.get('total_trades', 0) or 0,
-            merged.get('total_fees', 0.0) or 0.0,
-            merged.get('gross_pnl', 0.0) or 0.0,
-            merged.get('total_llm_cost', 0.0) or 0.0,
-        ))
-        self.conn.commit()

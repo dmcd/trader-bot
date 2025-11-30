@@ -8,16 +8,13 @@ from trader_bot.services.portfolio_tracker import PortfolioTracker
 
 class FakeDB:
     def __init__(self):
-        self.cached_stats_session = None
         self.cached_stats_portfolio = None
         self.session_totals = None
         self.trades = []
         self.session_stats_row = {"total_llm_cost": 0.0}
         self.portfolio_stats_row = {"total_llm_cost": 0.0, "exposure_notional": 0.0}
         self.trades_scope = None
-
-    def set_session_stats_cache(self, session_id, stats):
-        self.cached_stats_session = (session_id, stats.copy())
+        self.session_portfolio_id = None
 
     def set_portfolio_stats_cache(self, portfolio_id, stats):
         self.cached_stats_portfolio = (portfolio_id, stats.copy())
@@ -27,6 +24,9 @@ class FakeDB:
 
     def get_portfolio_stats_cache(self, portfolio_id):
         return self.portfolio_stats_row
+
+    def get_session_portfolio_id(self, session_id):
+        return self.session_portfolio_id
 
     def update_session_totals(self, session_id, **kwargs):
         self.session_totals = (session_id, kwargs)
@@ -69,7 +69,6 @@ def test_rebuild_session_stats_from_trades_applies_fees_and_realized():
     assert stats["gross_pnl"] == pytest.approx(100.0)
     assert stats["total_llm_cost"] == pytest.approx(2.0)
     assert tracker.holdings.get("ETH/USD", {}).get("qty") == pytest.approx(0.0)
-    assert db.session_totals[0] == 7
     assert db.cached_stats_portfolio[0] == 55
     assert db.trades_scope == (7, 55)
 
@@ -77,6 +76,7 @@ def test_rebuild_session_stats_from_trades_applies_fees_and_realized():
 def test_apply_exchange_trades_for_rebuild_skips_bad_entries(caplog):
     caplog.set_level(logging.WARNING)
     db = FakeDB()
+    db.session_portfolio_id = 77
     tracker = PortfolioTracker(db, session_id=3, logger=logging.getLogger("test"))
     valid_trade = {"symbol": "BTC/USD", "side": "buy", "amount": 1, "price": 100.0, "fee": {"cost": 0.1}}
     malformed_trade = {"symbol": "BTC/USD", "side": "sell", "amount": -1, "price": 100.0}
@@ -85,8 +85,7 @@ def test_apply_exchange_trades_for_rebuild_skips_bad_entries(caplog):
 
     assert stats["total_trades"] == 1
     assert "Skipped 1 malformed trades" in "\n".join(caplog.messages)
-    assert db.cached_stats_session[0] == 3
-    assert db.cached_stats_portfolio is None
+    assert db.cached_stats_portfolio[0] == 77
 
 
 def test_extract_fee_cost_aggregates_sequences():
@@ -112,6 +111,7 @@ def test_load_holdings_resets_before_rebuild():
 
 def test_apply_exchange_trades_for_rebuild_accumulates_fees():
     db = FakeDB()
+    db.session_portfolio_id = None
     tracker = PortfolioTracker(db, session_id=4, logger=logging.getLogger("test"))
     trades = [
         {"symbol": "BTC/USD", "side": "buy", "amount": 1, "price": 100.0, "fee": [{"cost": 0.1}, {"cost": 0.2}]},
@@ -124,7 +124,6 @@ def test_apply_exchange_trades_for_rebuild_accumulates_fees():
     assert stats["gross_pnl"] == pytest.approx(10.0)
     assert stats["total_fees"] == pytest.approx(0.35)
     assert db.cached_stats_portfolio is None  # no portfolio provided
-    assert db.cached_stats_session[0] == 4
 
 
 def test_exchange_rebuild_persists_portfolio_cache():

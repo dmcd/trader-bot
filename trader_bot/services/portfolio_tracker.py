@@ -34,18 +34,18 @@ class PortfolioTracker:
 
     def load_cached_stats(self) -> tuple[dict, bool]:
         """Hydrate session stats from portfolio/session caches for restart resilience."""
+        if self.portfolio_id is None and self.session_id is not None and hasattr(self.db, "get_session_portfolio_id"):
+            try:
+                self.portfolio_id = self.db.get_session_portfolio_id(self.session_id)
+            except Exception:
+                self.portfolio_id = None
+
         stats = {}
         if self.portfolio_id is not None and hasattr(self.db, "get_portfolio_stats_cache"):
             try:
                 stats = self.db.get_portfolio_stats_cache(self.portfolio_id) or {}
             except Exception as exc:
                 self.logger.debug(f"Could not load portfolio stats cache: {exc}")
-                stats = {}
-        if not stats and self.session_id is not None and hasattr(self.db, "get_session_stats_cache"):
-            try:
-                stats = self.db.get_session_stats_cache(self.session_id) or {}
-            except Exception as exc:
-                self.logger.debug(f"Could not load session stats cache: {exc}")
                 stats = {}
 
         cache_hit = bool(stats)
@@ -271,27 +271,19 @@ class PortfolioTracker:
         self.session_stats["total_llm_cost"] = db_stats.get("total_llm_cost", 0.0)
         self.session_stats["exposure_notional"] = db_stats.get("exposure_notional", self.session_stats.get("exposure_notional", 0.0) or 0.0)
         self._persist_stats_cache()
-        try:
-            if hasattr(self.db, "update_session_totals") and self.session_id is not None:
-                self.db.update_session_totals(
-                    self.session_id,
-                    total_trades=self.session_stats["total_trades"],
-                    total_fees=self.session_stats["total_fees"],
-                    total_llm_cost=self.session_stats["total_llm_cost"],
-                    net_pnl=self.session_stats["gross_pnl"]
-                    - self.session_stats["total_fees"]
-                    - self.session_stats["total_llm_cost"],
-                )
-        except Exception as exc:  # pragma: no cover - defensive
-            self.logger.warning(f"Could not update session totals: {exc}")
         return self.session_stats
 
     def _persist_stats_cache(self) -> None:
         """Write stats aggregates to the appropriate cache scope."""
         try:
-            if self.portfolio_id is not None and hasattr(self.db, "set_portfolio_stats_cache"):
-                self.db.set_portfolio_stats_cache(self.portfolio_id, self.session_stats)
-            elif self.session_id is not None and hasattr(self.db, "set_session_stats_cache"):
-                self.db.set_session_stats_cache(self.session_id, self.session_stats)
+            portfolio_ref = self.portfolio_id
+            if portfolio_ref is None and self.session_id is not None and hasattr(self.db, "get_session_portfolio_id"):
+                try:
+                    portfolio_ref = self.db.get_session_portfolio_id(self.session_id)
+                    self.portfolio_id = portfolio_ref
+                except Exception:
+                    portfolio_ref = None
+            if portfolio_ref is not None and hasattr(self.db, "set_portfolio_stats_cache"):
+                self.db.set_portfolio_stats_cache(portfolio_ref, self.session_stats)
         except Exception as exc:  # pragma: no cover - defensive
             self.logger.warning(f"Failed to persist session stats cache: {exc}")

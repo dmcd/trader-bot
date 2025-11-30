@@ -18,10 +18,10 @@ Context: 48 test modules under `tests/`, mixing `unittest` and `pytest`, with no
   - [x] Merge `test_database_unit.py` and `test_database_additional.py` into a single `tests/unit/trader_bot/test_database.py` with a shared fixture, parameterized pruning cases, and explicit integration markers for any slow DB work.
   - [x] Merge strategy-focused files (`test_strategy.py`, `test_strategy_additional_unit.py`, and portions of `test_strategy_llm_validation.py`) under `tests/unit/trader_bot/strategy/` using shared setup fixtures; split out any true LLM/plan-monitor flows into integration tests.
   - [x] Group runner/risk/slippage spacing tests (`test_runner_sleep_spacing.py`, `test_sandbox_daily_loss.py`, `test_risk_exposure.py`, `test_multi_symbol_exposure.py`, `test_order_value_buffer.py`, `test_slippage_guard.py`) by concern (risk vs execution pacing) to reduce fixture duplication and make expectations easier to scan.
-- [ ] Fixture and helper cleanup
-  - [ ] Centralize fake logger/test DB/temp file fixtures in `tests/conftest.py`; remove ad-hoc temp DB setup from individual files in favor of shared fixtures/fixtures using `tmp_path`.
-  - [ ] Prefer `pytest`-style tests over `unittest.TestCase` where possible (drop `setUp/tearDown` boilerplate, use fixtures and parametrization).
-  - [ ] Add factories/builders for common payloads (market data points, strategy signals, trade plans) to eliminate repeated dict literals across strategy/runner tests.
+- [x] Fixture and helper cleanup
+  - [x] Centralize fake logger/test DB/temp file fixtures in `tests/conftest.py`; remove ad-hoc temp DB setup from individual files in favor of shared fixtures/fixtures using `tmp_path`.
+  - [x] Prefer `pytest`-style tests over `unittest.TestCase` where possible (drop `setUp/tearDown` boilerplate, use fixtures and parametrization).
+  - [x] Add factories/builders for common payloads (market data points, strategy signals, trade plans) to eliminate repeated dict literals across strategy/runner tests.
 - [ ] Markers and tooling
   - [ ] Extend `pytest.ini` with markers (`integration`, `contract`, `llm`) and add usage docs to `README.md` or `docs/technical_review.md`.
   - [ ] Add `tests/README.md` describing layout, how to run fast vs full suites, and conventions for new tests.

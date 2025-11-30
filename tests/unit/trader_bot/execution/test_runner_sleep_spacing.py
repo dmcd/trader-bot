@@ -8,6 +8,7 @@ from trader_bot.services.command_processor import CommandResult
 from trader_bot.services.strategy_orchestrator import RiskCheckResult
 from trader_bot.strategy import StrategySignal
 from trader_bot.strategy_runner import StrategyRunner
+from tests.factories import make_strategy_signal
 
 
 class DummyBot:
@@ -225,27 +226,29 @@ async def _run_once_with_sleep_capture(runner: StrategyRunner):
 
 @pytest.mark.asyncio
 async def test_hold_decision_sleeps():
-    runner = _build_runner(StrategySignal("HOLD", "BTC/USD", 0, "hold-branch"))
+    runner = _build_runner(make_strategy_signal("HOLD", "BTC/USD", 0, "hold-branch"))
     sleep_calls = await _run_once_with_sleep_capture(runner)
     assert len(sleep_calls) == 1
 
 
 @pytest.mark.asyncio
 async def test_risk_block_sleeps():
-    runner = _build_runner(StrategySignal("BUY", "BTC/USD", 0.1, "risk-block"), risk_allowed=False)
+    runner = _build_runner(make_strategy_signal("BUY", "BTC/USD", 0.1, "risk-block"), risk_allowed=False)
     sleep_calls = await _run_once_with_sleep_capture(runner)
     assert len(sleep_calls) == 1
 
 
 @pytest.mark.asyncio
 async def test_slippage_block_sleeps():
-    runner = _build_runner(StrategySignal("BUY", "BTC/USD", 0.1, "slip-block"), risk_allowed=True, slippage_ok=False)
+    runner = _build_runner(make_strategy_signal("BUY", "BTC/USD", 0.1, "slip-block"), risk_allowed=True, slippage_ok=False)
     sleep_calls = await _run_once_with_sleep_capture(runner)
     assert len(sleep_calls) == 1
 
 
 @pytest.mark.asyncio
 async def test_shadow_mode_sleeps():
-    runner = _build_runner(StrategySignal("BUY", "BTC/USD", 0.1, "shadow"), risk_allowed=True, slippage_ok=True, execute_orders=False)
+    runner = _build_runner(
+        make_strategy_signal("BUY", "BTC/USD", 0.1, "shadow"), risk_allowed=True, slippage_ok=True, execute_orders=False
+    )
     sleep_calls = await _run_once_with_sleep_capture(runner)
     assert len(sleep_calls) == 1

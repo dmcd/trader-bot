@@ -1,47 +1,33 @@
-import atexit
-import os
-import tempfile
-import unittest
+import pytest
 
 from trader_bot.database import TradingDatabase
 from trader_bot.metrics_validator import MetricsDrift
 
 
-_fd, _db_path = tempfile.mkstemp(prefix="trader-bot-test-", suffix=".db")
-os.close(_fd)
-os.environ.setdefault("TRADING_DB_PATH", _db_path)
+@pytest.fixture
+def metrics_db(test_db_path):
+    db = TradingDatabase()
+    session_id = db.get_or_create_session(starting_balance=1000.0, bot_version="test")
+    db.log_equity_snapshot(session_id, 1010.0)
+    db.update_session_totals(session_id, net_pnl=10.0)
+    try:
+        yield db, session_id
+    finally:
+        db.close()
 
 
-@atexit.register
-def _cleanup_db_path():
-    if os.path.exists(_db_path):
-        try:
-            os.remove(_db_path)
-        except OSError:
-            pass
+def test_no_drift_within_threshold(metrics_db):
+    db, session_id = metrics_db
+    validator = MetricsDrift(session_id, db=db)
+    result = validator.check_drift(threshold_pct=2.0)
+    assert result["exceeded"] is False
+    assert result["drift"] == pytest.approx(0.0)
 
 
-class TestMetricsValidator(unittest.TestCase):
-    def setUp(self):
-        self.db = TradingDatabase()
-        # Seed session row and equity snapshot
-        self.session_id = self.db.get_or_create_session(starting_balance=1000.0, bot_version="test")
-        self.db.log_equity_snapshot(self.session_id, 1010.0)
-        self.db.update_session_totals(self.session_id, net_pnl=10.0)
-
-    def test_no_drift_within_threshold(self):
-        validator = MetricsDrift(self.session_id, db=self.db)
-        result = validator.check_drift(threshold_pct=2.0)
-        self.assertFalse(result["exceeded"])
-        self.assertAlmostEqual(result["drift"], 0.0)
-
-    def test_detects_drift_beyond_threshold(self):
-        self.db.log_equity_snapshot(self.session_id, 1200.0)
-        validator = MetricsDrift(self.session_id, db=self.db)
-        result = validator.check_drift(threshold_pct=1.0)
-        self.assertTrue(result["exceeded"])
-        self.assertGreater(result["drift_pct"], 0)
-
-
-if __name__ == "__main__":
-    unittest.main()
+def test_detects_drift_beyond_threshold(metrics_db):
+    db, session_id = metrics_db
+    db.log_equity_snapshot(session_id, 1200.0)
+    validator = MetricsDrift(session_id, db=db)
+    result = validator.check_drift(threshold_pct=1.0)
+    assert result["exceeded"] is True
+    assert result["drift_pct"] > 0

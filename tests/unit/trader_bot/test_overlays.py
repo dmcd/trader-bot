@@ -1,12 +1,10 @@
-import os
-import tempfile
 import unittest
+
+import pytest
+
 from trader_bot.strategy_runner import StrategyRunner
 
-# Ensure tests never write to the production trading.db
-_fd, _db_path = tempfile.mkstemp(prefix="trader-bot-test-", suffix=".db")
-os.close(_fd)
-os.environ.setdefault("TRADING_DB_PATH", _db_path)
+pytestmark = pytest.mark.usefixtures("test_db_path")
 
 
 class TestDeterministicOverlays(unittest.TestCase):

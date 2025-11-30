@@ -5,9 +5,13 @@ production `trading.db`.
 """
 
 import atexit
+import logging
 import os
 import tempfile
 import warnings
+from unittest.mock import MagicMock
+
+import pytest
 
 # Flag that we are under pytest so logger_config can direct logs to test files
 os.environ.setdefault("PYTEST_RUNNING", "1")
@@ -78,3 +82,22 @@ def _remove_temp_db():
             os.remove(_cleanup_target)
         except OSError:
             pass
+
+
+@pytest.fixture
+def test_db_path(tmp_path, monkeypatch):
+    """Provide an isolated DB path and set TRADING_DB_PATH for the test."""
+    path = tmp_path / "trader-bot-test.db"
+    monkeypatch.setenv("TRADING_DB_PATH", str(path))
+    return path
+
+
+@pytest.fixture
+def fake_logger():
+    """Shared lightweight logger mock for tests."""
+    logger = MagicMock(spec=logging.Logger)
+    logger.info = MagicMock()
+    logger.warning = MagicMock()
+    logger.error = MagicMock()
+    logger.debug = MagicMock()
+    return logger

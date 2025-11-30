@@ -1,14 +1,11 @@
-import os
-import tempfile
 import unittest
 from unittest.mock import MagicMock
 
+import pytest
+
 from trader_bot.strategy import LLMStrategy
 
-# Ensure tests never write to the production trading.db
-_fd, _db_path = tempfile.mkstemp(prefix="trader-bot-test-", suffix=".db")
-os.close(_fd)
-os.environ.setdefault("TRADING_DB_PATH", _db_path)
+pytestmark = pytest.mark.usefixtures("test_db_path")
 
 
 class TestRegimeFlags(unittest.TestCase):

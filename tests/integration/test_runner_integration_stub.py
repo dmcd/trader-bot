@@ -1,7 +1,3 @@
-import atexit
-import os
-import tempfile
-import unittest
 from types import SimpleNamespace
 
 import pytest
@@ -13,21 +9,6 @@ from trader_bot.strategy import StrategySignal
 from trader_bot.strategy_runner import StrategyRunner
 
 pytestmark = pytest.mark.integration
-
-
-# Ensure tests never write to the production trading.db
-_fd, _db_path = tempfile.mkstemp(prefix="trader-bot-test-", suffix=".db")
-os.close(_fd)
-os.environ.setdefault("TRADING_DB_PATH", _db_path)
-
-
-@atexit.register
-def _cleanup_db_path():
-    if os.path.exists(_db_path):
-        try:
-            os.remove(_db_path)
-        except OSError:
-            pass
 
 
 class StubBot:
@@ -69,64 +50,58 @@ class StubStrategy:
         self.rejections.append(reason)
 
 
-class TestRunnerIntegration(unittest.IsolatedAsyncioTestCase):
-    async def test_runner_blocks_on_risk_spacing_and_slippage(self):
-        # Prices consumed in order: risk block, execute, hold (spacing), slippage
-        bot = StubBot(prices=[100.0, 100.0, 100.0, 100.0, 100.0, 120.0])
-        runner = StrategyRunner(execute_orders=True)
-        runner.bot = bot
-        runner.cost_tracker = MagicMock()
-        runner.cost_tracker.calculate_trade_fee.return_value = 0.0
-        runner.db = MagicMock()
-        runner.db.log_trade = MagicMock()
-        runner.db.log_llm_call = MagicMock()
+@pytest.mark.asyncio
+async def test_runner_blocks_on_risk_spacing_and_slippage(test_db_path):
+    # Prices consumed in order: risk block, execute, hold (spacing), slippage
+    bot = StubBot(prices=[100.0, 100.0, 100.0, 100.0, 100.0, 120.0])
+    runner = StrategyRunner(execute_orders=True)
+    runner.bot = bot
+    runner.cost_tracker = MagicMock()
+    runner.cost_tracker.calculate_trade_fee.return_value = 0.0
+    runner.db = MagicMock()
+    runner.db.log_trade = MagicMock()
+    runner.db.log_llm_call = MagicMock()
 
-        # Use real risk manager with stubbed decision results
-        runner.risk_manager = RiskManager(bot)
-        risk_results = [
-            SimpleNamespace(allowed=False, reason="exposure_cap"),
-            SimpleNamespace(allowed=True, reason=None),
-            SimpleNamespace(allowed=True, reason=None),
-        ]
-        runner.risk_manager.check_trade_allowed = MagicMock(side_effect=risk_results)
+    runner.risk_manager = RiskManager(bot)
+    risk_results = [
+        SimpleNamespace(allowed=False, reason="exposure_cap"),
+        SimpleNamespace(allowed=True, reason=None),
+        SimpleNamespace(allowed=True, reason=None),
+    ]
+    runner.risk_manager.check_trade_allowed = MagicMock(side_effect=risk_results)
 
-        signals = [
-            StrategySignal("BUY", "BTC/USD", 0.5, "risk_block"),
-            StrategySignal("BUY", "BTC/USD", 0.5, "ok"),
-            StrategySignal("HOLD", "BTC/USD", 0, "cooldown"),
-            StrategySignal("BUY", "BTC/USD", 0.5, "slip"),
-        ]
-        strategy = StubStrategy(signals)
-        runner.strategy = strategy
+    signals = [
+        StrategySignal("BUY", "BTC/USD", 0.5, "risk_block"),
+        StrategySignal("BUY", "BTC/USD", 0.5, "ok"),
+        StrategySignal("HOLD", "BTC/USD", 0, "cooldown"),
+        StrategySignal("BUY", "BTC/USD", 0.5, "slip"),
+    ]
+    strategy = StubStrategy(signals)
+    runner.strategy = strategy
 
-        async def drive_signal(signal):
-            md = await bot.get_market_data_async(signal.symbol)
-            if signal.action == "HOLD":
-                return
-            risk = runner.risk_manager.check_trade_allowed(signal.symbol, signal.action, signal.quantity, md["price"])
-            if not risk.allowed:
-                strategy.on_trade_rejected(risk.reason)
-                return
-            latest = await bot.get_market_data_async(signal.symbol)
-            ok_slip, _ = runner._slippage_within_limit(md["price"], latest["price"], latest)
-            if not ok_slip:
-                strategy.on_trade_rejected("Slippage over limit")
-                return
-            await bot.place_order_async(signal.symbol, signal.action, signal.quantity, prefer_maker=True)
-            strategy.on_trade_executed(0.0)
+    async def drive_signal(signal):
+        md = await bot.get_market_data_async(signal.symbol)
+        if signal.action == "HOLD":
+            return
+        risk = runner.risk_manager.check_trade_allowed(signal.symbol, signal.action, signal.quantity, md["price"])
+        if not risk.allowed:
+            strategy.on_trade_rejected(risk.reason)
+            return
+        latest = await bot.get_market_data_async(signal.symbol)
+        ok_slip, _ = runner._slippage_within_limit(md["price"], latest["price"], latest)
+        if not ok_slip:
+            strategy.on_trade_rejected("Slippage over limit")
+            return
+        await bot.place_order_async(signal.symbol, signal.action, signal.quantity, prefer_maker=True)
+        strategy.on_trade_executed(0.0)
 
-        for sig in list(strategy.signals):
-            out = await strategy.generate_signal(None, {sig.symbol: {}}, 1000.0, 0.0, None, {})
-            if out is None:
-                break
-            await drive_signal(out)
+    for sig in list(strategy.signals):
+        out = await strategy.generate_signal(None, {sig.symbol: {}}, 1000.0, 0.0, None, {})
+        if out is None:
+            break
+        await drive_signal(out)
 
-        self.assertEqual(len(bot.place_calls), 1)  # only the second signal should place
-        self.assertIn("exposure_cap", strategy.rejections)
-        self.assertIn("Slippage over limit", strategy.rejections)
-        # Spacing/HOLD respected: no order for HOLD leg
-        self.assertEqual(strategy.last_trade_ts, 0.0)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    assert len(bot.place_calls) == 1  # only the second signal should place
+    assert "exposure_cap" in strategy.rejections
+    assert "Slippage over limit" in strategy.rejections
+    assert strategy.last_trade_ts == 0.0

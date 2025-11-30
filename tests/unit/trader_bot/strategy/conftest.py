@@ -13,6 +13,7 @@ def strategy_env():
             delattr(LLMStrategy, attr)
 
     db = MagicMock()
+    db.log_llm_trace.return_value = 42
     ta = MagicMock()
     cost = MagicMock()
     cost.calculate_llm_burn.return_value = {

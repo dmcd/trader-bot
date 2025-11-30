@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 class PortfolioTracker:
     """
-    Maintains holdings and session-level accounting (trades, fees, PnL) for a session.
+    Maintains holdings and portfolio-level accounting (trades, fees, PnL).
     Extracted from StrategyRunner so PnL math and cache updates can be unit tested in isolation.
     """
 
@@ -115,13 +115,7 @@ class PortfolioTracker:
         self.session_stats["total_trades"] += 1
         self.session_stats["total_fees"] += fee_delta
         self.session_stats["gross_pnl"] += realized_pnl
-        try:
-            if self.portfolio_id is not None:
-                self.db.set_portfolio_stats_cache(self.portfolio_id, self.session_stats)
-            elif self.session_id is not None:
-                self.db.set_session_stats_cache(self.session_id, self.session_stats)
-        except Exception as exc:  # pragma: no cover - defensive
-            self.logger.warning(f"Failed to persist session stats cache: {exc}")
+        self._persist_stats_cache()
 
     @staticmethod
     def extract_fee_cost(fee_field: Any) -> float:
@@ -199,6 +193,7 @@ class PortfolioTracker:
 
         if skipped:
             self.logger.warning(f"Skipped {skipped} malformed trades while rebuilding stats")
+        self._persist_stats_cache()
         return self.session_stats
 
     def rebuild_session_stats_from_trades(self, current_equity: float | None = None) -> dict:
@@ -223,22 +218,37 @@ class PortfolioTracker:
                 self.logger.warning(f"Skipping trade during stats rebuild due to error: {exc}")
 
         # Pull LLM costs from session row
-        db_stats = self.db.get_session_stats(self.session_id)
+        db_stats = {}
+        if self.portfolio_id is not None and hasattr(self.db, "get_portfolio_stats_cache"):
+            try:
+                db_stats = self.db.get_portfolio_stats_cache(self.portfolio_id) or {}
+            except Exception:
+                db_stats = {}
+        if not db_stats and self.session_id is not None:
+            db_stats = self.db.get_session_stats(self.session_id)
         self.session_stats["total_llm_cost"] = db_stats.get("total_llm_cost", 0.0)
-        if self.portfolio_id is not None:
-            self.db.set_portfolio_stats_cache(self.portfolio_id, self.session_stats)
-        else:
-            self.db.set_session_stats_cache(self.session_id, self.session_stats)
+        self._persist_stats_cache()
         try:
-            self.db.update_session_totals(
-                self.session_id,
-                total_trades=self.session_stats["total_trades"],
-                total_fees=self.session_stats["total_fees"],
-                total_llm_cost=self.session_stats["total_llm_cost"],
-                net_pnl=self.session_stats["gross_pnl"]
-                - self.session_stats["total_fees"]
-                - self.session_stats["total_llm_cost"],
-            )
+            if hasattr(self.db, "update_session_totals") and self.session_id is not None:
+                self.db.update_session_totals(
+                    self.session_id,
+                    total_trades=self.session_stats["total_trades"],
+                    total_fees=self.session_stats["total_fees"],
+                    total_llm_cost=self.session_stats["total_llm_cost"],
+                    net_pnl=self.session_stats["gross_pnl"]
+                    - self.session_stats["total_fees"]
+                    - self.session_stats["total_llm_cost"],
+                )
         except Exception as exc:  # pragma: no cover - defensive
             self.logger.warning(f"Could not update session totals: {exc}")
         return self.session_stats
+
+    def _persist_stats_cache(self) -> None:
+        """Write stats aggregates to the appropriate cache scope."""
+        try:
+            if self.portfolio_id is not None and hasattr(self.db, "set_portfolio_stats_cache"):
+                self.db.set_portfolio_stats_cache(self.portfolio_id, self.session_stats)
+            elif self.session_id is not None and hasattr(self.db, "set_session_stats_cache"):
+                self.db.set_session_stats_cache(self.session_id, self.session_stats)
+        except Exception as exc:  # pragma: no cover - defensive
+            self.logger.warning(f"Failed to persist session stats cache: {exc}")

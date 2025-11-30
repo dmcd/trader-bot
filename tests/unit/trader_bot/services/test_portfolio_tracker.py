@@ -8,27 +8,37 @@ from trader_bot.services.portfolio_tracker import PortfolioTracker
 
 class FakeDB:
     def __init__(self):
-        self.cached_stats = None
+        self.cached_stats_session = None
+        self.cached_stats_portfolio = None
         self.session_totals = None
         self.trades = []
         self.session_stats_row = {"total_llm_cost": 0.0}
+        self.portfolio_stats_row = {"total_llm_cost": 0.0}
+        self.trades_scope = None
 
     def set_session_stats_cache(self, session_id, stats):
-        self.cached_stats = (session_id, stats.copy())
+        self.cached_stats_session = (session_id, stats.copy())
+
+    def set_portfolio_stats_cache(self, portfolio_id, stats):
+        self.cached_stats_portfolio = (portfolio_id, stats.copy())
 
     def get_session_stats(self, session_id):
         return self.session_stats_row
 
+    def get_portfolio_stats_cache(self, portfolio_id):
+        return self.portfolio_stats_row
+
     def update_session_totals(self, session_id, **kwargs):
         self.session_totals = (session_id, kwargs)
 
-    def get_trades_for_session(self, session_id):
+    def get_trades_for_session(self, session_id, portfolio_id=None):
+        self.trades_scope = (session_id, portfolio_id)
         return list(self.trades)
 
 
 def test_apply_fill_updates_holdings_and_stats():
     db = FakeDB()
-    tracker = PortfolioTracker(db, session_id=1, logger=logging.getLogger("test"))
+    tracker = PortfolioTracker(db, session_id=1, portfolio_id=99, logger=logging.getLogger("test"))
 
     # Buy 1 @ 100, then sell 0.5 @ 110 with $1 fee
     tracker.update_holdings_and_realized("BTC/USD", "BUY", 1.0, 100.0, 0.0)
@@ -39,8 +49,8 @@ def test_apply_fill_updates_holdings_and_stats():
     assert tracker.session_stats["total_trades"] == 1
     assert tracker.session_stats["total_fees"] == pytest.approx(1.0)
     assert tracker.session_stats["gross_pnl"] == pytest.approx(5.0)
-    # Cache write captured
-    assert db.cached_stats[0] == 1
+    # Cache write captured on portfolio scope
+    assert db.cached_stats_portfolio[0] == 99
 
 
 def test_rebuild_session_stats_from_trades_applies_fees_and_realized():
@@ -49,8 +59,8 @@ def test_rebuild_session_stats_from_trades_applies_fees_and_realized():
         {"symbol": "ETH/USD", "action": "BUY", "quantity": 1.0, "price": 2000.0, "fee": {"cost": 0.5}},
         {"symbol": "ETH/USD", "action": "SELL", "quantity": 1.0, "price": 2100.0, "fee": {"cost": 0.5}},
     ]
-    db.session_stats_row = {"total_llm_cost": 2.0}
-    tracker = PortfolioTracker(db, session_id=7, logger=logging.getLogger("test"))
+    db.portfolio_stats_row = {"total_llm_cost": 2.0}
+    tracker = PortfolioTracker(db, session_id=7, portfolio_id=55, logger=logging.getLogger("test"))
 
     stats = tracker.rebuild_session_stats_from_trades()
 
@@ -60,6 +70,8 @@ def test_rebuild_session_stats_from_trades_applies_fees_and_realized():
     assert stats["total_llm_cost"] == pytest.approx(2.0)
     assert tracker.holdings.get("ETH/USD", {}).get("qty") == pytest.approx(0.0)
     assert db.session_totals[0] == 7
+    assert db.cached_stats_portfolio[0] == 55
+    assert db.trades_scope == (7, 55)
 
 
 def test_apply_exchange_trades_for_rebuild_skips_bad_entries(caplog):
@@ -73,6 +85,8 @@ def test_apply_exchange_trades_for_rebuild_skips_bad_entries(caplog):
 
     assert stats["total_trades"] == 1
     assert "Skipped 1 malformed trades" in "\n".join(caplog.messages)
+    assert db.cached_stats_session[0] == 3
+    assert db.cached_stats_portfolio is None
 
 
 def test_extract_fee_cost_aggregates_sequences():
@@ -109,3 +123,17 @@ def test_apply_exchange_trades_for_rebuild_accumulates_fees():
     assert stats["total_trades"] == 2
     assert stats["gross_pnl"] == pytest.approx(10.0)
     assert stats["total_fees"] == pytest.approx(0.35)
+    assert db.cached_stats_portfolio is None  # no portfolio provided
+    assert db.cached_stats_session[0] == 4
+
+
+def test_exchange_rebuild_persists_portfolio_cache():
+    db = FakeDB()
+    tracker = PortfolioTracker(db, session_id=4, portfolio_id=42, logger=logging.getLogger("test"))
+    trades = [
+        {"symbol": "BTC/USD", "side": "buy", "amount": 1, "price": 100.0, "fee": {"cost": 0.1}},
+    ]
+
+    tracker.apply_exchange_trades_for_rebuild(trades)
+
+    assert db.cached_stats_portfolio[0] == 42

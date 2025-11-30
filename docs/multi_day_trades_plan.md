@@ -64,8 +64,8 @@ Notes on the current session model:
     - [x] Add regression tests covering restart without new session creation and logging scope.
 
 - [ ] Accounting and risk
-  - [ ] Make `PortfolioTracker` portfolio-scoped: load/apply trades by portfolio_id; persist stats cache keyed by portfolio.
-    - [ ] Add unit coverage for portfolio-scoped rebuild/apply flows (stats cache read/write, restart restore).
+  - [x] Make `PortfolioTracker` portfolio-scoped: load/apply trades by portfolio_id; persist stats cache keyed by portfolio.
+    - [x] Add unit coverage for portfolio-scoped rebuild/apply flows (stats cache read/write, restart restore).
   - [ ] Compute PnL and exposure as portfolio-level metrics; remove daily reset logic and ensure portfolio-days derive mark-to-market deltas for reporting only.
   - [ ] Update `RiskManager` to enforce portfolio-wide caps (order value, exposure, position count) and drop daily-loss gating; honor configurable base currency.
   - [ ] Add configurable timezone handling for portfolio-day reporting (AEST default) when generating `portfolio_days` rows.

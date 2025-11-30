@@ -20,6 +20,7 @@ Notes on the current session model:
   - [ ] Update table definitions so `portfolio_id` is `NOT NULL` everywhere (fresh DB) and `session_id` is nullable; keep `sessions` table only for compatibility.
   - [ ] Remove `session_stats_cache` creation and session-side fee/trade counters (stats come from `portfolio_stats_cache`); keep compatibility view for tests that still read sessions.
   - [ ] Add a lightweight compatibility shim (view/trigger or DAO guard) to map legacy session writes to portfolio_id during the transition.
+  - [ ] Ensure legacy session constructors attach/issue a portfolio automatically so inserts satisfy the new `portfolio_id` NOT NULL constraints (used by older tests/helpers).
 - [ ] **Database API: flip to portfolio-first signatures**
   - [ ] Add portfolio-scoped DAO entry points (`log_trade`, `log_market_data`, `log_llm_*`, `replace_positions/open_orders`, `get_recent_*`) that require `portfolio_id`; keep session-aware shims with deprecation warnings.
   - [ ] Add `ensure_active_portfolio` helper returning `(portfolio_id, run_id)` without creating sessions; make stats accessors use only `portfolio_stats_cache`.

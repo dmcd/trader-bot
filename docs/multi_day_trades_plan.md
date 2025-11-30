@@ -63,7 +63,6 @@ Notes on the current session model:
 
 - [ ] Migrations and tooling
   - [ ] Write a bootstrap/migration script that creates the new schema and seeds an initial portfolio (fresh DB path).
-  - [ ] Add a data validator (akin to `MetricsValidator`) to compare portfolio-day rollups vs equity snapshots and holdings.
 
 - [ ] Testing and rollout
   - [ ] Expand unit tests for `PortfolioTracker`, `RiskManager`, `ResyncService`, and dashboard loaders to cover portfolio scoping and timezone config.

@@ -32,7 +32,7 @@ Notes on the current session model:
   - [x] Deprecate/rename `sessions` table: migrate data into `portfolios` (id swap, bot_version/date preserved), add view/compat shim if needed, and remove session_id foreign keys once portfolio_id is wired.
     - [x] Add migration helpers to backfill `portfolio_id` on sessions and copy bot_version/date into portfolios.
     - [x] Update DAO helpers and services to prefer `portfolio_id` over `session_id` for lookups.
-    - [ ] Remove `session_id` foreign keys/constraints where portfolio_id is present and add backward-compatible views/shims as needed.
+    - [x] Remove `session_id` foreign keys/constraints where portfolio_id is present and add backward-compatible views/shims as needed.
     - [x] Add tests covering migration/backfill and compat accessors.
 
 - [ ] Service initialization changes

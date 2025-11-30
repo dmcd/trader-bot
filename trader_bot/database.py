@@ -120,7 +120,6 @@ class TradingDatabase:
                 reason TEXT,
                 trade_id TEXT,
                 UNIQUE(trade_id),
-                FOREIGN KEY (session_id) REFERENCES sessions(id),
                 FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
@@ -134,7 +133,6 @@ class TradingDatabase:
                 client_order_id TEXT,
                 recorded_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(session_id, trade_id),
-                FOREIGN KEY (session_id) REFERENCES sessions(id),
                 FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
@@ -152,7 +150,6 @@ class TradingDatabase:
                 total_tokens INTEGER DEFAULT 0,
                 cost REAL DEFAULT 0.0,
                 decision TEXT,
-                FOREIGN KEY (session_id) REFERENCES sessions(id),
                 FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
@@ -170,7 +167,6 @@ class TradingDatabase:
                 decision_json TEXT,
                 market_context TEXT,
                 execution_result TEXT,
-                FOREIGN KEY (session_id) REFERENCES sessions(id),
                 FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
@@ -191,7 +187,6 @@ class TradingDatabase:
                 bid_size REAL,
                 ask_size REAL,
                 ob_imbalance REAL,
-                FOREIGN KEY (session_id) REFERENCES sessions(id),
                 FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
@@ -210,7 +205,6 @@ class TradingDatabase:
                 low REAL,
                 close REAL,
                 volume REAL,
-                FOREIGN KEY (session_id) REFERENCES sessions(id),
                 FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
@@ -227,7 +221,6 @@ class TradingDatabase:
                 portfolio_id INTEGER,
                 timestamp TEXT NOT NULL,
                 equity REAL,
-                FOREIGN KEY (session_id) REFERENCES sessions(id),
                 FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
@@ -245,7 +238,6 @@ class TradingDatabase:
                 macd_signal REAL,
                 bb_upper REAL,
                 bb_lower REAL,
-                FOREIGN KEY (session_id) REFERENCES sessions(id),
                 FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
@@ -261,7 +253,6 @@ class TradingDatabase:
                 avg_price REAL,
                 exchange_timestamp TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES sessions(id),
                 FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
@@ -281,7 +272,6 @@ class TradingDatabase:
                 status TEXT,
                 exchange_timestamp TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES sessions(id),
                 FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
@@ -367,8 +357,7 @@ class TradingDatabase:
                 gross_pnl REAL DEFAULT 0.0,
                 total_llm_cost REAL DEFAULT 0.0,
                 start_of_day_equity REAL,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -377,8 +366,7 @@ class TradingDatabase:
             CREATE TABLE IF NOT EXISTS risk_state (
                 session_id INTEGER PRIMARY KEY,
                 start_of_day_equity REAL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -402,6 +390,16 @@ class TradingDatabase:
         except Exception:
             # column may already exist; ignore errors
             pass
+        try:
+            cursor.execute(
+                """
+                CREATE VIEW IF NOT EXISTS session_portfolios AS
+                SELECT id AS session_id, portfolio_id, bot_version, date, base_currency
+                FROM sessions
+                """
+            )
+        except Exception as exc:
+            logger.debug(f"Could not create session_portfolios view: {exc}")
 
         self.conn.commit()
         logger.info(f"Database initialized at {self.db_path}")

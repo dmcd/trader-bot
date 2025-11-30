@@ -191,6 +191,43 @@ def test_portfolio_stats_cache_roundtrip(tmp_path):
     db.close()
 
 
+def test_processed_trades_store_portfolio(tmp_path):
+    db_path = tmp_path / "portfolio-processed.db"
+    db = TradingDatabase(str(db_path))
+    portfolio = db.get_or_create_portfolio("proc", base_currency="usd", bot_version="v1")
+    session_id = db.get_or_create_session(1000.0, "v1", portfolio_id=portfolio["id"])
+
+    db.record_processed_trade_ids(session_id, [("tid-1", "cid-1")], portfolio_id=portfolio["id"])
+    row = db.conn.execute("SELECT portfolio_id FROM processed_trades WHERE trade_id = 'tid-1'").fetchone()
+
+    assert row["portfolio_id"] == portfolio["id"]
+    db.close()
+
+
+def test_trades_can_be_fetched_by_portfolio(tmp_path):
+    db_path = tmp_path / "portfolio-trades.db"
+    db = TradingDatabase(str(db_path))
+    portfolio = db.get_or_create_portfolio("p1", base_currency="usd", bot_version="v1")
+    session_id = db.get_or_create_session(1000.0, "v1", portfolio_id=portfolio["id"])
+    db.log_trade(session_id, "BTC/USD", "BUY", 0.1, 20000.0, fee=0.0, portfolio_id=portfolio["id"])
+
+    trades = db.get_recent_trades(portfolio_id=portfolio["id"], limit=5)
+
+    assert trades and trades[0]["portfolio_id"] == portfolio["id"]
+    db.close()
+
+
+def test_session_portfolios_view_exists(tmp_path):
+    db_path = tmp_path / "session-portfolio-view.db"
+    db = TradingDatabase(str(db_path))
+    portfolio = db.get_or_create_portfolio("viewp", base_currency="usd", bot_version="v1")
+    session_id = db.get_or_create_session(1000.0, "v1", portfolio_id=portfolio["id"])
+    row = db.conn.execute("SELECT portfolio_id FROM session_portfolios WHERE session_id = ?", (session_id,)).fetchone()
+
+    assert row["portfolio_id"] == portfolio["id"]
+    db.close()
+
+
 def test_session_portfolio_backfill(tmp_path):
     db_path = tmp_path / "session-backfill.db"
     db = TradingDatabase(str(db_path))

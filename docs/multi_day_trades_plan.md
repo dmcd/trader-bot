@@ -30,6 +30,10 @@ Notes on the current session model:
     - [x] Remove `risk_state` start_of_day equity usage across code/tests.
     - [x] Add tests for portfolio stats persistence and restart restore behavior.
   - [ ] Deprecate/rename `sessions` table: migrate data into `portfolios` (id swap, bot_version/date preserved), add view/compat shim if needed, and remove session_id foreign keys once portfolio_id is wired.
+    - [ ] Add migration helpers to backfill `portfolio_id` on sessions and copy bot_version/date into portfolios.
+    - [ ] Update DAO helpers and services to prefer `portfolio_id` over `session_id` for lookups.
+    - [ ] Remove `session_id` foreign keys/constraints where portfolio_id is present and add backward-compatible views/shims as needed.
+    - [ ] Add tests covering migration/backfill and compat accessors.
 
 - [ ] Service initialization changes
   - [ ] Update `StrategyRunner` to resolve `portfolio_id` from config/DB (create if missing) and generate a `run_id` for telemetry.

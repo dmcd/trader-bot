@@ -13,7 +13,7 @@ class FakeDB:
         self.session_totals = None
         self.trades = []
         self.session_stats_row = {"total_llm_cost": 0.0}
-        self.portfolio_stats_row = {"total_llm_cost": 0.0}
+        self.portfolio_stats_row = {"total_llm_cost": 0.0, "exposure_notional": 0.0}
         self.trades_scope = None
 
     def set_session_stats_cache(self, session_id, stats):
@@ -137,3 +137,33 @@ def test_exchange_rebuild_persists_portfolio_cache():
     tracker.apply_exchange_trades_for_rebuild(trades)
 
     assert db.cached_stats_portfolio[0] == 42
+
+
+def test_load_cached_stats_prefers_portfolio_scope():
+    db = FakeDB()
+    db.portfolio_stats_row = {
+        "total_trades": 3,
+        "gross_pnl": 12.0,
+        "total_fees": 2.0,
+        "total_llm_cost": 0.5,
+        "exposure_notional": 150.0,
+    }
+    tracker = PortfolioTracker(db, session_id=5, portfolio_id=77, logger=logging.getLogger("test"))
+
+    stats, hit = tracker.load_cached_stats()
+
+    assert hit is True
+    assert stats["total_trades"] == 3
+    assert stats["gross_pnl"] == pytest.approx(12.0)
+    assert stats["exposure_notional"] == pytest.approx(150.0)
+
+
+def test_update_exposure_notional_persists_cache():
+    db = FakeDB()
+    tracker = PortfolioTracker(db, session_id=2, portfolio_id=11, logger=logging.getLogger("test"))
+
+    tracker.update_exposure_notional(125.5)
+
+    assert tracker.session_stats["exposure_notional"] == pytest.approx(125.5)
+    assert db.cached_stats_portfolio[0] == 11
+    assert db.cached_stats_portfolio[1]["exposure_notional"] == pytest.approx(125.5)

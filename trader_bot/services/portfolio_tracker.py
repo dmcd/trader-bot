@@ -19,6 +19,7 @@ class PortfolioTracker:
             "gross_pnl": 0.0,
             "total_fees": 0.0,
             "total_llm_cost": 0.0,
+            "exposure_notional": 0.0,
         }
 
     def set_session(self, session_id: int, portfolio_id: Optional[int] = None) -> None:
@@ -31,6 +32,35 @@ class PortfolioTracker:
             except Exception:
                 self.portfolio_id = None
 
+    def load_cached_stats(self) -> tuple[dict, bool]:
+        """Hydrate session stats from portfolio/session caches for restart resilience."""
+        stats = {}
+        if self.portfolio_id is not None and hasattr(self.db, "get_portfolio_stats_cache"):
+            try:
+                stats = self.db.get_portfolio_stats_cache(self.portfolio_id) or {}
+            except Exception as exc:
+                self.logger.debug(f"Could not load portfolio stats cache: {exc}")
+                stats = {}
+        if not stats and self.session_id is not None and hasattr(self.db, "get_session_stats_cache"):
+            try:
+                stats = self.db.get_session_stats_cache(self.session_id) or {}
+            except Exception as exc:
+                self.logger.debug(f"Could not load session stats cache: {exc}")
+                stats = {}
+
+        cache_hit = bool(stats)
+        if stats:
+            self.session_stats.update(
+                {
+                    "total_trades": stats.get("total_trades", 0) or 0,
+                    "gross_pnl": stats.get("gross_pnl", 0.0) or 0.0,
+                    "total_fees": stats.get("total_fees", 0.0) or 0.0,
+                    "total_llm_cost": stats.get("total_llm_cost", 0.0) or 0.0,
+                    "exposure_notional": stats.get("exposure_notional", 0.0) or 0.0,
+                }
+            )
+        return self.session_stats, cache_hit
+
     def reset_holdings(self) -> None:
         self.holdings.clear()
 
@@ -42,6 +72,7 @@ class PortfolioTracker:
                 "gross_pnl": 0.0,
                 "total_fees": 0.0,
                 "total_llm_cost": 0.0,
+                "exposure_notional": 0.0,
             }
         )
 
@@ -92,6 +123,17 @@ class PortfolioTracker:
                 trade["quantity"],
                 trade["price"],
             )
+
+    def update_exposure_notional(self, exposure_notional: float | None) -> None:
+        """Persist the latest exposure snapshot on the portfolio stats cache."""
+        try:
+            exposure_value = float(exposure_notional or 0.0)
+        except (TypeError, ValueError):
+            return
+        if abs(self.session_stats.get("exposure_notional", 0.0) - exposure_value) < 1e-9:
+            return
+        self.session_stats["exposure_notional"] = exposure_value
+        self._persist_stats_cache()
 
     def apply_fill_to_session_stats(
         self,
@@ -227,6 +269,7 @@ class PortfolioTracker:
         if not db_stats and self.session_id is not None:
             db_stats = self.db.get_session_stats(self.session_id)
         self.session_stats["total_llm_cost"] = db_stats.get("total_llm_cost", 0.0)
+        self.session_stats["exposure_notional"] = db_stats.get("exposure_notional", self.session_stats.get("exposure_notional", 0.0) or 0.0)
         self._persist_stats_cache()
         try:
             if hasattr(self.db, "update_session_totals") and self.session_id is not None:

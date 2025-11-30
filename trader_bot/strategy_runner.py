@@ -410,6 +410,10 @@ class StrategyRunner:
             fees = (self.session_stats or {}).get("total_fees", 0.0) or 0.0
             net = gross - fees - llm_cost
             fee_ratio = fees / max(abs(gross), 1.0)
+            try:
+                self.portfolio_tracker.update_exposure_notional(current_exposure)
+            except Exception as exc:
+                logger.debug(f"Could not persist exposure to stats cache: {exc}")
             risk_detail = {
                 "exposure": current_exposure,
                 "exposure_limit": MAX_TOTAL_EXPOSURE,
@@ -780,15 +784,9 @@ class StrategyRunner:
 
         # Initialize session stats with persistence awareness
         logger.info("Initializing session stats...")
-        cached_stats = self.db.get_portfolio_stats_cache(self.portfolio_id) if self.portfolio_id else None
-        if cached_stats:
-            self.portfolio_tracker.session_stats = {
-                'total_trades': cached_stats.get('total_trades', 0),
-                'gross_pnl': cached_stats.get('gross_pnl', 0.0),
-                'total_fees': cached_stats.get('total_fees', 0.0),
-                'total_llm_cost': cached_stats.get('total_llm_cost', 0.0),
-            }
-            self.session_stats = self.portfolio_tracker.session_stats
+        _, cache_hit = self.portfolio_tracker.load_cached_stats()
+        if cache_hit:
+            self.session_stats = dict(self.portfolio_tracker.session_stats)
             logger.info(f"Loaded portfolio stats from cache: {self.session_stats}")
         else:
             logger.info("No cached portfolio stats found; rebuilding from exchange trades...")
@@ -812,8 +810,10 @@ class StrategyRunner:
             db_stats = self.db.get_session_stats(self.session_id)
             self.session_stats['total_llm_cost'] = db_stats.get('total_llm_cost', 0.0)
             self.portfolio_tracker.session_stats = self.session_stats
-            if self.portfolio_id:
-                self.db.set_portfolio_stats_cache(self.portfolio_id, self.session_stats)
+            try:
+                self.portfolio_tracker._persist_stats_cache()
+            except Exception as exc:
+                logger.debug(f"Could not persist rebuilt stats cache: {exc}")
             logger.info(f"Portfolio Stats Rebuilt: {self.session_stats}")
 
         # Seed risk manager with current equity for telemetry

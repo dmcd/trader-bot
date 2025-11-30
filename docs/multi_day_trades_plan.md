@@ -6,6 +6,37 @@ Notes on the current session model:
 - Resync, portfolio tracking, and plan monitoring all scope to the active `session_id`, so restarting or rolling to a new calendar day drops visibility into prior-day positions/plans unless they are re-synced and reinserted for the new session.
 - Dashboard lookups (history, open orders/plans, stats) are session-scoped and select the most recent session for the current `BOT_VERSION`.
 
+## Session cleanup audit (why `session_id` is still hanging around)
+
+- DB tables still require `session_id` as NOT NULL even though `portfolio_id` exists, so the runner must call `get_or_create_portfolio_session` to satisfy inserts (trades/market_data/ohlcv/positions/open_orders/llm_calls/llm_traces).
+- DAO APIs remain session-first and update the `sessions` row for side effects (`total_trades`, `total_fees`, `total_llm_cost`, `net_pnl`), so services and telemetry threads keep threading `session_id`.
+- StrategyRunner/Resync/PlanMonitor/TradingContext wire `set_session` helpers and use session-based baselines (starting balance, duration, baseline positions), forcing session plumbing even when portfolio_id is present.
+- Dashboard and MetricsDrift read/write via `session_id` (version → session lookup, session_stats_cache, equity snapshots), so UI/ops flows still depend on the legacy session row.
+- We can assume a **fresh DB** (no backfill/migration needed); sessions only remain to let us split refactors while tests still pass mid-flight.
+
+## New cleanup tasks (blockers before further portfolio work)
+
+- [ ] **Schema: make portfolio first-class, session optional**
+  - [ ] Allow `session_id` to be NULL on all tables and enforce `portfolio_id` NOT NULL with indexes on (portfolio_id, symbol/timeframe) where applicable (fresh DB only).
+  - [ ] Drop `session_stats_cache` and session-side fee/trade counters once portfolio stats cache is authoritative; keep a minimal `sessions` table only for transitional tests.
+  - [ ] Add a lightweight compatibility view or trigger layer that maps legacy session writes to portfolio_id for any remaining callers during the transition (no data backfill required).
+- [ ] **Database API: flip to portfolio-first signatures**
+  - [ ] Introduce portfolio-scoped DAO methods (`log_trade`, `log_market_data`, `log_llm_*`, `replace_positions/open_orders`, `get_recent_*`) that do not require session_id; keep session-aware shims only for legacy callers with deprecation warnings.
+  - [ ] Replace `get_or_create_portfolio_session` with an `ensure_active_portfolio` helper that returns `portfolio_id` and `run_id` (no new session row), and update stats accessors to read/write only `portfolio_stats_cache`.
+- [ ] **Runner/services wiring: remove session plumbing**
+  - [ ] Drop `StrategyRunner.session_id/session` fields; thread `portfolio_id`+`run_id` into ResyncService, PlanMonitor, TradeActionHandler, MarketDataService, TradingContext, and telemetry without requiring `set_session`.
+  - [ ] Remove session-specific baselines (starting_balance, session_started) from runner lifecycle and resync; rely on portfolio stats cache and equity snapshots instead.
+- [ ] **Context and risk**
+  - [ ] Rework `TradingContext` summaries to use portfolio lifetime (portfolio.created_at or first equity snapshot) and portfolio stats cache; replace `_net_quantity_for_session` with portfolio-level baseline handling for sandbox airdrops.
+  - [ ] Replace `MetricsDrift` with a portfolio-scoped equity drift check (uses portfolio stats cache + latest equity snapshot) and retire session_id logging.
+  - [ ] Update RiskManager baseline/telemetry hooks to use portfolio metadata and remove any session_id fields.
+- [ ] **Dashboard/telemetry**
+  - [ ] Switch dashboard loaders to select by portfolio (and optional bot_version filter) instead of `get_session_id_by_version`; read stats from portfolio cache and show run_id metadata.
+  - [ ] Remove session_id from telemetry payloads/log lines; ensure run_id/portfolio_id are present everywhere a session_id is currently written.
+- [ ] **Tests and fixtures**
+  - [ ] Update fixtures/mocks to create portfolios instead of sessions; remove `set_session` expectations in service tests and cover portfolio-only flows.
+  - [ ] Add regression tests ensuring no new session rows are created on restart and that portfolio-only writes/readbacks work across trades, plans, orders, market data, and telemetry.
+
 ## Work Plan
 
 - [x] Clarify requirements and invariants

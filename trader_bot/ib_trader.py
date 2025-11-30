@@ -5,18 +5,19 @@ import logging
 import time
 from typing import Any, Callable, Dict, Optional, Tuple
 
-from ib_insync import Forex, IB
+from ib_insync import Forex, IB, LimitOrder, MarketOrder
 
 from trader_bot.config import (
+    CLIENT_ORDER_PREFIX,
     IB_ACCOUNT_ID,
     IB_BASE_CURRENCY,
+    IB_ALLOWED_INSTRUMENT_TYPES,
     IB_CLIENT_ID,
     IB_EXCHANGE,
     IB_HOST,
     IB_PRIMARY_EXCHANGE,
     IB_PAPER,
     IB_PORT,
-    IB_ALLOWED_INSTRUMENT_TYPES,
 )
 from trader_bot.ib_contracts import build_ib_contract
 from trader_bot.symbols import DEFAULT_FX_EXCHANGE
@@ -49,6 +50,8 @@ class IBTrader(BaseTrader):
         allowed_instrument_types: Optional[list[str]] = None,
         fx_exchange: str = DEFAULT_FX_EXCHANGE,
         fx_cache_ttl: float = 30.0,
+        order_wait_timeout: float = 5.0,
+        order_poll_interval: float = 0.25,
         ib_client: Optional[IB] = None,
         monotonic: Optional[Callable[[], float]] = None,
     ):
@@ -68,6 +71,8 @@ class IBTrader(BaseTrader):
         )
         self.fx_exchange = fx_exchange
         self.fx_cache_ttl = fx_cache_ttl
+        self.order_wait_timeout = order_wait_timeout
+        self.order_poll_interval = order_poll_interval
         self.ib: IB = ib_client or IB()
         self.connected = False
         self._last_ping_mono: float | None = None
@@ -259,8 +264,59 @@ class IBTrader(BaseTrader):
             "_latency_ms": latency_ms,
         }
 
-    async def place_order_async(self, symbol, action, quantity):  # pragma: no cover - placeholder
-        raise NotImplementedError("Order placement not implemented for IB yet.")
+    async def place_order_async(self, symbol, action, quantity, prefer_maker: bool = True, force_market: bool = False):
+        if not self.connected:
+            return None
+
+        side = action.upper()
+        if side not in {"BUY", "SELL"}:
+            raise ValueError(f"Unsupported action {action}; expected BUY or SELL")
+
+        try:
+            contract, spec = build_ib_contract(
+                symbol,
+                allowed_instrument_types=self.allowed_instrument_types,
+                default_exchange=self.default_exchange,
+                default_primary_exchange=self.default_primary_exchange,
+                base_currency=self.base_currency,
+                fx_exchange=self.fx_exchange,
+            )
+        except Exception as exc:
+            logger.error(f"Error building IB contract for {symbol}: {exc}")
+            return None
+
+        client_order_id = f"{CLIENT_ORDER_PREFIX}-{int(time.time() * 1000)}"
+
+        limit_price: float | None = None
+        if not force_market:
+            md = await self.get_market_data_async(spec.symbol)
+            limit_price = self._compute_limit_price(md, side, prefer_maker)
+            if limit_price is None:
+                logger.error(f"Missing price data to place IB limit order for {symbol}")
+                return None
+
+        order = MarketOrder(side, quantity) if force_market else LimitOrder(side, quantity, limit_price)
+        order.orderRef = client_order_id
+        order.tif = getattr(order, "tif", None) or "DAY"
+
+        try:
+            trade = await asyncio.wait_for(self._place_order(contract, order), timeout=self.connect_timeout)
+        except Exception as exc:
+            logger.error(f"Error placing IB order for {symbol}: {exc}")
+            return None
+
+        status = await self._await_order_status(trade)
+
+        return {
+            "order_id": getattr(status, "orderId", None) if status else None,
+            "status": self._normalize_order_status(status),
+            "filled": getattr(status, "filled", None) if status else None,
+            "remaining": getattr(status, "remaining", None) if status else None,
+            "avg_fill_price": getattr(status, "avgFillPrice", None) if status else None,
+            "liquidity": getattr(status, "liquidity", None) or getattr(status, "lastLiquidity", None) if status else None,
+            "fee": getattr(status, "commission", None) if status else None,
+            "client_order_id": client_order_id,
+        }
 
     async def get_equity_async(self):
         if not self.connected:
@@ -421,3 +477,65 @@ class IBTrader(BaseTrader):
         if price is None or price <= 0:
             return None
         return price
+
+    def _compute_limit_price(self, md: Optional[Dict[str, Any]], side: str, prefer_maker: bool) -> float | None:
+        if not md:
+            return None
+        bid = md.get("bid")
+        ask = md.get("ask")
+        price = md.get("price") or md.get("close")
+
+        if prefer_maker:
+            if side == "BUY":
+                base = bid or price
+                return base * 0.999 if base else None
+            base = ask or price
+            return base * 1.001 if base else None
+
+        if side == "BUY":
+            return ask or price
+        return bid or price
+
+    async def _place_order(self, contract, order):
+        place_fn = getattr(self.ib, "placeOrderAsync", None)
+        if place_fn:
+            return await place_fn(contract, order)
+        return await asyncio.to_thread(self.ib.placeOrder, contract, order)
+
+    async def _await_order_status(self, trade):
+        deadline = self._monotonic() + self.order_wait_timeout
+        status = getattr(trade, "orderStatus", None)
+        while True:
+            normalized = self._normalize_order_status(status)
+            if normalized in {"filled", "canceled"}:
+                return status
+            remaining = getattr(status, "remaining", None)
+            if remaining == 0:
+                return status
+            if self._monotonic() >= deadline:
+                return status
+
+            advance = getattr(trade, "advance_status", None)
+            if callable(advance):
+                advance()
+
+            await asyncio.sleep(self.order_poll_interval)
+            status = getattr(trade, "orderStatus", None) or status
+
+    @staticmethod
+    def _normalize_order_status(status) -> str:
+        if status is None:
+            return "unknown"
+        raw = (getattr(status, "status", None) or "").lower()
+        if raw in {"filled"}:
+            return "filled"
+        if raw in {"cancelled", "canceled", "inactive"}:
+            return "canceled"
+        if raw in {"submitted", "pre-submitted", "presubmitted"}:
+            remaining = getattr(status, "remaining", None)
+            if remaining == 0:
+                return "filled"
+            return "open"
+        if raw in {"api pending", "pendingcancel", "pendingsubmit"}:
+            return "pending"
+        return raw or "unknown"

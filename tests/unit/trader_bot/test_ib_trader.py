@@ -43,6 +43,42 @@ class FakeTicker:
         return self._price
 
 
+class FakeOrderStatus:
+    def __init__(
+        self,
+        status: str,
+        *,
+        filled: float | None = None,
+        remaining: float | None = None,
+        avg_fill_price: float | None = None,
+        order_id: int | None = None,
+        commission: float | None = None,
+        liquidity: str | None = None,
+    ):
+        self.status = status
+        self.filled = filled
+        self.remaining = remaining
+        self.avgFillPrice = avg_fill_price
+        self.orderId = order_id
+        self.commission = commission
+        self.liquidity = liquidity
+
+
+class FakeTrade:
+    def __init__(self, statuses):
+        self._statuses = list(statuses or [])
+        if not self._statuses:
+            self._statuses.append(FakeOrderStatus("Submitted"))
+        self.orderStatus = self._statuses[0]
+        self.order = None
+        self.contract = None
+
+    def advance_status(self):
+        if len(self._statuses) > 1:
+            self._statuses.pop(0)
+            self.orderStatus = self._statuses[0]
+
+
 class FakeIB:
     def __init__(
         self,
@@ -52,6 +88,7 @@ class FakeIB:
         async_disconnect: bool = False,
         account_values=None,
         market_data=None,
+        order_statuses=None,
     ):
         self.connected = connected
         self.fail_connect = fail_connect
@@ -61,8 +98,10 @@ class FakeIB:
         self.disconnect_async_calls = 0
         self.account_values_calls = 0
         self.req_mkt_data_calls = []
+        self.place_order_calls = []
         self.account_values = account_values or []
         self.market_data = market_data or {}
+        self.order_statuses = order_statuses or {}
         if not async_disconnect:
             # Shadow the coroutine so getattr returns None
             self.disconnectAsync = None
@@ -96,7 +135,10 @@ class FakeIB:
     def _contract_key(self, contract):
         pair_fn = getattr(contract, "pair", None)
         if callable(pair_fn):
-            return pair_fn()
+            val = pair_fn()
+            if isinstance(val, str):
+                return val.replace(".", "")
+            return val
         symbol = getattr(contract, "symbol", None)
         currency = getattr(contract, "currency", None)
         if symbol and currency:
@@ -107,6 +149,15 @@ class FakeIB:
         key = self._contract_key(contract)
         self.req_mkt_data_calls.append(key)
         return self.market_data.get(key)
+
+    async def placeOrderAsync(self, contract, order):
+        key = self._contract_key(contract)
+        self.place_order_calls.append({"contract": key, "order": order})
+        statuses = self.order_statuses.get(key, [])
+        trade = FakeTrade(statuses)
+        trade.order = order
+        trade.contract = contract
+        return trade
 
     def disconnect(self):
         self.disconnect_calls += 1
@@ -335,3 +386,80 @@ async def test_get_market_data_falls_back_to_mid_when_no_last():
     assert md["price"] == pytest.approx((0.655 + 0.656) / 2)
     assert md["spread_pct"] == pytest.approx((0.656 - 0.655) / ((0.655 + 0.656) / 2) * 100)
     assert md["ob_imbalance"] == pytest.approx((1_000_000 - 800_000) / (1_000_000 + 800_000))
+
+
+@pytest.mark.asyncio
+async def test_place_order_limit_prefers_maker_and_maps_status():
+    fake_ib = FakeIB(
+        connected=True,
+        market_data={"BHPAUD": FakeTicker(price=101.0, bid=100.5, ask=101.5)},
+        order_statuses={
+            "BHPAUD": [
+                FakeOrderStatus("Submitted", filled=5, remaining=5, avg_fill_price=101.1, order_id=99),
+                FakeOrderStatus("Filled", filled=10, remaining=0, avg_fill_price=101.2, order_id=99, commission=0.35, liquidity="added"),
+            ]
+        },
+    )
+    trader = IBTrader(ib_client=fake_ib, order_wait_timeout=0.5)
+    trader.connected = True
+
+    result = await trader.place_order_async("BHP/AUD", "BUY", 10, prefer_maker=True)
+
+    assert fake_ib.place_order_calls
+    call = fake_ib.place_order_calls[0]
+    assert call["contract"] == "BHPAUD"
+    limit_order = call["order"]
+    assert getattr(limit_order, "orderRef") is not None
+    assert getattr(limit_order, "totalQuantity") == 10
+    assert getattr(limit_order, "lmtPrice") == pytest.approx(100.5 * 0.999)
+
+    assert result["status"] == "filled"
+    assert result["filled"] == 10
+    assert result["remaining"] == 0
+    assert result["avg_fill_price"] == pytest.approx(101.2)
+    assert result["fee"] == pytest.approx(0.35)
+    assert result["liquidity"] == "added"
+
+
+@pytest.mark.asyncio
+async def test_place_order_allows_market_when_requested():
+    fake_ib = FakeIB(
+        connected=True,
+        market_data={"AUDUSD": FakeTicker(price=0.655, bid=0.654, ask=0.656)},
+        order_statuses={
+            "AUDUSD": [
+                FakeOrderStatus("Filled", filled=5000, remaining=0, avg_fill_price=0.6555, order_id=12, commission=0.05),
+            ]
+        },
+    )
+    trader = IBTrader(ib_client=fake_ib, order_wait_timeout=0.3)
+    trader.connected = True
+
+    result = await trader.place_order_async("AUD/USD", "SELL", 5000, prefer_maker=False, force_market=True)
+
+    order_obj = fake_ib.place_order_calls[0]["order"]
+    assert order_obj.__class__.__name__ == "MarketOrder"
+    assert result["status"] == "filled"
+    assert result["avg_fill_price"] == pytest.approx(0.6555)
+    assert result["fee"] == pytest.approx(0.05)
+
+
+@pytest.mark.asyncio
+async def test_place_order_times_out_with_partial_status():
+    fake_ib = FakeIB(
+        connected=True,
+        market_data={"CSLAUD": FakeTicker(price=25.0, bid=24.9, ask=25.1)},
+        order_statuses={
+            "CSLAUD": [
+                FakeOrderStatus("Submitted", filled=3, remaining=7, avg_fill_price=25.0, order_id=101),
+            ]
+        },
+    )
+    trader = IBTrader(ib_client=fake_ib, order_wait_timeout=0.1, order_poll_interval=0.05)
+    trader.connected = True
+
+    result = await trader.place_order_async("CSL/AUD", "BUY", 10, prefer_maker=False)
+
+    assert result["status"] in ("submitted", "open")
+    assert result["filled"] == 3
+    assert result["remaining"] == 7

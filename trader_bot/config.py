@@ -106,7 +106,8 @@ LLM_DECISION_BYTE_BUDGET = int(os.getenv('LLM_DECISION_BYTE_BUDGET', '16000'))  
 BOT_VERSION = os.getenv('BOT_VERSION', 'v1')
 
 # Order routing
-CLIENT_ORDER_PREFIX = os.getenv('CLIENT_ORDER_PREFIX', f'BOT-{BOT_VERSION}')
+BOT_VERSION = BOT_VERSION or 'v1'
+CLIENT_ORDER_PREFIX = os.getenv('CLIENT_ORDER_PREFIX') or f'BOT-{BOT_VERSION}'
 
 # Trade sync guardrails
 TRADE_SYNC_CUTOFF_MINUTES = int(os.getenv('TRADE_SYNC_CUTOFF_MINUTES', '1440'))  # ignore trades older than this window when syncing
@@ -131,14 +132,16 @@ MAKER_PREFERENCE_OVERRIDES = _parse_maker_overrides(os.getenv('MAKER_PREFERENCE_
 # Correlation buckets (semicolon-separated groups of comma symbols)
 def _parse_correlation_buckets(raw: str):
     buckets = {}
-    for idx, bucket in enumerate(raw.split(';')):
+    bucket_idx = 1
+    for bucket in raw.split(';'):
         if not bucket.strip():
             continue
         parts = [sym.strip().upper() for sym in bucket.split(',') if sym.strip()]
         if not parts:
             continue
-        key = f"bucket_{idx+1}"
+        key = f"bucket_{bucket_idx}"
         buckets[key] = parts
+        bucket_idx += 1
     return buckets
 
 CORRELATION_BUCKETS = _parse_correlation_buckets(os.getenv('CORRELATION_BUCKETS', 'BTC/USD,ETH/USD;SOL/USD,ADA/USD'))

@@ -39,9 +39,9 @@ class TradeActionHandler:
         self.logger = logger or logging.getLogger(__name__)
 
     # --- Helper sizing/microstructure utilities ---
-    def apply_order_value_buffer(self, quantity: float, price: float):
+    def apply_order_value_buffer(self, quantity: float, price: float, symbol: str | None = None):
         """Trim quantity so the notional sits under the order cap minus buffer."""
-        adjusted_qty, overage = self.risk_manager.apply_order_value_buffer(quantity, price)
+        adjusted_qty, overage = self.risk_manager.apply_order_value_buffer(quantity, price, symbol=symbol)
         if adjusted_qty < quantity:
             original_value = quantity * price
             adjusted_value = adjusted_qty * price
@@ -217,7 +217,7 @@ class TradeActionHandler:
             self.emit_telemetry(telemetry_record)
             return telemetry_record
         flatten_action = "SELL" if plan_side == "BUY" else "BUY"
-        qty_for_risk = self.apply_order_value_buffer(close_qty, price or 0)
+        qty_for_risk = self.apply_order_value_buffer(close_qty, price or 0, symbol)
         risk_result = self.risk_manager.check_trade_allowed(symbol, flatten_action, qty_for_risk, price or 0)
         if not getattr(risk_result, "allowed", False):
             telemetry_record["status"] = "partial_close_blocked"
@@ -291,7 +291,7 @@ class TradeActionHandler:
             return telemetry_record
         action = "SELL" if qty > 0 else "BUY"
         qty_abs = abs(qty)
-        qty_buffered = self.apply_order_value_buffer(qty_abs, price or 0)
+        qty_buffered = self.apply_order_value_buffer(qty_abs, price or 0, symbol)
         if qty_buffered <= 0:
             telemetry_record["status"] = "close_position_zero_after_buffer"
             self.emit_telemetry(telemetry_record)

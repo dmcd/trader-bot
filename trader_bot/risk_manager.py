@@ -12,8 +12,75 @@ from trader_bot.config import (
     CORRELATION_BUCKETS,
     BUCKET_MAX_POSITIONS,
 )
+from trader_bot.symbols import normalize_symbol
 
 logger = logging.getLogger(__name__)
+
+
+class QuoteToBaseConverter:
+    """
+    Lightweight currency converter for risk checks.
+
+    Expects `fx_rate_provider` to return a rate that converts FROM the given
+    currency INTO `base_currency`. Falls back to 1.0 when the quote already
+    matches the base.
+    """
+
+    def __init__(self, base_currency: str | None, fx_rate_provider=None):
+        self.base_currency = base_currency.upper() if base_currency else None
+        self.fx_rate_provider = fx_rate_provider
+
+    def convert_notional(self, symbol: str | None, notional_quote: float, price: float | None = None) -> tuple[float, float | None]:
+        """
+        Convert notional from quote currency to base currency.
+
+        Returns (converted_notional, fx_rate_used or None).
+        """
+        if notional_quote is None:
+            return 0.0, None
+        if self.base_currency is None:
+            return notional_quote, 1.0
+
+        base, quote = self._split_symbol(symbol)
+        if quote is None or quote == self.base_currency:
+            return notional_quote, 1.0
+
+        rate = self._lookup_fx_rate(quote, symbol=symbol, price=price)
+        if rate is None and base == self.base_currency and price:
+            rate = 1 / price if price not in (0, None) else None
+
+        if rate is None:
+            return notional_quote, None
+        return notional_quote * rate, rate
+
+    def _lookup_fx_rate(self, currency: str, symbol: str | None = None, price: float | None = None) -> float | None:
+        if currency is None or currency == self.base_currency:
+            return 1.0
+        provider = self.fx_rate_provider
+        if provider:
+            try:
+                return provider(currency, symbol=symbol, price=price)
+            except TypeError:
+                # Support providers without symbol/price kwargs
+                try:
+                    return provider(currency)
+                except Exception:
+                    return None
+            except Exception:
+                return None
+        return None
+
+    @staticmethod
+    def _split_symbol(symbol: str | None) -> tuple[str | None, str | None]:
+        if not symbol:
+            return None, None
+        try:
+            normalized = normalize_symbol(symbol)
+            base, quote = normalized.split("/", 1)
+            return base, quote
+        except Exception:
+            return None, None
+
 
 @dataclass
 class RiskCheckResult:
@@ -21,7 +88,13 @@ class RiskCheckResult:
     reason: str = ""
 
 class RiskManager:
-    def __init__(self, bot=None, ignore_baseline_positions: bool = False):
+    def __init__(
+        self,
+        bot=None,
+        ignore_baseline_positions: bool = False,
+        base_currency: str | None = None,
+        fx_rate_provider=None,
+    ):
         self.bot = bot # Optional, mostly for position checks if needed
         self.daily_loss = 0.0
         self.start_of_day_equity = None
@@ -34,6 +107,8 @@ class RiskManager:
         self.ignore_baseline_positions = ignore_baseline_positions
         # Baseline positions seen at session start (used to ignore sandbox airdrops)
         self.position_baseline: dict[str, float] = {}
+        self.base_currency = base_currency.upper() if base_currency else None
+        self._converter = QuoteToBaseConverter(self.base_currency, fx_rate_provider)
 
     def seed_start_of_day(self, start_equity: float):
         """Persist start-of-day equity so restarts keep loss limits consistent."""
@@ -91,7 +166,8 @@ class RiskManager:
                 qty = order.get('amount', 0.0)
             if not price or not qty:
                 continue
-            notional = price * qty
+            notional_quote = price * qty
+            notional, _ = self._convert_notional_to_base(symbol, notional_quote, price)
             sym_entry = counts.setdefault(symbol, {'buy': 0.0, 'sell': 0.0, 'count_buy': 0, 'count_sell': 0})
             if side == 'BUY':
                 buy_total += notional
@@ -105,17 +181,23 @@ class RiskManager:
         self.pending_sell_exposure = sell_total
         self.pending_orders_by_symbol = counts
 
-    def apply_order_value_buffer(self, quantity: float, price: float):
+    def _convert_notional_to_base(self, symbol: str | None, notional: float, price: float | None = None) -> tuple[float, float | None]:
+        return self._converter.convert_notional(symbol, notional, price)
+
+    def apply_order_value_buffer(self, quantity: float, price: float, symbol: str | None = None):
         """Trim quantity so notional stays under the order cap minus buffer."""
         if price <= 0 or quantity <= 0:
             return quantity, 0.0
 
+        notional = quantity * price
+        order_value, rate_used = self._convert_notional_to_base(symbol, notional, price)
+        rate_used = rate_used or 1.0
+
         capped_value = max(0.0, MAX_ORDER_VALUE - ORDER_VALUE_BUFFER)
-        order_value = quantity * price
         if order_value <= capped_value:
             return quantity, 0.0
 
-        capped_qty = capped_value / price if price else 0.0
+        capped_qty = capped_value / (price * rate_used) if price else 0.0
         capped_qty = max(0.0, capped_qty)
         overage = order_value - capped_value
         return capped_qty, overage
@@ -126,15 +208,17 @@ class RiskManager:
             return RiskCheckResult(False, "Invalid price or quantity")
         
         # 1. Check Max Order Value
-        order_value = quantity * price
+        order_value_quote = quantity * price
+        order_value, _ = self._convert_notional_to_base(symbol, order_value_quote, price)
+        currency = self.base_currency or "base"
         if order_value > MAX_ORDER_VALUE:
-            msg = f"Order value ${order_value:.2f} exceeds limit of ${MAX_ORDER_VALUE:.2f}"
+            msg = f"Order value {order_value:.2f} {currency} exceeds limit of {MAX_ORDER_VALUE:.2f} {currency}"
             logger.warning(f"Risk Reject: {msg}")
             return RiskCheckResult(False, msg)
 
         # 1.5 Check Min Trade Size
         if order_value < MIN_TRADE_SIZE:
-            msg = f"Order value ${order_value:.2f} is below minimum of ${MIN_TRADE_SIZE:.2f}"
+            msg = f"Order value {order_value:.2f} {currency} is below minimum of {MIN_TRADE_SIZE:.2f} {currency}"
             logger.warning(f"Risk Reject: {msg}")
             return RiskCheckResult(False, msg)
 
@@ -158,11 +242,18 @@ class RiskManager:
         current_exposure = self.get_total_exposure(price_overrides=price_overrides)
 
         def projected_exposure_for_sell(sym_qty, qty, px):
+            # Existing short: any additional sell adds to exposure in base currency
+            if sym_qty < 0:
+                return current_exposure + order_value
+
             # If selling more than current long, the overage is new short exposure
             if qty > sym_qty:
-                return current_exposure + (qty - sym_qty) * px
+                overage = (qty - sym_qty) * px
+                overage_base, _ = self._convert_notional_to_base(symbol, overage, px)
+                return current_exposure + overage_base
+
             # Otherwise exposure shrinks or stays; allow
-            return current_exposure
+            return max(0.0, current_exposure - min(order_value, current_exposure))
 
         projected_exposure = current_exposure
         if action == 'BUY':
@@ -268,9 +359,11 @@ class RiskManager:
 
             baseline_qty = self.position_baseline.get(sym, 0.0) if self.position_baseline else 0.0
             qty_for_exposure = self._net_quantity_for_exposure(qty, baseline_qty)
-            notional = abs(qty_for_exposure) * curr_price
-            per_symbol_notional[sym] = notional
-            exposure += notional
+            notional_quote = qty_for_exposure * curr_price
+            notional_base, _ = self._convert_notional_to_base(sym, notional_quote, curr_price)
+            notional_abs = abs(notional_base)
+            per_symbol_notional[sym] = notional_abs
+            exposure += notional_abs
 
         # Pending buys always consume headroom
         exposure += self.pending_buy_exposure

@@ -167,6 +167,45 @@ def test_pending_orders_by_symbol_tracks_count_and_notional(risk_manager):
     assert sym["ETH/USD"]["sell"] == pytest.approx(1050.0)
 
 
+def test_exposure_converts_to_base_currency(risk_config):
+    fx_rates = {"USD": 1.5}
+    fx_provider = lambda currency, **_: fx_rates.get(currency)
+    rm = RiskManager(base_currency="AUD", fx_rate_provider=fx_provider)
+    rm.update_positions({"AAPL/USD": {"quantity": 2.0, "current_price": 100.0}})
+
+    exposure = rm.get_total_exposure()
+    assert exposure == pytest.approx(300.0)
+
+
+def test_order_value_conversion_blocks_when_fx_pushes_over_cap(risk_config):
+    fx_provider = lambda currency, **_: 1.5 if currency == "USD" else None
+    rm = RiskManager(base_currency="AUD", fx_rate_provider=fx_provider)
+    rm.seed_start_of_day(2000.0)
+
+    result = rm.check_trade_allowed("AAPL/USD", "BUY", 5.0, price=200.0)
+    assert result.allowed is False
+    assert "exceeds limit" in result.reason
+
+
+def test_min_trade_size_uses_converted_value(risk_config):
+    fx_provider = lambda currency, **_: 2.0 if currency == "USD" else None
+    rm = RiskManager(base_currency="AUD", fx_rate_provider=fx_provider)
+    rm.seed_start_of_day(2000.0)
+
+    result = rm.check_trade_allowed("AAPL/USD", "BUY", 0.2, price=2.0)
+    assert result.allowed is False
+    assert "below minimum" in result.reason
+
+
+def test_projected_exposure_for_shorts_adds_incremental_notional(risk_config):
+    rm = RiskManager(base_currency="USD")
+    rm.seed_start_of_day(2000.0)
+    rm.update_positions({"BBB/USD": {"quantity": -10.0, "current_price": 80.0}})
+
+    result = rm.check_trade_allowed("BBB/USD", "SELL", 1.0, price=80.0)
+    assert result.allowed
+
+
 def test_max_positions_blocks_new_symbol_when_full(risk_config):
     rm_module.MAX_POSITIONS = 1
     rm = RiskManager()

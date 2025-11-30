@@ -44,6 +44,7 @@ from trader_bot.config import (
     PRIORITY_LOOKBACK_MIN,
     PRIORITY_MOVE_PCT,
     SANDBOX_IGNORE_INITIAL_POSITIONS,
+    IB_BASE_CURRENCY,
     BOT_VERSION,
     TRADE_SYNC_CUTOFF_MINUTES,
     TRADING_MODE,
@@ -103,7 +104,14 @@ class StrategyRunner:
             self.exchange_name = 'GEMINI'
         self.sandbox_ignore_positions = TRADING_MODE == 'PAPER' and SANDBOX_IGNORE_INITIAL_POSITIONS
         self._sandbox_position_baseline = {}
-        self.risk_manager = RiskManager(self.bot, ignore_baseline_positions=self.sandbox_ignore_positions)
+        base_currency = IB_BASE_CURRENCY if self.exchange_name == 'IB' else None
+        fx_rate_provider = getattr(self.bot, "get_cached_fx_rate", None)
+        self.risk_manager = RiskManager(
+            self.bot,
+            ignore_baseline_positions=self.sandbox_ignore_positions,
+            base_currency=base_currency,
+            fx_rate_provider=fx_rate_provider,
+        )
         self.running = False
         self.execute_orders = execute_orders
         
@@ -594,9 +602,9 @@ class StrategyRunner:
         self.market_data_service.set_session(self.session_id)
         await self.market_data_service.capture_ohlcv(symbol)
 
-    def _apply_order_value_buffer(self, quantity: float, price: float):
+    def _apply_order_value_buffer(self, quantity: float, price: float, symbol: str | None = None):
         """Delegate order value buffer to action handler for compatibility."""
-        return self.action_handler.apply_order_value_buffer(quantity, price)
+        return self.action_handler.apply_order_value_buffer(quantity, price, symbol=symbol)
 
     def _liquidity_ok(self, market_data_point: dict) -> bool:
         """Delegate liquidity check to action handler for compatibility."""
@@ -1357,7 +1365,7 @@ class StrategyRunner:
                         telemetry_record["vol_scaled_qty"] = adjusted_quantity
 
                         # Guardrails: clip size to sit under the max order cap minus buffer
-                        quantity = self._apply_order_value_buffer(adjusted_quantity, price)
+                        quantity = self._apply_order_value_buffer(adjusted_quantity, price, symbol)
 
                         if quantity <= 0:
                             logger.warning("Skipped trade: buffered quantity became non-positive")

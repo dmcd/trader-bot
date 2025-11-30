@@ -43,10 +43,10 @@
 
 5) **Risk, Sizing, and Fees**
    - [x] Extend `CostTracker` to include IB commission model (per-share with min, FX spread buffer). Allow config overrides for taker/maker not used on IB.
-   - [ ] Adjust `RiskManager` to accept base-currency conversions and recognize short exposure; ensure `MAX_ORDER_VALUE`, `MAX_TOTAL_EXPOSURE`, and `MIN_TRADE_SIZE` operate in `IB_BASE_CURRENCY`.
-     - [ ] Wire a currency converter using `IBTrader` market data/quotes so risk checks compare values in base currency.
-     - [ ] Normalize exposure calculations to treat short positions as negative and cap absolute exposure.
-     - [ ] Add tests covering AUD base currency sizing for long/short and per-order value validation.
+   - [x] Adjust `RiskManager` to accept base-currency conversions and recognize short exposure; ensure `MAX_ORDER_VALUE`, `MAX_TOTAL_EXPOSURE`, and `MIN_TRADE_SIZE` operate in `IB_BASE_CURRENCY`.
+     - [x] Wire a currency converter using `IBTrader` market data/quotes so risk checks compare values in base currency.
+     - [x] Normalize exposure calculations to treat short positions as negative and cap absolute exposure.
+     - [x] Add tests covering AUD base currency sizing for long/short and per-order value validation.
    - [ ] Add spread/liquidity heuristics tuned for equities/FX (e.g., min quote size in shares, tick-size aware price nudging). Revisit `MIN_TOP_OF_BOOK_NOTIONAL` defaults for AUD.
    - [ ] Update auto-flatten and plan-monitor exits to prefer marketable limit orders when IB disallows true market for certain contracts.
 

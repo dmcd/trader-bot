@@ -363,6 +363,23 @@ class IBTrader(BaseTrader):
             logger.error(f"Error calculating IB equity: {exc}")
             return None
 
+    def get_cached_fx_rate(self, currency: str) -> float | None:
+        """
+        Return the cached FX rate converting from `currency` into base_currency.
+
+        Uses the latest value fetched via account valuation or explicit FX quote
+        requests; returns 1.0 for the base currency.
+        """
+        if not currency:
+            return None
+        currency_upper = currency.upper()
+        if currency_upper == self.base_currency:
+            return 1.0
+        cached = self._fx_quote_cache.get(currency_upper)
+        if not cached:
+            return None
+        return cached[0]
+
     async def get_positions_async(self):  # pragma: no cover - placeholder
         if not self.connected:
             return []

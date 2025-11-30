@@ -75,8 +75,6 @@
    - [ ] Backfill docs on how to run IB tests (requires paper creds, Gateway running) and how to toggle to stub mode for CI.
 
 10) **Rollout & Safety**
-   - [ ] Start with shadow/observe mode on IB (execute_orders=False) to validate data flows, PnL math, and stop/target monitoring without live orders.
-   - [ ] Add feature flag to block live IB trading until a manual checklist is completed (account id set, paper validated, market hours check).
    - [ ] Log telemetry fields for IB-specific diagnostics (contract id, exchange, commission source) to `telemetry.log` for early triage.
 
 ## Open Questions

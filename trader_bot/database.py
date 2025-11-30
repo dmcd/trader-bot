@@ -418,6 +418,41 @@ class TradingDatabase:
         logger.info(f"Created new session {session_id} for version {bot_version} (base_currency={base_ccy or 'unset'})")
         return session_id
 
+    def get_or_create_portfolio_session(
+        self, portfolio_id: Optional[int], starting_balance: float, bot_version: str, base_currency: Optional[str] = None
+    ) -> int:
+        """
+        Return the latest session for the portfolio or create one if missing.
+        Keeps existing session rows so restarts do not generate new session ids.
+        """
+        if portfolio_id is None:
+            return self.get_or_create_session(starting_balance, bot_version, base_currency=base_currency, portfolio_id=portfolio_id)
+
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT id, base_currency FROM sessions WHERE portfolio_id = ? ORDER BY created_at DESC LIMIT 1",
+            (portfolio_id,),
+        )
+        row = cursor.fetchone()
+        if row:
+            if not row["base_currency"] and base_currency:
+                try:
+                    cursor.execute(
+                        "UPDATE sessions SET base_currency = ? WHERE id = ?",
+                        (base_currency.upper(), row["id"]),
+                    )
+                    self.conn.commit()
+                except Exception as exc:
+                    logger.debug(f"Could not backfill base_currency for session {row['id']}: {exc}")
+            return row["id"]
+
+        return self.get_or_create_session(
+            starting_balance=starting_balance,
+            bot_version=bot_version,
+            base_currency=base_currency,
+            portfolio_id=portfolio_id,
+        )
+
     def set_session_portfolio(self, session_id: int, portfolio_id: Optional[int]):
         cursor = self.conn.cursor()
         cursor.execute(

@@ -493,6 +493,22 @@ def test_session_creation_does_not_reuse_on_restart(tmp_path):
     assert first_session != new_session
 
 
+def test_get_or_create_portfolio_session_reuses_latest(tmp_path):
+    db_path = tmp_path / "portfolio.db"
+    db = TradingDatabase(str(db_path))
+    portfolio = db.get_or_create_portfolio(name="swing", base_currency="usd", bot_version="v1")
+
+    first = db.get_or_create_portfolio_session(portfolio_id=portfolio["id"], starting_balance=1200.0, bot_version="v1")
+    second = db.get_or_create_portfolio_session(portfolio_id=portfolio["id"], starting_balance=3300.0, bot_version="v1")
+
+    cursor = db.conn.cursor()
+    row = cursor.execute("SELECT COUNT(*) AS cnt FROM sessions WHERE portfolio_id = ?", (portfolio["id"],)).fetchone()
+
+    assert first == second
+    assert row["cnt"] == 1
+    db.close()
+
+
 def test_log_estimated_fee_persists_row(db_session):
     db, session_id = db_session
     db.log_estimated_fee(session_id, order_id="abc", estimated_fee=1.23, symbol="BTC/USD", action="BUY")

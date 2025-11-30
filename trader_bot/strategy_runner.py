@@ -399,6 +399,8 @@ class StrategyRunner:
             "detail": detail,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "session_id": self.session_id,
+            "portfolio_id": self.portfolio_id,
+            "run_id": self.run_id,
         }
         self._emit_telemetry(record)
 
@@ -753,30 +755,16 @@ class StrategyRunner:
             
         logger.info(f"{self.exchange_name} Equity: {initial_equity}")
         
-        # Create or load today's trading session (DB still used for logging/IDs)
-        self.session_id = self.db.get_or_create_session(
+        # Create or load the persistent session backing this portfolio (DB still used for logging/IDs)
+        self.session_id = self.db.get_or_create_portfolio_session(
+            portfolio_id=self.portfolio_id,
             starting_balance=initial_equity,
             bot_version=BOT_VERSION,
             base_currency=self.base_currency,
-            portfolio_id=self.portfolio_id,
         )
         self.session = self.db.get_session(self.session_id)
-        try:
-            self.db.set_session_portfolio(self.session_id, self.portfolio_id)
-            # refresh session with portfolio mapping
-            self.session = self.db.get_session(self.session_id)
-        except Exception as exc:
-            logger.debug(f"Could not attach portfolio_id to session {self.session_id}: {exc}")
         self.portfolio_tracker.set_session(self.session_id, portfolio_id=self.portfolio_id)
         self.resync_service.set_session(self.session_id, portfolio_id=self.portfolio_id)
-        # In PAPER mode, reset starting_balance baseline to current equity to avoid mismatch against old sandbox inventories
-        if TRADING_MODE == 'PAPER' and self.session.get('starting_balance') != initial_equity:
-            try:
-                self.db.update_session_starting_balance(self.session_id, initial_equity)
-                self.session['starting_balance'] = initial_equity
-                logger.info(f"Sandbox Mode: Reset starting_balance to current equity ${initial_equity:,.2f}")
-            except Exception as e:
-                logger.warning(f"Could not reset starting_balance for sandbox: {e}")
         
         # Clear any old pending commands from previous sessions
         self.db.clear_old_commands()
@@ -831,8 +819,8 @@ class StrategyRunner:
             logger.info(f"Portfolio Stats Rebuilt: {self.session_stats}")
 
         # Seed risk manager baseline to current equity (no persisted daily baseline)
-        self.risk_manager.seed_start_of_day(initial_equity)
-        
+        self.risk_manager.update_equity(initial_equity)
+
         # No need to reconcile_exchange_state in the old way; we just trust the exchange now.
         # But we might want to log initial positions to DB for debugging.
         live_positions = await self.bot.get_positions_async()
@@ -840,8 +828,6 @@ class StrategyRunner:
         self.db.replace_positions(self.session_id, live_positions, portfolio_id=self.portfolio_id)
         
         self.daily_loss_pct = MAX_DAILY_LOSS_PERCENT
-
-        self.risk_manager.update_equity(initial_equity)
         bot_actions_logger.info(f"💰 Starting Equity: ${initial_equity:,.2f}")
 
     # reconcile_exchange_state removed as we trust exchange data directly now

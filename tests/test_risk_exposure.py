@@ -116,6 +116,15 @@ class TestRiskManager(unittest.TestCase):
         self.assertEqual(kept_qty, 1.0)
         self.assertEqual(kept_overage, 0.0)
 
+    def test_apply_order_value_buffer_handles_zero_price_or_quantity(self):
+        qty, overage = self.rm.apply_order_value_buffer(0.0, 100.0)
+        self.assertEqual(qty, 0.0)
+        self.assertEqual(overage, 0.0)
+
+        qty_zero_price, overage_zero_price = self.rm.apply_order_value_buffer(1.0, 0.0)
+        self.assertEqual(qty_zero_price, 1.0)
+        self.assertEqual(overage_zero_price, 0.0)
+
     def test_get_total_exposure_respects_overrides(self):
         self.rm.update_positions({"BTC/USD": {"quantity": 5.0, "current_price": 30000.0}})
 
@@ -229,6 +238,88 @@ class TestRiskManager(unittest.TestCase):
         result = self.rm.check_trade_allowed("ETH/USD", "BUY", 1.0, price=100.0)
         self.assertFalse(result.allowed)
         self.assertIn("Correlation bucket limit", result.reason)
+
+    def test_correlation_bucket_blocks_pending_buys(self):
+        pending = [{
+            "symbol": "BTC/USD",
+            "side": "buy",
+            "price": 100.0,
+            "amount": 1.0,
+            "remaining": 1.0,
+        }]
+        self.rm.update_pending_orders(pending)
+        result = self.rm.check_trade_allowed("ETH/USD", "BUY", 0.5, price=100.0)
+        self.assertFalse(result.allowed)
+        self.assertIn("Correlation bucket limit", result.reason)
+
+    def test_baseline_exposure_and_pending_offsets(self):
+        rm_with_baseline = RiskManager(ignore_baseline_positions=True)
+        rm_with_baseline.position_baseline = {"BTC/USD": 1.0, "ETH/USD": -1.0}
+        rm_with_baseline.update_positions({
+            "BTC/USD": {"quantity": 1.0, "current_price": 20000.0},
+            "ETH/USD": {"quantity": -2.0, "current_price": 1000.0},
+        })
+        rm_with_baseline.update_pending_orders([
+            {"symbol": "BTC/USD", "side": "buy", "price": 20000.0, "amount": 0.5, "remaining": 0.5},
+            {"symbol": "ETH/USD", "side": "sell", "price": 1000.0, "amount": 1.0, "remaining": 1.0},
+        ])
+
+        exposure = rm_with_baseline.get_total_exposure()
+        # Baseline removes BTC spot exposure, pending buy still adds $10k; ETH short trimmed by sell
+        self.assertAlmostEqual(10000.0, exposure)
+        self.assertEqual(rm_with_baseline._net_quantity_for_exposure(1.0, 1.0), 0.0)
+        self.assertEqual(rm_with_baseline._net_quantity_for_exposure(-2.0, -1.0), -1.0)
+
+    def test_baseline_and_setters_cover_noops(self):
+        rm_with_ignore = RiskManager(ignore_baseline_positions=True)
+        rm_with_ignore.update_positions({"BTC/USD": {"quantity": 2.0, "current_price": 10.0}})
+        self.assertIn("BTC/USD", rm_with_ignore.position_baseline)
+
+        rm_with_ignore.set_position_baseline({})
+        self.assertEqual(rm_with_ignore.position_baseline["BTC/USD"], 2.0)
+
+        rm = RiskManager()
+        rm.seed_start_of_day(None)
+        self.assertIsNone(rm.start_of_day_equity)
+        rm.update_equity(None)
+        self.assertIsNone(rm.start_of_day_equity)
+        self.assertEqual(rm.daily_loss, 0.0)
+
+    def test_pending_order_update_skips_incomplete_rows(self):
+        self.rm.update_pending_orders([
+            {"symbol": "BTC/USD", "side": "buy", "price": 0.0, "amount": 1.0},
+            {"symbol": "ETH/USD", "side": "sell", "price": 2000.0, "amount": 0.0},
+        ])
+        self.assertEqual(self.rm.pending_buy_exposure, 0.0)
+        self.assertEqual(self.rm.pending_orders_by_symbol, {})
+
+    def test_min_trade_size_rejection(self):
+        result = self.rm.check_trade_allowed("SMALL", "BUY", 0.05, price=10.0)
+        self.assertFalse(result.allowed)
+        self.assertIn("below minimum", result.reason)
+
+    def test_sell_projected_exposure_paths(self):
+        self.rm.update_positions({
+            "AAA": {"quantity": 9.0, "current_price": 100.0},
+            "BBB": {"quantity": 0.5, "current_price": 100.0},
+        })
+
+        reduce_result = self.rm.check_trade_allowed("AAA", "SELL", 5.0, price=100.0)
+        self.assertTrue(reduce_result.allowed)
+
+        short_result = self.rm.check_trade_allowed("BBB", "SELL", 5.0, price=100.0)
+        self.assertFalse(short_result.allowed)
+        self.assertIn("Total exposure", short_result.reason)
+
+    def test_bucket_lookup_handles_missing_symbol(self):
+        rm = RiskManager()
+        self.assertIsNone(rm._get_bucket(""))
+        self.assertIsNone(rm._get_bucket("DOGE/USD"))
+
+    def test_net_quantity_for_exposure_sign_edges(self):
+        rm = RiskManager(ignore_baseline_positions=True)
+        self.assertEqual(rm._net_quantity_for_exposure(-1.0, 2.0), -1.0)  # baseline long, short counts fully
+        self.assertEqual(rm._net_quantity_for_exposure(1.0, -1.0), 1.0)  # baseline short, long flips counts
 
 
 if __name__ == "__main__":

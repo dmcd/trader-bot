@@ -19,6 +19,9 @@ Notes on the current session model:
 - [ ] **Schema: make portfolio first-class, session optional**
   - [x] Update table definitions so `portfolio_id` is `NOT NULL` everywhere (fresh DB) and `session_id` is nullable; keep `sessions` table only for compatibility.
   - [ ] Remove `session_stats_cache` creation and session-side fee/trade counters (stats come from `portfolio_stats_cache`); keep compatibility view for tests that still read sessions.
+    - [ ] Drop `session_stats_cache` creation/accessors in `database.py` and migrate callers to portfolio cache.
+    - [ ] Stop incrementing session totals (trades/fees/llm_cost) on writes; rely on portfolio cache and leave `sessions` read-only for legacy metadata.
+    - [ ] Update tests/fixtures to use portfolio stats cache and adjust assertions.
   - [ ] Add a lightweight compatibility shim (view/trigger or DAO guard) to map legacy session writes to portfolio_id during the transition.
   - [x] Ensure legacy session constructors attach/issue a portfolio automatically so inserts satisfy the new `portfolio_id` NOT NULL constraints (used by older tests/helpers).
 - [ ] **Database API: flip to portfolio-first signatures**

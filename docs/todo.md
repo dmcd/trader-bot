@@ -22,9 +22,9 @@ Context: 48 test modules under `tests/`, mixing `unittest` and `pytest`, with no
   - [x] Centralize fake logger/test DB/temp file fixtures in `tests/conftest.py`; remove ad-hoc temp DB setup from individual files in favor of shared fixtures/fixtures using `tmp_path`.
   - [x] Prefer `pytest`-style tests over `unittest.TestCase` where possible (drop `setUp/tearDown` boilerplate, use fixtures and parametrization).
   - [x] Add factories/builders for common payloads (market data points, strategy signals, trade plans) to eliminate repeated dict literals across strategy/runner tests.
-- [ ] Markers and tooling
-  - [ ] Extend `pytest.ini` with markers (`integration`, `contract`, `llm`) and add usage docs to `README.md` or `docs/technical_review.md`.
-  - [ ] Add `tests/README.md` describing layout, how to run fast vs full suites, and conventions for new tests.
+- [x] Markers and tooling
+  - [x] Extend `pytest.ini` with markers (`integration`, `contract`, `llm`) and add usage docs to `README.md` or `docs/technical_review.md`.
+  - [x] Add `tests/README.md` describing layout, how to run fast vs full suites, and conventions for new tests.
 - [ ] CI/test performance
   - [ ] Split CI to run unit suite on every push and integration/contract nightly or on-demand.
   - [ ] Track duration of the slowest tests after the move; target <30s for unit suite by trimming sleeps and using fakes instead of real event-loop waits.

@@ -285,3 +285,105 @@ def test_session_creation_does_not_reuse_on_restart(tmp_path):
     reopened.close()
 
     assert first_session != new_session
+
+
+def test_log_estimated_fee_persists_row(db_session):
+    db, session_id = db_session
+    db.log_estimated_fee(session_id, order_id="abc", estimated_fee=1.23, symbol="BTC/USD", action="BUY")
+
+    cursor = db.conn.cursor()
+    row = cursor.execute("SELECT estimated_fee, action, order_id FROM estimated_fees WHERE session_id = ?", (session_id,)).fetchone()
+    assert row["estimated_fee"] == pytest.approx(1.23)
+    assert row["action"] == "BUY"
+    assert row["order_id"] == "abc"
+
+
+def test_llm_trace_roundtrip_and_prune(db_session):
+    db, session_id = db_session
+    trace_id = db.log_llm_trace(session_id, prompt="p", response="r", decision_json="{}", market_context={"a": 1})
+    db.update_llm_trace_execution(trace_id, {"result": "ok"})
+    traces = db.get_recent_llm_traces(session_id, limit=5)
+    assert traces and traces[0]["id"] == trace_id
+    assert '"result": "ok"' in (traces[0]["execution_result"] or "")
+
+    old_ts = (datetime.now() - timedelta(days=10)).isoformat()
+    db.conn.execute(
+        "INSERT INTO llm_traces (session_id, timestamp, prompt, response, decision_json) VALUES (?, ?, ?, ?, ?)",
+        (session_id, old_ts, "old", "resp", "{}"),
+    )
+    db.conn.commit()
+
+    db.prune_llm_traces(session_id, retention_days=7)
+    remaining = db.get_recent_llm_traces(session_id, limit=10)
+    assert all(t["timestamp"] >= old_ts for t in remaining)
+
+
+def test_recent_llm_stats_counts_flags(db_session):
+    db, session_id = db_session
+    db.log_llm_call(session_id, input_tokens=1, output_tokens=1, cost=0.0, decision="schema_error_missing")
+    db.log_llm_call(session_id, input_tokens=1, output_tokens=1, cost=0.0, decision="clamped_size")
+    db.log_llm_call(session_id, input_tokens=1, output_tokens=1, cost=0.0, decision="ok")
+
+    stats = db.get_recent_llm_stats(session_id, limit=10)
+    assert stats["total"] == 3
+    assert stats["schema_errors"] == 1
+    assert stats["clamped"] == 1
+
+
+def test_session_stats_cache_upsert_and_merge(db_session):
+    db, session_id = db_session
+    db.set_session_stats_cache(session_id, {"total_trades": 2, "gross_pnl": 5.0})
+    db.set_session_stats_cache(session_id, {"total_fees": 1.5})
+
+    cached = db.get_session_stats_cache(session_id)
+    assert cached["total_trades"] == 2
+    assert cached["gross_pnl"] == pytest.approx(5.0)
+    assert cached["total_fees"] == pytest.approx(1.5)
+
+
+def test_command_lifecycle_roundtrip(db_session):
+    db, _ = db_session
+    db.create_command("DO_THIS")
+    pending = db.get_pending_commands()
+    assert pending and pending[0]["command"] == "DO_THIS"
+
+    db.mark_command_executed(pending[0]["id"])
+    executed = db.conn.execute("SELECT status FROM commands WHERE id = ?", (pending[0]["id"],)).fetchone()
+    assert executed["status"] == "executed"
+
+    db.create_command("CANCEL_ME")
+    db.clear_old_commands()
+    statuses = {row["command"]: row["status"] for row in db.conn.execute("SELECT command, status FROM commands")}
+    assert statuses["CANCEL_ME"] == "cancelled"
+
+
+def test_trade_plan_reason_lookup_and_counts(db_session):
+    db, session_id = db_session
+    plan_id = db.create_trade_plan(
+        session_id,
+        symbol="BTC/USD",
+        side="long",
+        entry_price=100.0,
+        stop_price=None,
+        target_price=None,
+        size=1.0,
+        reason="entry",
+        entry_order_id="OID-1",
+        entry_client_order_id="CID-1",
+    )
+    reason_by_order = db.get_trade_plan_reason_by_order(session_id, order_id="OID-1")
+    reason_by_client = db.get_trade_plan_reason_by_order(session_id, client_order_id="CID-1")
+    count = db.count_open_trade_plans_for_symbol(session_id, "BTC/USD")
+
+    assert reason_by_order == "entry"
+    assert reason_by_client == "entry"
+    assert count == 1
+
+
+def test_start_of_day_equity_uses_cache_when_risk_state_missing(db_session):
+    db, session_id = db_session
+    db.set_session_stats_cache(session_id, {"start_of_day_equity": 321.0})
+    db.conn.execute("DELETE FROM risk_state WHERE session_id = ?", (session_id,))
+    db.conn.commit()
+
+    assert db.get_start_of_day_equity(session_id) == pytest.approx(321.0)

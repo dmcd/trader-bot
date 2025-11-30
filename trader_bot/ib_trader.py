@@ -56,6 +56,7 @@ class IBTrader(BaseTrader):
         fx_cache_ttl: float = 30.0,
         equity_tick_size: float = IB_EQUITY_TICK_SIZE,
         fx_tick_size: float = IB_FX_TICK_SIZE,
+        marketable_slippage_pct: float = 0.25,
         order_wait_timeout: float = 5.0,
         order_poll_interval: float = 0.25,
         reconnect_backoff_base: float = 1.0,
@@ -84,6 +85,7 @@ class IBTrader(BaseTrader):
         self.fx_cache_ttl = fx_cache_ttl
         self.equity_tick_size = equity_tick_size
         self.fx_tick_size = fx_tick_size
+        self.marketable_slippage_pct = max(0.0, marketable_slippage_pct)
         self.order_wait_timeout = order_wait_timeout
         self.order_poll_interval = order_poll_interval
         self.reconnect_backoff_base = reconnect_backoff_base
@@ -332,14 +334,24 @@ class IBTrader(BaseTrader):
         client_order_id = f"{CLIENT_ORDER_PREFIX}-{int(time.time() * 1000)}"
 
         limit_price: float | None = None
-        if not force_market:
-            md = await self.get_market_data_async(spec.symbol)
-            limit_price = self._compute_limit_price(md, side, prefer_maker)
-            if limit_price is None:
-                logger.error(f"Missing price data to place IB limit order for {symbol}")
-                return None
+        md: dict[str, Any] | None = None
+        market_order_allowed = self._market_order_allowed(spec)
+        use_market_order = force_market and market_order_allowed
 
-        order = MarketOrder(side, quantity) if force_market else LimitOrder(side, quantity, limit_price)
+        if not use_market_order:
+            md = await self.get_market_data_async(spec.symbol)
+            if force_market and not market_order_allowed:
+                limit_price = self._compute_marketable_limit_price(md, side)
+                if limit_price is None:
+                    logger.error(f"Missing price data to place IB marketable limit order for {symbol}")
+                    return None
+            else:
+                limit_price = self._compute_limit_price(md, side, prefer_maker)
+                if limit_price is None:
+                    logger.error(f"Missing price data to place IB limit order for {symbol}")
+                    return None
+
+        order = MarketOrder(side, quantity) if use_market_order else LimitOrder(side, quantity, limit_price)
         order.orderRef = client_order_id
         order.tif = getattr(order, "tif", None) or "DAY"
 
@@ -933,6 +945,47 @@ class IBTrader(BaseTrader):
         if instrument_type == "STK":
             return self.equity_tick_size
         return None
+
+    @staticmethod
+    def _market_order_allowed(spec) -> bool:
+        """
+        Heuristic to determine whether a true market order is permitted for the contract.
+
+        ASX equities commonly disallow pure market orders; FX is safe to treat as marketable.
+        """
+        instrument_type = getattr(spec, "instrument_type", None)
+        if instrument_type == "FX":
+            return True
+        if instrument_type == "STK":
+            return False
+        return False
+
+    def _compute_marketable_limit_price(self, md: Optional[Dict[str, Any]], side: str) -> float | None:
+        """
+        Derive an aggressive limit price that should execute immediately even when
+        true market orders are disallowed (e.g., ASX stocks).
+        """
+        if not md:
+            return None
+        bid = md.get("bid")
+        ask = md.get("ask")
+        price = md.get("price") or md.get("close")
+        instrument_type = md.get("instrument_type")
+        tick_size = md.get("tick_size") or self._tick_size_for(instrument_type)
+
+        bump_pct = self.marketable_slippage_pct
+        if bump_pct <= 0:
+            bump_pct = 0.01
+        bump_factor = 1 + (bump_pct / 100.0)
+
+        ref = ask if side == "BUY" else bid
+        if ref is None:
+            ref = price
+        if ref is None:
+            return None
+
+        raw = ref * bump_factor if side == "BUY" else ref / bump_factor
+        return self._apply_tick_size(raw, tick_size, side, prefer_maker=False)
 
     def _compute_limit_price(self, md: Optional[Dict[str, Any]], side: str, prefer_maker: bool) -> float | None:
         if not md:

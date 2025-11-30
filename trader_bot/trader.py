@@ -23,7 +23,7 @@ class BaseTrader(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def place_order_async(self, symbol, action, quantity):
+    async def place_order_async(self, symbol, action, quantity, prefer_maker: bool = True, force_market: bool = False):
         raise NotImplementedError
 
     @abstractmethod

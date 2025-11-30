@@ -202,7 +202,7 @@ class GeminiTrader(BaseTrader):
             logger.error(f"Error fetching Gemini ticker for {symbol}: {e}")
             return None
 
-    async def place_order_async(self, symbol, action, quantity, prefer_maker=True):
+    async def place_order_async(self, symbol, action, quantity, prefer_maker=True, force_market: bool = False):
         """Places a limit order. Gemini requires limit orders; prefer maker when requested, fallback to taker."""
         if not self.connected:
             return None
@@ -224,6 +224,9 @@ class GeminiTrader(BaseTrader):
 
             bid = ticker.get('bid') or ticker.get('last')
             ask = ticker.get('ask') or ticker.get('last')
+
+            if force_market:
+                prefer_maker = False
 
             def compute_price(post_only: bool):
                 if post_only:

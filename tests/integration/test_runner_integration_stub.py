@@ -29,8 +29,8 @@ class StubBot:
             "spread_pct": 0.5,
         }
 
-    async def place_order_async(self, symbol, action, qty, prefer_maker=True):
-        self.place_calls.append((symbol, action, qty, prefer_maker))
+    async def place_order_async(self, symbol, action, qty, prefer_maker=True, force_market: bool = False):
+        self.place_calls.append((symbol, action, qty, prefer_maker, force_market))
         return {"order_id": f"{len(self.place_calls)}", "liquidity": "maker"}
 
 

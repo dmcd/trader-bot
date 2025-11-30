@@ -547,6 +547,28 @@ async def test_place_order_allows_market_when_requested():
 
 
 @pytest.mark.asyncio
+async def test_force_market_falls_back_to_marketable_limit_for_equities():
+    fake_ib = FakeIB(
+        connected=True,
+        market_data={"BHPAUD": FakeTicker(price=100.0, bid=99.9, ask=100.1)},
+        order_statuses={
+            "BHPAUD": [
+                FakeOrderStatus("Filled", filled=10, remaining=0, avg_fill_price=99.7, order_id=24),
+            ]
+        },
+    )
+    trader = IBTrader(ib_client=fake_ib, order_wait_timeout=0.3, equity_tick_size=0.01)
+    trader.connected = True
+
+    result = await trader.place_order_async("BHP/AUD", "SELL", 10, prefer_maker=False, force_market=True)
+
+    order_obj = fake_ib.place_order_calls[0]["order"]
+    assert order_obj.__class__.__name__ == "LimitOrder"
+    assert order_obj.lmtPrice == pytest.approx(99.65)
+    assert result["status"] == "filled"
+
+
+@pytest.mark.asyncio
 async def test_place_order_times_out_with_partial_status():
     fake_ib = FakeIB(
         connected=True,

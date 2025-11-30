@@ -22,8 +22,8 @@ class StubBot:
         self.calls.append(("market", symbol))
         return {"symbol": symbol, "price": 123}
 
-    async def place_order_async(self, symbol, side, quantity):
-        self.calls.append(("order", symbol, side, quantity))
+    async def place_order_async(self, symbol, side, quantity, prefer_maker: bool = True, force_market: bool = False):
+        self.calls.append(("order", symbol, side, quantity, prefer_maker, force_market))
         return {"id": "order-1", "symbol": symbol, "side": side, "qty": quantity}
 
 
@@ -49,8 +49,8 @@ async def test_server_routes_calls_through_bot():
     assert quote["symbol"] == "BTC/USD"
     assert buy["side"] == "BUY"
     assert sell["side"] == "SELL"
-    assert ("order", "ETH/USD", "BUY", 1.5) in bot.calls
-    assert ("order", "ETH/USD", "SELL", 1.0) in bot.calls
+    assert ("order", "ETH/USD", "BUY", 1.5, True, False) in bot.calls
+    assert ("order", "ETH/USD", "SELL", 1.0, True, False) in bot.calls
 
 
 @pytest.mark.asyncio

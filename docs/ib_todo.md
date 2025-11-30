@@ -52,10 +52,10 @@
      - [x] Wire heuristics into order pre-checks and market data sanity checks.
      - [x] Add config entries and docstrings for new knobs; include AUD-specific defaults.
      - [x] Add unit tests covering widening spreads and illiquid books for both equities and FX.
-   - [ ] Update auto-flatten and plan-monitor exits to prefer marketable limit orders when IB disallows true market for certain contracts.
-     - [ ] Detect contracts where market orders are disallowed and derive a slippage bump for marketable limits.
-     - [ ] Update `PlanMonitor` exit path and any auto-flatten helpers to use the marketable limit flow.
-     - [ ] Add regression tests for flatten/exits choosing limit with slippage bump on IB.
+   - [x] Update auto-flatten and plan-monitor exits to prefer marketable limit orders when IB disallows true market for certain contracts.
+     - [x] Detect contracts where market orders are disallowed and derive a slippage bump for marketable limits.
+     - [x] Update `PlanMonitor` exit path and any auto-flatten helpers to use the marketable limit flow.
+     - [x] Add regression tests for flatten/exits choosing limit with slippage bump on IB.
 
 6) **Strategy Runner & Services Wiring**
    - [x] Switch `StrategyRunner` exchange selection to instantiate `IBTrader` when `ACTIVE_EXCHANGE=IB`; pass adapter exchange object (if any) into `DataFetchCoordinator` or stub a ccxt-like wrapper for tooling.

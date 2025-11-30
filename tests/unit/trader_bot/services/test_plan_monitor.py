@@ -151,6 +151,42 @@ async def test_closes_when_flat_and_no_symbol_orders():
 
 
 @pytest.mark.asyncio
+async def test_plan_monitor_requests_marketable_exit():
+    now = datetime.now(timezone.utc)
+    db = StubDB(
+        plans=[
+            {
+                "id": 13,
+                "symbol": "BHP/AUD",
+                "side": "BUY",
+                "entry_price": 100.0,
+                "stop_price": 95.0,
+                "target_price": 110.0,
+                "size": 5.0,
+                "opened_at": now.isoformat(),
+            }
+        ]
+    )
+    bot = AsyncMock()
+    bot.place_order_async = AsyncMock(return_value={"order_id": "13", "liquidity": "taker"})
+    monitor, _ = _monitor_with(db, risk_manager=StubRiskManager({"BHP/AUD": {"quantity": 5.0}}), bot=bot)
+    config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=None, trail_to_breakeven_pct=0.02)
+
+    await monitor.monitor(
+        session_id=1,
+        price_lookup={"BHP/AUD": 111.0},
+        open_orders=[],
+        config=config,
+        now=now,
+    )
+
+    bot.place_order_async.assert_awaited_once()
+    kwargs = bot.place_order_async.call_args.kwargs
+    assert kwargs["force_market"] is True
+    assert kwargs["prefer_maker"] is False
+
+
+@pytest.mark.asyncio
 async def test_handles_db_failure_gracefully(caplog):
     class FailingDB(StubDB):
         def get_open_trade_plans(self, session_id):

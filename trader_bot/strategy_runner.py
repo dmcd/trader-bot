@@ -906,7 +906,13 @@ class StrategyRunner:
                 try:
                     data = await self.bot.get_market_data_async(symbol)
                     price = data.get('price', 0) if data else 0
-                    result = await self.bot.place_order_async(symbol, 'SELL', quantity, prefer_maker=False)
+                    result = await self.bot.place_order_async(
+                        symbol,
+                        'SELL',
+                        quantity,
+                        prefer_maker=False,
+                        force_market=True,
+                    )
                     if result:
                         fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, 'SELL', liquidity=result.get('liquidity', 'taker'))
                         realized_pnl = self._update_holdings_and_realized(symbol, 'SELL', quantity, price, fee)

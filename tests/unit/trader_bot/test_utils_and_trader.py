@@ -23,8 +23,15 @@ class StubTrader(BaseTrader):
     async def get_market_data_async(self, symbol):
         return {"symbol": symbol}
 
-    async def place_order_async(self, symbol, action, quantity):
-        return {"order_id": "1", "symbol": symbol, "action": action, "qty": quantity}
+    async def place_order_async(self, symbol, action, quantity, prefer_maker: bool = True, force_market: bool = False):
+        return {
+            "order_id": "1",
+            "symbol": symbol,
+            "action": action,
+            "qty": quantity,
+            "prefer_maker": prefer_maker,
+            "force_market": force_market,
+        }
 
     async def get_equity_async(self):
         return 0.0

@@ -209,9 +209,8 @@ class PlanMonitor:
                     try:
                         action = "SELL" if side == "BUY" else "BUY"
                         bot_actions_logger.info(f"🏁 Closing plan {plan_id}: {reason}")
-                        prefer_maker = self.prefer_maker(plan["symbol"])
                         order_result = await self.bot.place_order_async(
-                            plan["symbol"], action, size, prefer_maker=prefer_maker
+                            plan["symbol"], action, size, prefer_maker=False, force_market=True
                         )
                         liquidity_tag = order_result.get("liquidity", "taker") if order_result else "taker"
                         fee = self.cost_tracker.calculate_trade_fee(

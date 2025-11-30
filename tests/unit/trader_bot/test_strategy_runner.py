@@ -1198,7 +1198,7 @@ async def test_runner_places_order_and_records_execution():
     sig = make_strategy_signal(action="BUY", quantity=0.1, symbol="BTC/USD")
     runner = _build_runner(sig, execute_orders=True)
     await asyncio.wait_for(runner.run_loop(max_loops=1), timeout=5)
-    assert runner.bot.place_calls == [("BTC/USD", "BUY", 0.1, True)]
+    assert runner.bot.place_calls == [("BTC/USD", "BUY", 0.1, True, False)]
     assert runner.strategy.executions == 1
 
 
@@ -1209,6 +1209,36 @@ async def test_runner_skips_sell_when_price_missing():
     runner.bot = FakeBot(price=0.0, bid=0.0, ask=0.0, spread_pct=0.01, bid_size=1.0, ask_size=1.0)
     await asyncio.wait_for(runner.run_loop(max_loops=1), timeout=5)
     assert runner.bot.place_calls == []
+
+
+@pytest.mark.asyncio
+async def test_flatten_helper_requests_marketable_orders():
+    class StubDB:
+        def __init__(self):
+            self.trades = []
+
+        def get_positions(self, session_id):
+            return [{"symbol": "BHP/AUD", "quantity": 10.0}]
+
+        def log_trade(self, *args, **kwargs):
+            self.trades.append((args, kwargs))
+
+    runner = StrategyRunner(execute_orders=False)
+    runner.session_id = 1
+    runner.db = StubDB()
+    runner.bot = AsyncMock()
+    runner.bot.get_market_data_async = AsyncMock(return_value={"price": 100.0})
+    runner.bot.place_order_async = AsyncMock(return_value={"order_id": "1", "liquidity": "taker"})
+    runner.cost_tracker = MagicMock()
+    runner.cost_tracker.calculate_trade_fee.return_value = 0.0
+    runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
+
+    await runner._close_all_positions_safely()
+
+    runner.bot.place_order_async.assert_awaited_once()
+    kwargs = runner.bot.place_order_async.call_args.kwargs
+    assert kwargs["force_market"] is True
+    assert kwargs["prefer_maker"] is False
 
 
 @pytest.mark.asyncio

@@ -741,6 +741,7 @@ class StrategyRunner:
             starting_balance=initial_equity,
             bot_version=BOT_VERSION,
             base_currency=self.base_currency,
+            portfolio_id=self.portfolio_id,
         )
         self.session = self.db.get_session(self.session_id)
         try:

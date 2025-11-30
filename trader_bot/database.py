@@ -387,6 +387,10 @@ class TradingDatabase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_bot_version ON sessions(bot_version)")
         except Exception as e:
             logger.warning(f"Could not create non-unique index on bot_version: {e}")
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_portfolio ON sessions(portfolio_id)")
+        except Exception as exc:
+            logger.debug(f"Could not create index on sessions.portfolio_id: {exc}")
 
         # Backfill new columns for existing deployments
         try:
@@ -429,6 +433,31 @@ class TradingDatabase:
         cursor.execute("SELECT portfolio_id FROM sessions WHERE id = ?", (session_id,))
         row = cursor.fetchone()
         return row["portfolio_id"] if row else None
+
+    def backfill_session_portfolios(self) -> int:
+        """
+        For legacy sessions without portfolio_id, create portfolios keyed by bot_version/date
+        and attach them. Returns number of sessions updated.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT id, bot_version, date, base_currency FROM sessions WHERE portfolio_id IS NULL"
+        )
+        rows = cursor.fetchall()
+        updated = 0
+        for row in rows:
+            name = f"{row['bot_version'] or 'legacy'}-{row['date']}"
+            portfolio = self.get_or_create_portfolio(
+                name=name,
+                base_currency=row["base_currency"],
+                bot_version=row["bot_version"],
+            )
+            try:
+                self.set_session_portfolio(row["id"], portfolio["id"])
+                updated += 1
+            except Exception as exc:
+                logger.warning(f"Could not attach portfolio to session {row['id']}: {exc}")
+        return updated
 
     def get_portfolio(self, portfolio_id: int) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()
@@ -568,31 +597,34 @@ class TradingDatabase:
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def get_processed_trade_ids(self, session_id: int) -> set[str]:
-        """Return trade_ids already seen for this session."""
+    def get_processed_trade_ids(self, session_id: int = None, portfolio_id: int = None) -> set[str]:
+        """Return trade_ids already seen for this session/portfolio."""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT trade_id FROM processed_trades WHERE session_id = ?", (session_id,))
+        if portfolio_id is not None:
+            cursor.execute("SELECT trade_id FROM processed_trades WHERE portfolio_id = ?", (portfolio_id,))
+        else:
+            cursor.execute("SELECT trade_id FROM processed_trades WHERE session_id = ?", (session_id,))
         return {row["trade_id"] for row in cursor.fetchall() if row["trade_id"]}
 
-    def record_processed_trade_ids(self, session_id: int, entries: List[tuple[str, Optional[str]]]):
+    def record_processed_trade_ids(self, session_id: int, entries: List[tuple[str, Optional[str]]], portfolio_id: int | None = None):
         """Persist processed trade ids to avoid reprocessing across restarts."""
         if not entries:
             return
-        payload = [(session_id, trade_id, client_oid) for trade_id, client_oid in entries if trade_id]
+        payload = [(session_id, portfolio_id, trade_id, client_oid) for trade_id, client_oid in entries if trade_id]
         if not payload:
             return
         cursor = self.conn.cursor()
         cursor.executemany(
             """
-            INSERT OR IGNORE INTO processed_trades (session_id, trade_id, client_order_id)
-            VALUES (?, ?, ?)
+            INSERT OR IGNORE INTO processed_trades (session_id, portfolio_id, trade_id, client_order_id)
+            VALUES (?, ?, ?, ?)
             """,
             payload,
         )
         self.conn.commit()
     
     def log_trade(self, session_id: int, symbol: str, action: str, 
-                  quantity: float, price: float, fee: float, reason: str = "", liquidity: str = "unknown", realized_pnl: float = 0.0, trade_id: str = None, timestamp: str = None):
+                  quantity: float, price: float, fee: float, reason: str = "", liquidity: str = "unknown", realized_pnl: float = 0.0, trade_id: str = None, timestamp: str = None, portfolio_id: int | None = None):
         """Log a trade to the database."""
         cursor = self.conn.cursor()
         
@@ -606,9 +638,9 @@ class TradingDatabase:
         ts = timestamp if timestamp else datetime.now().isoformat()
 
         cursor.execute("""
-            INSERT INTO trades (session_id, timestamp, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, ts, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id))
+            INSERT INTO trades (session_id, portfolio_id, timestamp, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, portfolio_id or self.get_session_portfolio_id(session_id), ts, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id))
         
         # Update session trade count and fees
         cursor.execute("""
@@ -775,16 +807,16 @@ class TradingDatabase:
     def log_market_data(self, session_id: int, symbol: str, price: float | int | None,
                        bid: float | int | None, ask: float | int | None, volume: float | int | None = None,
                        spread_pct: float | int | None = None, bid_size: float | int | None = None,
-                       ask_size: float | int | None = None, ob_imbalance: float | int | None = None):
+                       ask_size: float | int | None = None, ob_imbalance: float | int | None = None, portfolio_id: int | None = None):
         """Log market data snapshot."""
         volume = self._preserve_integer_if_whole(volume)
         bid_size = self._preserve_integer_if_whole(bid_size)
         ask_size = self._preserve_integer_if_whole(ask_size)
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO market_data (session_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, datetime.now().isoformat(), symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance))
+            INSERT INTO market_data (session_id, portfolio_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, portfolio_id or self.get_session_portfolio_id(session_id), datetime.now().isoformat(), symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance))
         self.conn.commit()
 
     def prune_market_data(self, session_id: int, retention_minutes: int):
@@ -799,26 +831,41 @@ class TradingDatabase:
         )
         self.conn.commit()
     
-    def get_recent_trades(self, session_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_recent_trades(self, session_id: int | None = None, limit: int = 10, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
         """Get recent trades for context."""
         cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT * FROM trades 
-            WHERE session_id = ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-        """, (session_id, limit))
+        if portfolio_id is not None:
+            cursor.execute("""
+                SELECT * FROM trades 
+                WHERE portfolio_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (portfolio_id, limit))
+        else:
+            cursor.execute("""
+                SELECT * FROM trades 
+                WHERE session_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (session_id, limit))
         
         return [dict(row) for row in cursor.fetchall()]
 
-    def get_trades_for_session(self, session_id: int) -> List[Dict[str, Any]]:
-        """Get all trades for a session ordered chronologically."""
+    def get_trades_for_session(self, session_id: int, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
+        """Get all trades for a session or portfolio ordered chronologically."""
         cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT * FROM trades 
-            WHERE session_id = ?
-            ORDER BY timestamp ASC
-        """, (session_id,))
+        if portfolio_id is not None:
+            cursor.execute("""
+                SELECT * FROM trades 
+                WHERE portfolio_id = ?
+                ORDER BY timestamp ASC
+            """, (portfolio_id,))
+        else:
+            cursor.execute("""
+                SELECT * FROM trades 
+                WHERE session_id = ?
+                ORDER BY timestamp ASC
+            """, (session_id,))
         return [dict(row) for row in cursor.fetchall()]
     
     def get_recent_market_data(self, session_id: int, symbol: str, limit: int = 100, before_timestamp: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -847,16 +894,16 @@ class TradingDatabase:
             row["ask_size"] = self._preserve_integer_if_whole(row.get("ask_size"))
         return rows
 
-    def log_equity_snapshot(self, session_id: int, equity: float):
+    def log_equity_snapshot(self, session_id: int, equity: float, portfolio_id: int | None = None):
         """Log mark-to-market equity snapshot."""
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO equity_snapshots (session_id, timestamp, equity)
-            VALUES (?, ?, ?)
-        """, (session_id, datetime.now().isoformat(), equity))
+            INSERT INTO equity_snapshots (session_id, portfolio_id, timestamp, equity)
+            VALUES (?, ?, ?, ?)
+        """, (session_id, portfolio_id or self.get_session_portfolio_id(session_id), datetime.now().isoformat(), equity))
         self.conn.commit()
 
-    def log_ohlcv_batch(self, session_id: int, symbol: str, timeframe: str, bars: List[Dict[str, Any]]):
+    def log_ohlcv_batch(self, session_id: int, symbol: str, timeframe: str, bars: List[Dict[str, Any]], portfolio_id: int | None = None):
         """Persist a batch of OHLCV bars for a symbol/timeframe."""
         if not bars:
             return
@@ -874,6 +921,7 @@ class TradingDatabase:
                     ts_iso = str(ts)
                 records.append((
                     session_id,
+                    portfolio_id or self.get_session_portfolio_id(session_id),
                     ts_iso,
                     symbol,
                     timeframe,
@@ -888,8 +936,8 @@ class TradingDatabase:
         if not records:
             return
         cursor.executemany("""
-            INSERT INTO ohlcv_bars (session_id, timestamp, symbol, timeframe, open, high, low, close, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO ohlcv_bars (session_id, portfolio_id, timestamp, symbol, timeframe, open, high, low, close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, records)
         self.conn.commit()
 
@@ -1022,16 +1070,18 @@ class TradingDatabase:
         )
         self.conn.commit()
 
-    def replace_positions(self, session_id: int, positions: List[Dict[str, Any]]):
+    def replace_positions(self, session_id: int, positions: List[Dict[str, Any]], portfolio_id: int | None = None):
         """Replace stored positions snapshot for the session."""
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM positions WHERE session_id = ?", (session_id,))
+        portfolio_ref = portfolio_id or self.get_session_portfolio_id(session_id)
         for pos in positions:
             cursor.execute("""
-                INSERT INTO positions (session_id, symbol, quantity, avg_price, exchange_timestamp)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO positions (session_id, portfolio_id, symbol, quantity, avg_price, exchange_timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 session_id,
+                portfolio_ref,
                 pos.get('symbol'),
                 pos.get('quantity', 0),
                 pos.get('avg_price'),
@@ -1039,25 +1089,33 @@ class TradingDatabase:
             ))
         self.conn.commit()
 
-    def get_positions(self, session_id: int) -> List[Dict[str, Any]]:
-        """Return last stored positions for the session."""
+    def get_positions(self, session_id: int = None, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
+        """Return last stored positions for the session/portfolio."""
         cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT * FROM positions 
-            WHERE session_id = ?
-        """, (session_id,))
+        if portfolio_id is not None:
+            cursor.execute("""
+                SELECT * FROM positions 
+                WHERE portfolio_id = ?
+            """, (portfolio_id,))
+        else:
+            cursor.execute("""
+                SELECT * FROM positions 
+                WHERE session_id = ?
+            """, (session_id,))
         return [dict(row) for row in cursor.fetchall()]
 
-    def replace_open_orders(self, session_id: int, orders: List[Dict[str, Any]]):
+    def replace_open_orders(self, session_id: int, orders: List[Dict[str, Any]], portfolio_id: int | None = None):
         """Replace stored open orders snapshot for the session."""
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM open_orders WHERE session_id = ?", (session_id,))
+        portfolio_ref = portfolio_id or self.get_session_portfolio_id(session_id)
         for order in orders:
             cursor.execute("""
-                INSERT INTO open_orders (session_id, order_id, symbol, side, price, amount, remaining, status, exchange_timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO open_orders (session_id, portfolio_id, order_id, symbol, side, price, amount, remaining, status, exchange_timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 session_id,
+                portfolio_ref,
                 order.get('order_id'),
                 order.get('symbol'),
                 order.get('side'),
@@ -1069,13 +1127,19 @@ class TradingDatabase:
             ))
         self.conn.commit()
 
-    def get_open_orders(self, session_id: int) -> List[Dict[str, Any]]:
-        """Return last stored open orders for the session."""
+    def get_open_orders(self, session_id: int = None, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
+        """Return last stored open orders for the session/portfolio."""
         cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT * FROM open_orders 
-            WHERE session_id = ?
-        """, (session_id,))
+        if portfolio_id is not None:
+            cursor.execute("""
+                SELECT * FROM open_orders 
+                WHERE portfolio_id = ?
+            """, (portfolio_id,))
+        else:
+            cursor.execute("""
+                SELECT * FROM open_orders 
+                WHERE session_id = ?
+            """, (session_id,))
         return [dict(row) for row in cursor.fetchall()]
 
     def get_net_positions_from_trades(self, session_id: int) -> Dict[str, float]:

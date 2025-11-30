@@ -191,6 +191,40 @@ def test_portfolio_stats_cache_roundtrip(tmp_path):
     db.close()
 
 
+def test_session_portfolio_backfill(tmp_path):
+    db_path = tmp_path / "session-backfill.db"
+    db = TradingDatabase(str(db_path))
+    cursor = db.conn.cursor()
+    cursor.execute(
+        "INSERT INTO sessions (date, bot_version, starting_balance, base_currency) VALUES (?, ?, ?, ?)",
+        ("2024-01-01", "v1", 1000.0, "USD"),
+    )
+    session_id = cursor.lastrowid
+    db.conn.commit()
+
+    updated = db.backfill_session_portfolios()
+    portfolio_id = db.get_session_portfolio_id(session_id)
+
+    assert updated == 1
+    assert portfolio_id is not None
+    portfolio = db.get_portfolio(portfolio_id)
+    assert portfolio["bot_version"] == "v1"
+    db.close()
+
+
+def test_log_trade_sets_portfolio_id(tmp_path):
+    db_path = tmp_path / "portfolio-trade.db"
+    db = TradingDatabase(str(db_path))
+    portfolio = db.get_or_create_portfolio("active", base_currency="usd", bot_version="v1")
+    session_id = db.get_or_create_session(starting_balance=1000.0, bot_version="v1", base_currency="usd", portfolio_id=portfolio["id"])
+
+    db.log_trade(session_id, "BTC/USD", "BUY", 0.1, 20000.0, fee=0.5, portfolio_id=portfolio["id"])
+    row = db.conn.execute("SELECT portfolio_id FROM trades WHERE session_id = ?", (session_id,)).fetchone()
+
+    assert row["portfolio_id"] == portfolio["id"]
+    db.close()
+
+
 def test_market_data_preserves_integer_sizes(db_session):
     db, session_id = db_session
     db.log_market_data(

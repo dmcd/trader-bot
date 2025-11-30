@@ -95,8 +95,11 @@ class FakeDB:
         return {}
 
 
-def load_dashboard(monkeypatch, tmp_path):
-    sys.modules.pop("trader_bot.dashboard", None)
+@pytest.fixture(scope="module")
+def dashboard_module(tmp_path_factory):
+    """Load the dashboard module once with patched dependencies to avoid repeated imports."""
+    tmp_path = tmp_path_factory.mktemp("dashboard_module")
+    monkeypatch = pytest.MonkeyPatch()
     dummy_streamlit = DummyContext()
     fake_db_module = types.SimpleNamespace(TradingDatabase=FakeDB)
     fake_subprocess = types.SimpleNamespace(
@@ -105,17 +108,21 @@ def load_dashboard(monkeypatch, tmp_path):
         Popen=lambda *args, **kwargs: None,
     )
 
+    sys.modules.pop("trader_bot.dashboard", None)
     monkeypatch.setitem(sys.modules, "streamlit", dummy_streamlit)
     monkeypatch.setitem(sys.modules, "trader_bot.database", fake_db_module)
     monkeypatch.setitem(sys.modules, "subprocess", fake_subprocess)
     monkeypatch.chdir(tmp_path)
 
     module = importlib.import_module("trader_bot.dashboard")
-    return module
+    yield module
+
+    monkeypatch.undo()
+    sys.modules.pop("trader_bot.dashboard", None)
 
 
-def test_format_ratio_badge_and_health_summary(monkeypatch, tmp_path):
-    dashboard = load_dashboard(monkeypatch, tmp_path)
+def test_format_ratio_badge_and_health_summary(dashboard_module):
+    dashboard = dashboard_module
 
     assert "High" in dashboard.format_ratio_badge(30)
     assert dashboard.format_ratio_badge(None) is None
@@ -124,8 +131,8 @@ def test_format_ratio_badge_and_health_summary(monkeypatch, tmp_path):
     assert dashboard.summarize_health_detail("") == ""
 
 
-def test_calculate_pnl_shapes_positions(monkeypatch, tmp_path):
-    dashboard = load_dashboard(monkeypatch, tmp_path)
+def test_calculate_pnl_shapes_positions(dashboard_module):
+    dashboard = dashboard_module
     ts0 = datetime.now(timezone.utc)
     ts1 = ts0 + timedelta(seconds=60)
     df = pd.DataFrame(

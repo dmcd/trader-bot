@@ -23,6 +23,12 @@ def _fake_response(text):
     return resp
 
 
+def _reset_prompt_cache():
+    for attr in ("_prompt_template_cache", "_system_prompt_cache"):
+        if hasattr(LLMStrategy, attr):
+            delattr(LLMStrategy, attr)
+
+
 def test_fees_too_high(strategy_env):
     strategy = strategy_env.strategy
     stats_high = {"gross_pnl": 100, "total_fees": 60}
@@ -39,6 +45,13 @@ def test_chop_filter(strategy_env):
 
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 70}
     assert strategy._is_choppy("BTC/USD", {}, [{"price": 100}] * 20) is False
+
+
+def test_chop_filter_handles_short_series_and_errors(strategy_env):
+    strategy = strategy_env.strategy
+    assert strategy._is_choppy("BTC/USD", {}, [{"price": 100}] * 5) is False
+    strategy_env.ta.calculate_indicators.side_effect = RuntimeError("boom")
+    assert strategy._is_choppy("BTC/USD", {}, [{"price": 100}] * 25) is False
 
 
 @pytest.mark.asyncio
@@ -455,6 +468,106 @@ async def test_null_symbol_validation(strategy_env, set_loop_time):
     assert signal.symbol is None
 
 
+@pytest.mark.asyncio
+async def test_generate_signal_plan_management_actions(strategy_env, set_loop_time):
+    strategy = strategy_env.strategy
+    set_loop_time(1500)
+    strategy.last_trade_ts = 0
+    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
+    update_decision = json.dumps(
+        {
+            "action": "UPDATE_PLAN",
+            "symbol": "BTC/USD",
+            "quantity": 0,
+            "reason": "tighten",
+            "plan_id": 5,
+            "stop_price": 95,
+            "target_price": 105,
+            "size_factor": 0.8,
+        }
+    )
+    with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
+        mock_llm.return_value = (update_decision, 99)
+        signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+    assert signal.action == "UPDATE_PLAN"
+    assert signal.plan_id == 5
+    assert signal.stop_price == 95
+    assert signal.target_price == 105
+    assert signal.trace_id == 99
+    assert signal.size_factor == 0.8
+
+
+@pytest.mark.asyncio
+async def test_generate_signal_partial_and_close_actions(strategy_env, set_loop_time):
+    strategy = strategy_env.strategy
+    set_loop_time(1500)
+    strategy.last_trade_ts = 0
+    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
+    partial_json = json.dumps(
+        {
+            "action": "PARTIAL_CLOSE",
+            "symbol": "BTC/USD",
+            "quantity": 0,
+            "reason": "trim",
+            "plan_id": 7,
+            "close_fraction": 0.25,
+        }
+    )
+    with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
+        mock_llm.return_value = (partial_json, 101)
+        partial_signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+    assert partial_signal.action == "PARTIAL_CLOSE"
+    assert partial_signal.plan_id == 7
+    assert partial_signal.close_fraction == 0.25
+    assert partial_signal.trace_id == 101
+
+    set_loop_time(1510)
+    close_json = json.dumps(
+        {"action": "CLOSE_POSITION", "symbol": "BTC/USD", "quantity": 0, "reason": "exit now"}
+    )
+    with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
+        mock_llm.return_value = (close_json, 202)
+        close_signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+    assert close_signal.action == "CLOSE_POSITION"
+    assert close_signal.symbol == "BTC/USD"
+    assert close_signal.trace_id == 202
+
+
+@pytest.mark.asyncio
+async def test_break_glass_allows_trade_during_cooldown(strategy_env, set_loop_time):
+    strategy = strategy_env.strategy
+    set_loop_time(4000)
+    strategy.last_trade_ts = 3985
+    strategy._last_break_glass = 0
+    strategy._priority_signal = MagicMock(return_value=True)
+    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
+    buy_decision = json.dumps(
+        {"action": "BUY", "symbol": "BTC/USD", "quantity": 0.1, "reason": "break glass", "stop_price": 98, "target_price": 102}
+    )
+    with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
+        mock_llm.return_value = (buy_decision, 303)
+        signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+    assert signal.action == "BUY"
+    assert strategy._last_break_glass == 4000
+    assert signal.trace_id == 303
+
+
+@pytest.mark.asyncio
+async def test_generate_signal_returns_none_when_llm_not_ready(strategy_env, set_loop_time):
+    strategy = strategy_env.strategy
+    set_loop_time(2000)
+    strategy._llm_ready = False
+    strategy.last_trade_ts = 0
+    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
+
+    signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+    assert signal is None
+
+
 def test_extract_json_payload_handles_chatter(strategy_env):
     noisy = (
         "Some analysis text that should be ignored before the JSON.\n\n"
@@ -471,6 +584,18 @@ def test_extract_json_payload_handles_chatter(strategy_env):
     payload = strategy_env.strategy._extract_json_payload(noisy)
     decision = json.loads(payload)
     assert decision["action"] == "HOLD"
+
+
+def test_extract_json_payload_picks_first_valid_object(strategy_env):
+    text = "prelude {\"action\":\"HOLD\"}{\"action\":\"BUY\"}"
+    payload = strategy_env.strategy._extract_json_payload(text)
+    assert json.loads(payload)["action"] == "HOLD"
+
+
+def test_extract_json_payload_handles_incomplete_fence(strategy_env):
+    text = "```json\n{\"action\":\"SELL\",\"reason\":\"done\"}\n```\ntrailing } noise"
+    payload = strategy_env.strategy._extract_json_payload(text)
+    assert json.loads(payload)["action"] == "SELL"
 
 
 def test_tool_request_filtering_and_alias(strategy_env):
@@ -749,3 +874,32 @@ async def test_openai_provider_invocation_and_usage_logging(strategy_env):
     strategy._log_llm_usage(session_id=1, response=resp, response_text=resp.text)
     mock_cost.calculate_llm_cost.assert_called_with(10, 5)
     mock_db.log_llm_call.assert_called_once()
+
+
+def test_openai_provider_requires_key(monkeypatch):
+    _reset_prompt_cache()
+    monkeypatch.setattr("trader_bot.strategy.LLM_PROVIDER", "OPENAI")
+    monkeypatch.setattr("trader_bot.strategy.OPENAI_API_KEY", "")
+    monkeypatch.setattr("trader_bot.strategy.GEMINI_API_KEY", "")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("ALLOW_UNKEYED_LLM", "false")
+    with patch("trader_bot.strategy.Path.read_text", return_value="TEMPLATE"):
+        strat = LLMStrategy(MagicMock(), MagicMock(), MagicMock())
+    assert strat.llm_provider == "OPENAI"
+    assert strat._llm_ready is False
+    assert strat._openai_client is None
+
+
+def test_gemini_provider_allows_unkeyed_test_mode(monkeypatch):
+    _reset_prompt_cache()
+    monkeypatch.setattr("trader_bot.strategy.LLM_PROVIDER", "GEMINI")
+    monkeypatch.setattr("trader_bot.strategy.OPENAI_API_KEY", "")
+    monkeypatch.setattr("trader_bot.strategy.GEMINI_API_KEY", "")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("ALLOW_UNKEYED_LLM", "true")
+    with patch("trader_bot.strategy.Path.read_text", return_value="TEMPLATE"):
+        strat = LLMStrategy(MagicMock(), MagicMock(), MagicMock())
+    assert strat.llm_provider == "GEMINI"
+    assert strat._llm_ready is True
+    assert strat.model is None

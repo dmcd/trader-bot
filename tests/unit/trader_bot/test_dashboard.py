@@ -1,7 +1,8 @@
 import importlib
 import sys
 import types
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -152,3 +153,163 @@ def test_calculate_pnl_shapes_positions(dashboard_module):
     assert shaped_df["pnl"].iloc[-1] == pytest.approx(20.0)
     assert spacing["last_seconds"] == pytest.approx(60.0)
     assert exposure == pytest.approx(0.0)
+
+
+def test_calculate_pnl_partial_and_unrealized(dashboard_module):
+    dashboard = dashboard_module
+    ts0 = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    df = pd.DataFrame(
+        [
+            {"timestamp": ts0, "symbol": "BTC/USD", "action": "BUY", "price": 100.0, "quantity": 1.0},
+            {"timestamp": ts0 + timedelta(seconds=30), "symbol": "BTC/USD", "action": "BUY", "price": 120.0, "quantity": 0.5},
+            {"timestamp": ts0 + timedelta(seconds=120), "symbol": "BTC/USD", "action": "SELL", "price": 130.0, "quantity": 0.3},
+            {"timestamp": ts0 + timedelta(seconds=240), "symbol": "ETH/USD", "action": "BUY", "price": 50.0, "quantity": 2.0},
+        ]
+    )
+
+    realized, unrealized, positions, shaped, exposure, spacing = dashboard.calculate_pnl(
+        df, {"BTC/USD": 140.0, "ETH/USD": 55.0}
+    )
+
+    assert realized == pytest.approx(7.0, rel=1e-3)
+    assert unrealized == pytest.approx(50.0, rel=1e-3)
+    assert exposure == pytest.approx((140 * 1.2) + (55 * 2), rel=1e-3)
+    assert len(positions) == 2
+    assert spacing["avg_seconds"] == pytest.approx(80.0)
+    assert spacing["last_seconds"] == pytest.approx(120.0)
+    assert shaped["pnl"].iloc[2] == pytest.approx(7.0, rel=1e-3)
+
+
+def test_ratio_badge_thresholds(dashboard_module):
+    dashboard = dashboard_module
+    moderate = dashboard.format_ratio_badge(15)
+    good = dashboard.format_ratio_badge(5)
+    assert "Moderate" in moderate
+    assert "Good" in good
+
+
+def test_timezone_resolution_and_labels(monkeypatch, dashboard_module):
+    dashboard = dashboard_module
+    monkeypatch.setenv("LOCAL_TIMEZONE", "UTC")
+    tz = dashboard.get_user_timezone()
+    assert isinstance(tz, ZoneInfo)
+    assert dashboard.get_timezone_label(tz) == "UTC"
+
+    offset_tz = timezone(timedelta(hours=-8))
+    assert dashboard.get_timezone_label(offset_tz) == offset_tz.tzname(None)
+
+    class BadTZ:
+        def tzname(self, dt):
+            raise RuntimeError("boom")
+
+    assert dashboard.get_timezone_label(BadTZ()) == "Local"
+
+
+def test_is_bot_running_and_start_bot_paths(monkeypatch, dashboard_module):
+    dashboard = dashboard_module
+    called = {}
+
+    class Recorder(types.SimpleNamespace):
+        def error(self, msg):
+            called["error"] = msg
+
+    monkeypatch.setattr(dashboard, "st", Recorder())
+    monkeypatch.setattr(
+        dashboard.subprocess,
+        "run",
+        lambda *args, **kwargs: types.SimpleNamespace(stdout="123\n"),
+    )
+    assert dashboard.is_bot_running() is True
+
+    monkeypatch.setattr(
+        dashboard.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("fail")),
+    )
+    assert dashboard.is_bot_running() is False
+
+    popen_calls = {}
+
+    def fake_popen(cmd, **kwargs):
+        popen_calls["cmd"] = cmd
+        popen_calls["kwargs"] = kwargs
+        return True
+
+    monkeypatch.setattr(dashboard.subprocess, "Popen", fake_popen)
+    assert dashboard.start_bot() is True
+    assert popen_calls["cmd"][:3] == ['python', '-m', 'trader_bot.strategy_runner']
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(dashboard.subprocess, "Popen", boom)
+    assert dashboard.start_bot() is False
+    assert "error" in called
+
+
+def test_load_history_and_prices_handle_empty_and_errors(monkeypatch, dashboard_module):
+    dashboard = dashboard_module
+    assert dashboard.load_history(None, None).empty
+    assert dashboard.get_latest_prices(1, []) == {}
+
+    errors = []
+
+    class Recorder(types.SimpleNamespace):
+        def error(self, msg):
+            errors.append(msg)
+
+    monkeypatch.setattr(dashboard, "st", Recorder())
+
+    class BrokenDB:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("db down")
+
+    monkeypatch.setattr(dashboard, "TradingDatabase", BrokenDB)
+    assert dashboard.load_history(1, None).empty
+    assert dashboard.get_latest_prices(1, ["BTC/USD"]) == {}
+    assert errors, "expected error messages to be recorded"
+
+
+def test_load_history_and_prices_success(monkeypatch, dashboard_module):
+    dashboard = dashboard_module
+
+    class StubConn:
+        def __init__(self, rows, prices):
+            self._rows = rows
+            self._prices = prices
+            self.last_symbol = None
+
+        def cursor(self):
+            return self
+
+        def execute(self, _query, params):
+            if len(params) > 1:
+                self.last_symbol = params[1]
+
+        def fetchall(self):
+            return self._rows
+
+        def fetchone(self):
+            if self.last_symbol and self.last_symbol in self._prices:
+                return {"price": self._prices[self.last_symbol]}
+            return None
+
+    class StubDB:
+        def __init__(self):
+            self.conn = StubConn(
+                [
+                    ("2024-01-01T00:00:00+00:00", "BTC/USD", "BUY", 100.0, 1.0, 0.1, "maker", 5.0, "test"),
+                ],
+                {"BTC/USD": 105.0},
+            )
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(dashboard, "TradingDatabase", StubDB)
+    df = dashboard.load_history(1, ZoneInfo("UTC"))
+    assert not df.empty
+    assert "trade_value" in df.columns
+    prices = dashboard.get_latest_prices(1, ["BTC/USD"])
+    assert prices["BTC/USD"] == 105.0

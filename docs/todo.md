@@ -14,10 +14,10 @@ Context: 48 test modules under `tests/`, mixing `unittest` and `pytest`, with no
   - [x] Create `tests/unit/trader_bot/` and move current unit-leaning modules there; keep service tests in `tests/unit/trader_bot/services/` to mirror package structure.
   - [x] Create `tests/integration/` and move higher-level flows (`test_runner_integration_stub.py`, `test_strategy_runner_control_paths.py`, `test_restart_recovery.py`, `test_tool_roundtrip_integration.py`, `test_server_shadow_runner.py`, `test_trade_sync.py`) into it; add `@pytest.mark.integration`.
   - [x] Remove or fix `tests/test_server.py` (currently defines stubs with no assertions); if kept, rewrite as an integration/contract check that exercises the public server API.
-- [ ] Consolidate overlapping suites
-  - [ ] Merge `test_database_unit.py` and `test_database_additional.py` into a single `tests/unit/trader_bot/test_database.py` with a shared fixture, parameterized pruning cases, and explicit integration markers for any slow DB work.
-  - [ ] Merge strategy-focused files (`test_strategy.py`, `test_strategy_additional_unit.py`, and portions of `test_strategy_llm_validation.py`) under `tests/unit/trader_bot/strategy/` using shared setup fixtures; split out any true LLM/plan-monitor flows into integration tests.
-  - [ ] Group runner/risk/slippage spacing tests (`test_runner_sleep_spacing.py`, `test_sandbox_daily_loss.py`, `test_risk_exposure.py`, `test_multi_symbol_exposure.py`, `test_order_value_buffer.py`, `test_slippage_guard.py`) by concern (risk vs execution pacing) to reduce fixture duplication and make expectations easier to scan.
+- [x] Consolidate overlapping suites
+  - [x] Merge `test_database_unit.py` and `test_database_additional.py` into a single `tests/unit/trader_bot/test_database.py` with a shared fixture, parameterized pruning cases, and explicit integration markers for any slow DB work.
+  - [x] Merge strategy-focused files (`test_strategy.py`, `test_strategy_additional_unit.py`, and portions of `test_strategy_llm_validation.py`) under `tests/unit/trader_bot/strategy/` using shared setup fixtures; split out any true LLM/plan-monitor flows into integration tests.
+  - [x] Group runner/risk/slippage spacing tests (`test_runner_sleep_spacing.py`, `test_sandbox_daily_loss.py`, `test_risk_exposure.py`, `test_multi_symbol_exposure.py`, `test_order_value_buffer.py`, `test_slippage_guard.py`) by concern (risk vs execution pacing) to reduce fixture duplication and make expectations easier to scan.
 - [ ] Fixture and helper cleanup
   - [ ] Centralize fake logger/test DB/temp file fixtures in `tests/conftest.py`; remove ad-hoc temp DB setup from individual files in favor of shared fixtures/fixtures using `tmp_path`.
   - [ ] Prefer `pytest`-style tests over `unittest.TestCase` where possible (drop `setUp/tearDown` boilerplate, use fixtures and parametrization).

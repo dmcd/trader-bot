@@ -25,4 +25,4 @@
 - [x] `trader_bot/logger_config.py` + `metrics_validator.py` (targets ≥95%): ensure logger setup respects env vars/handlers and metrics validator rejects missing/negative fields.
 
 ## Priority 4: Dashboard/UI
-- [ ] `trader_bot/dashboard.py`: add lightweight Streamlit smoke tests using `pytest` + `streamlit.testing` or function-level unit tests for data shaping (metrics tables, trend calculations) to lift coverage off 0% without spinning up full app.
+- [x] `trader_bot/dashboard.py`: add lightweight Streamlit smoke tests using `pytest` + `streamlit.testing` or function-level unit tests for data shaping (metrics tables, trend calculations) to lift coverage off 0% without spinning up full app.

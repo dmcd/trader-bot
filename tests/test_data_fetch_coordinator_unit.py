@@ -7,6 +7,7 @@ from trader_bot.llm_tools import (
     OrderBookParams,
     ToolName,
     ToolRequest,
+    clamp_payload_size,
     normalize_trades,
 )
 
@@ -40,6 +41,12 @@ class NoOhlcvExchange(StubExchange):
     async def fetch_ohlcv(self, symbol, timeframe, limit):
         self.ohlcv_calls += 1
         return []
+
+
+class ErrorOhlcvExchange(StubExchange):
+    async def fetch_ohlcv(self, symbol, timeframe, limit):
+        self.ohlcv_calls += 1
+        raise RuntimeError("boom")
 
 
 @pytest.mark.asyncio
@@ -212,3 +219,151 @@ async def test_rate_limit_is_per_symbol_timeframe_combination():
     assert errors["second"] is None
     assert errors["third"] == "rate_limited"
     assert exchange.ohlcv_calls == 2  # distinct timeframes allowed once each
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_window_resets(monkeypatch):
+    exchange = StubExchange()
+    clock = {"now": 0.0}
+    monkeypatch.setattr("time.time", lambda: clock["now"])
+    coordinator = DataFetchCoordinator(
+        exchange,
+        cache_ttl_seconds=0,
+        rate_limits={ToolName.GET_ORDER_BOOK: 1},
+        rate_limit_window_seconds=5,
+        dedup_window_seconds=0,
+    )
+    req = ToolRequest(
+        id="ob",
+        tool=ToolName.GET_ORDER_BOOK,
+        params=OrderBookParams(symbol="BTC/USD", depth=5),
+    )
+
+    first = await coordinator.handle_requests([req])
+    assert first[0].error is None
+
+    clock["now"] = 1.0
+    second = await coordinator.handle_requests([req])
+    assert second[0].error == "rate_limited"
+
+    clock["now"] = 6.0
+    third = await coordinator.handle_requests([req])
+    assert third[0].error is None
+    assert exchange.order_book_calls == 2  # window reset allowed new request
+
+
+@pytest.mark.asyncio
+async def test_dedup_reuses_cached_response_meta(monkeypatch):
+    exchange = StubExchange()
+    clock = {"now": 0.0}
+    monkeypatch.setattr("time.time", lambda: clock["now"])
+    coordinator = DataFetchCoordinator(exchange, cache_ttl_seconds=0, rate_limit_window_seconds=120)
+    req = ToolRequest(
+        id="m1",
+        tool=ToolName.GET_MARKET_DATA,
+        params={"symbol": "BTC/USD", "timeframes": ["1m"], "limit": 2},
+    )
+
+    await coordinator.handle_requests([req])
+    clock["now"] = 1.5
+    responses = await coordinator.handle_requests([req])
+
+    meta = responses[0].data.get("meta", {})
+    assert meta.get("deduped") is True
+    assert meta.get("dedup_age_ms") == pytest.approx(1500)
+
+
+@pytest.mark.asyncio
+async def test_symbol_allowlist_rejection_calls_error_callback():
+    exchange = StubExchange()
+    errors = []
+
+    def error_callback(req, reason):
+        errors.append((req.id, str(reason)))
+
+    coordinator = DataFetchCoordinator(
+        exchange,
+        allowed_symbols=["BTC/USD"],
+        cache_ttl_seconds=0,
+        error_callback=error_callback,
+    )
+    req = ToolRequest(
+        id="blocked",
+        tool=ToolName.GET_ORDER_BOOK,
+        params=OrderBookParams(symbol="ETH/USD", depth=10),
+    )
+
+    responses = await coordinator.handle_requests([req])
+    assert responses[0].error and responses[0].error.startswith("symbol_not_allowed")
+    assert ("blocked", "symbol_not_allowed") in errors
+    assert exchange.order_book_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_cache_ttl_expiry_triggers_refresh(monkeypatch):
+    exchange = StubExchange()
+    clock = {"now": 0.0}
+    monkeypatch.setattr("time.time", lambda: clock["now"])
+    coordinator = DataFetchCoordinator(exchange, cache_ttl_seconds=1)
+    params = ToolRequest(
+        id="m1",
+        tool=ToolName.GET_MARKET_DATA,
+        params={"symbol": "BTC/USD", "timeframes": ["1m"], "limit": 2},
+    ).params
+
+    await coordinator.fetch_market_data(params)
+    assert exchange.ohlcv_calls == 1
+
+    clock["now"] = 0.5
+    await coordinator.fetch_market_data(params)
+    assert exchange.ohlcv_calls == 1  # cache still valid
+
+    clock["now"] = 2.0
+    await coordinator.fetch_market_data(params)
+    assert exchange.ohlcv_calls == 2  # expired cache caused refetch
+
+
+@pytest.mark.asyncio
+async def test_trades_fallback_on_ohlcv_error():
+    exchange = ErrorOhlcvExchange()
+    coordinator = DataFetchCoordinator(exchange, cache_ttl_seconds=0)
+    params = ToolRequest(
+        id="m1",
+        tool=ToolName.GET_MARKET_DATA,
+        params={"symbol": "BTC/USD", "timeframes": ["1m"], "limit": 3},
+    ).params
+
+    data = await coordinator.fetch_market_data(params)
+    tf_data = data["timeframes"]["1m"]
+    assert tf_data["returned"] > 0
+    assert tf_data["meta"].get("fallback") is True
+    assert exchange.trade_calls > 0
+
+
+@pytest.mark.asyncio
+async def test_handle_requests_invokes_clamp_and_success(monkeypatch):
+    exchange = StubExchange()
+    clamp_calls = []
+
+    def recording_clamp(payload, max_bytes):
+        clamp_calls.append(max_bytes)
+        return clamp_payload_size(payload, max_bytes)
+
+    monkeypatch.setattr("trader_bot.data_fetch_coordinator.clamp_payload_size", recording_clamp)
+    successes = []
+    coordinator = DataFetchCoordinator(
+        exchange,
+        cache_ttl_seconds=0,
+        max_json_bytes=20,
+        success_callback=lambda: successes.append("ok"),
+    )
+    req = ToolRequest(
+        id="trades",
+        tool=ToolName.GET_RECENT_TRADES,
+        params={"symbol": "BTC/USD", "limit": 2},
+    )
+
+    responses = await coordinator.handle_requests([req])
+    assert responses[0].error is None
+    assert successes == ["ok"]
+    assert clamp_calls

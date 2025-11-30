@@ -58,8 +58,8 @@ class GeminiTrader(BaseTrader):
                 live_market = fallback_exchange.markets.get(symbol, {})
                 live_precision = live_market.get('precision', {})
                 # Use live precision when available, otherwise sensible defaults
-                price_precision = live_precision.get('price', 0.01)
-                amount_precision = live_precision.get('amount', 1e-8)
+                price_precision = live_precision.get('price') or 0.01
+                amount_precision = live_precision.get('amount') or 1e-8
 
                 market = self.exchange.markets[symbol]
                 market_precision = market.setdefault('precision', {})
@@ -74,8 +74,8 @@ class GeminiTrader(BaseTrader):
             for symbol in missing:
                 market = self.exchange.markets[symbol]
                 market_precision = market.setdefault('precision', {})
-                market_precision['price'] = market_precision.get('price', 0.01)
-                market_precision['amount'] = market_precision.get('amount', 1e-8)
+                market_precision['price'] = market_precision.get('price') or 0.01
+                market_precision['amount'] = market_precision.get('amount') or 1e-8
         finally:
             try:
                 await fallback_exchange.close()

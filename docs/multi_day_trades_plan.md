@@ -67,6 +67,9 @@ Notes on the current session model:
   - [x] Make `PortfolioTracker` portfolio-scoped: load/apply trades by portfolio_id; persist stats cache keyed by portfolio.
     - [x] Add unit coverage for portfolio-scoped rebuild/apply flows (stats cache read/write, restart restore).
   - [ ] Compute PnL and exposure as portfolio-level metrics; remove daily reset logic and ensure portfolio-days derive mark-to-market deltas for reporting only.
+    - [ ] Remove start-of-day/daily-loss tracking from risk/runner/database and migrate caches to portfolio aggregates with tests.
+    - [ ] Ensure PortfolioTracker rebuild/apply flows stay portfolio-scoped (no per-day resets) and expose portfolio-level PnL/exposure hooks with restart coverage.
+    - [ ] Ensure `portfolio_days` rows derive deltas from mark-to-market snapshots only (reporting, not gating risk).
   - [ ] Update `RiskManager` to enforce portfolio-wide caps (order value, exposure, position count) and drop daily-loss gating; honor configurable base currency.
   - [ ] Add configurable timezone handling for portfolio-day reporting (AEST default) when generating `portfolio_days` rows.
   - [ ] Add end-of-day snapshot writer that records equity + open positions/plans without flattening.

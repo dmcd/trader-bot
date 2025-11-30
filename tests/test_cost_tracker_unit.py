@@ -91,6 +91,40 @@ class TestCostTracker(unittest.TestCase):
         self.assertEqual(summary["cost_ratio"], 0.75)
         self.assertTrue(summary["profitable"])
 
+    def test_llm_burn_bad_string_defaults_to_min_window(self):
+        tracker = CostTracker("GEMINI")
+        now = datetime(2025, 1, 1, 0, 10, tzinfo=timezone.utc)
+
+        stats = tracker.calculate_llm_burn(
+            total_llm_cost=3.0,
+            session_started="not-a-date",
+            budget=6.0,
+            now=now,
+        )
+
+        expected_elapsed_hours = 5.0 / 60.0  # default 5 minute window
+        self.assertAlmostEqual(stats["elapsed_hours"], expected_elapsed_hours)
+        self.assertAlmostEqual(stats["burn_rate_per_hour"], 3.0 / expected_elapsed_hours)
+        self.assertEqual(stats["remaining_budget"], 3.0)
+        self.assertAlmostEqual(stats["pct_of_budget"], 0.5)
+
+    def test_llm_burn_min_window_clamps_to_one_second(self):
+        tracker = CostTracker("GEMINI")
+        now = datetime(2025, 1, 1, 0, 0, tzinfo=timezone.utc)
+
+        stats = tracker.calculate_llm_burn(
+            total_llm_cost=1.0,
+            session_started=now,
+            budget=10.0,
+            now=now,
+            min_window_minutes=0.0,
+        )
+
+        expected_elapsed_hours = 1.0 / 3600.0  # min window clamps to 1 second
+        self.assertAlmostEqual(stats["elapsed_hours"], expected_elapsed_hours)
+        self.assertAlmostEqual(stats["burn_rate_per_hour"], 3600.0)
+        self.assertAlmostEqual(stats["hours_to_cap"], 9.0 / 3600.0)
+
 
 if __name__ == "__main__":
     unittest.main()

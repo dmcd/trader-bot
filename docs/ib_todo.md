@@ -48,7 +48,14 @@
      - [x] Normalize exposure calculations to treat short positions as negative and cap absolute exposure.
      - [x] Add tests covering AUD base currency sizing for long/short and per-order value validation.
    - [ ] Add spread/liquidity heuristics tuned for equities/FX (e.g., min quote size in shares, tick-size aware price nudging). Revisit `MIN_TOP_OF_BOOK_NOTIONAL` defaults for AUD.
+     - [ ] Choose defaults for ASX equities vs FX pairs (spread caps, min depth, tick size guard).
+     - [ ] Wire heuristics into order pre-checks and market data sanity checks.
+     - [ ] Add config entries and docstrings for new knobs; include AUD-specific defaults.
+     - [ ] Add unit tests covering widening spreads and illiquid books for both equities and FX.
    - [ ] Update auto-flatten and plan-monitor exits to prefer marketable limit orders when IB disallows true market for certain contracts.
+     - [ ] Detect contracts where market orders are disallowed and derive a slippage bump for marketable limits.
+     - [ ] Update `PlanMonitor` exit path and any auto-flatten helpers to use the marketable limit flow.
+     - [ ] Add regression tests for flatten/exits choosing limit with slippage bump on IB.
 
 6) **Strategy Runner & Services Wiring**
    - [x] Switch `StrategyRunner` exchange selection to instantiate `IBTrader` when `ACTIVE_EXCHANGE=IB`; pass adapter exchange object (if any) into `DataFetchCoordinator` or stub a ccxt-like wrapper for tooling.
@@ -57,16 +64,37 @@
 
 7) **Database & Schema Considerations**
    - [ ] Decide on currency tagging: either store base currency at session level and rely on normalized symbols, or add optional `currency` columns to trades/positions if mixed-currency holdings are expected. Update writers/readers and migrations accordingly.
+     - [ ] Evaluate current schema usages and choose approach for base currency handling.
+     - [ ] Implement chosen schema/migration path and update ORM/helpers.
+     - [ ] Add tests validating reads/writes with AUD base and (if applicable) mixed currencies.
    - [ ] Validate `market_data` logging supports equity fields (bid/ask sizes are integer shares; volume is shares). No schema changes anticipated beyond optional currency fields.
+     - [ ] Ensure serializers preserve integer sizes for bids/asks/volume.
+     - [ ] Add coverage for equity market data rows in logging pipeline.
+     - [ ] Confirm dashboards/consumers handle the shape without schema drift.
 
 8) **Dashboard & UX**
    - [ ] Surface IB account summary (cash balances, margin available) and commission estimates on the Streamlit dashboard.
+     - [ ] Expose account summary from IB adapter to the dashboard layer.
+     - [ ] Render balances/margin and per-order commission estimates with AUD labels.
+     - [ ] Add tests for dashboard data assembly (can be stubbed service).
    - [ ] Add venue badge and display base currency in PnL/equity cards. Clarify market hours status and recent connectivity/circuit state for IB.
+     - [ ] Show venue indicator and base currency in equity/PnL widgets.
+     - [ ] Add market hours/open status and last connectivity/circuit state.
+     - [ ] Add UI tests or snapshot coverage for the new elements.
 
 9) **Testing & Validation**
    - [ ] Unit tests: fake IB client covering symbol resolution, market data normalization, order placement mapping, trade sync paths, and cost tracking. Add risk tests for AUD sizing and short exposure.
+     - [ ] Build a reusable fake IB client covering contracts, orders, trades, and historical data.
+     - [ ] Add normalization tests for market data, trades, and OHLCV.
+     - [ ] Add risk and cost tracker tests for AUD and short handling.
    - [ ] Integration/smoke: harness against IB paper account with recorded fixtures for market data, OHLCV, and order lifecycle; mark with `@pytest.mark.integration`.
+     - [ ] Create fixture capture scripts and store sanitized fixtures for CI-friendly playback.
+     - [ ] Add smoke tests gated by env flag and mark as integration.
+     - [ ] Document how to record/update fixtures when IB API changes.
    - [ ] Backfill docs on how to run IB tests (requires paper creds, Gateway running) and how to toggle to stub mode for CI.
+     - [ ] Document setup for running unit vs integration IB tests locally.
+     - [ ] Add instructions for paper account credentials and TWS/Gateway prerequisites.
+     - [ ] Explain CI stub mode and how to enable fixture playback.
 
 10) **Rollout & Safety**
    - [ ] Log telemetry fields for IB-specific diagnostics (contract id, exchange, commission source) to `telemetry.log` for early triage.

@@ -1,6 +1,6 @@
 # Dennis-Day Trading Bot
 
-A laptop-run trading bot that aims to replicate a disciplined professional day trader. Decisions come from a configurable LLM (Gemini 2.5 Flash by default) using only fresh market/context data (no back-testing) and heuristic intuition. It includes a risk engine, SQLite storage, structured logging, and a Streamlit dashboard for monitoring and control.
+A laptop-run trading bot that aims to replicate a disciplined professional day trader. Decisions come from a configurable LLM using only fresh market/context data (no back-testing) and heuristic intuition. It includes a risk engine, SQLite storage, structured logging, and a Streamlit dashboard for monitoring and control.
 
 ## 🚀 Getting Started
 

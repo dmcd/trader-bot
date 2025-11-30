@@ -3,17 +3,19 @@
 import asyncio
 import logging
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
-from ib_insync import IB
+from ib_insync import Forex, IB
 
 from trader_bot.config import (
     IB_ACCOUNT_ID,
+    IB_BASE_CURRENCY,
     IB_CLIENT_ID,
     IB_HOST,
     IB_PAPER,
     IB_PORT,
 )
+from trader_bot.symbols import DEFAULT_FX_EXCHANGE
 from trader_bot.trader import BaseTrader
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,9 @@ class IBTrader(BaseTrader):
         paper: bool = IB_PAPER,
         connect_timeout: float = 5.0,
         heartbeat_interval: float = 30.0,
+        base_currency: str = IB_BASE_CURRENCY,
+        fx_exchange: str = DEFAULT_FX_EXCHANGE,
+        fx_cache_ttl: float = 30.0,
         ib_client: Optional[IB] = None,
         monotonic: Optional[Callable[[], float]] = None,
     ):
@@ -48,10 +53,14 @@ class IBTrader(BaseTrader):
         self.account_id = account_id
         self.connect_timeout = connect_timeout
         self.heartbeat_interval = heartbeat_interval
+        self.base_currency = base_currency.upper()
+        self.fx_exchange = fx_exchange
+        self.fx_cache_ttl = fx_cache_ttl
         self.ib: IB = ib_client or IB()
         self.connected = False
         self._last_ping_mono: float | None = None
         self._monotonic = monotonic or time.monotonic
+        self._fx_quote_cache: Dict[str, Tuple[float, float]] = {}
 
     async def connect_async(self) -> None:
         """
@@ -120,8 +129,33 @@ class IBTrader(BaseTrader):
         finally:
             self.connected = False
 
-    async def get_account_summary_async(self) -> Any:  # pragma: no cover - placeholder
-        raise NotImplementedError("Account summary not implemented for IB yet.")
+    async def get_account_summary_async(self) -> Any:
+        if not self.connected:
+            return []
+
+        try:
+            values = await self._fetch_account_values()
+        except Exception as exc:
+            logger.error(f"Error fetching IB account summary: {exc}")
+            return []
+
+        summary = []
+        for entry in values:
+            try:
+                numeric_value = float(entry.value)
+            except (TypeError, ValueError):
+                continue
+
+            summary.append(
+                {
+                    "account": getattr(entry, "account", self.account_id) or "IBKR",
+                    "tag": getattr(entry, "tag", "Unknown"),
+                    "value": numeric_value,
+                    "currency": (getattr(entry, "currency", None) or self.base_currency).upper(),
+                }
+            )
+
+        return summary
 
     async def get_market_data_async(self, symbol):  # pragma: no cover - placeholder
         raise NotImplementedError("Market data not implemented for IB yet.")
@@ -129,8 +163,17 @@ class IBTrader(BaseTrader):
     async def place_order_async(self, symbol, action, quantity):  # pragma: no cover - placeholder
         raise NotImplementedError("Order placement not implemented for IB yet.")
 
-    async def get_equity_async(self):  # pragma: no cover - placeholder
-        raise NotImplementedError("Equity retrieval not implemented for IB yet.")
+    async def get_equity_async(self):
+        if not self.connected:
+            return 0.0
+
+        try:
+            account_values = await self._fetch_account_values()
+            total, _ = await self._value_account_equity(account_values)
+            return total
+        except Exception as exc:
+            logger.error(f"Error calculating IB equity: {exc}")
+            return None
 
     async def get_positions_async(self):  # pragma: no cover - placeholder
         raise NotImplementedError("Positions not implemented for IB yet.")
@@ -149,3 +192,133 @@ class IBTrader(BaseTrader):
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str = "1m", limit: int = 100) -> list:  # pragma: no cover - placeholder
         raise NotImplementedError("Historical data not implemented for IB yet.")
+
+    async def _fetch_account_values(self):
+        fetch_fn = getattr(self.ib, "accountValuesAsync", None)
+        if fetch_fn:
+            return await asyncio.wait_for(fetch_fn(), timeout=self.connect_timeout)
+        return await asyncio.wait_for(asyncio.to_thread(self.ib.accountValues), timeout=self.connect_timeout)
+
+    async def _value_account_equity(self, account_values) -> tuple[float, dict[str, float]]:
+        """
+        Compute total equity in base currency using NetLiquidation by currency.
+        """
+        per_currency: Dict[str, float] = {}
+        tags = {"NetLiquidation"}
+        fallback_tags = {"TotalCashValue"}
+
+        # Prefer NetLiquidation, fallback to cash if absent
+        for entry in account_values or []:
+            tag = getattr(entry, "tag", "")
+            if tag not in tags:
+                continue
+            currency = (getattr(entry, "currency", None) or self.base_currency).upper()
+            try:
+                value = float(getattr(entry, "value", 0))
+            except (TypeError, ValueError):
+                continue
+            per_currency[currency] = per_currency.get(currency, 0.0) + value
+
+        if not per_currency:
+            for entry in account_values or []:
+                tag = getattr(entry, "tag", "")
+                if tag not in fallback_tags:
+                    continue
+                currency = (getattr(entry, "currency", None) or self.base_currency).upper()
+                try:
+                    value = float(getattr(entry, "value", 0))
+                except (TypeError, ValueError):
+                    continue
+                per_currency[currency] = per_currency.get(currency, 0.0) + value
+
+        total_base = 0.0
+        fx_used: Dict[str, float] = {}
+        for currency, amount in per_currency.items():
+            if currency == self.base_currency:
+                total_base += amount
+                fx_used[currency] = 1.0
+                continue
+            rate = await self._get_fx_rate(currency)
+            if rate is None:
+                logger.warning(
+                    f"Missing FX rate for {currency}->{self.base_currency}; skipping conversion."
+                )
+                continue
+            fx_used[currency] = rate
+            total_base += amount * rate
+
+        return total_base, fx_used
+
+    async def _get_fx_rate(self, currency: str) -> float | None:
+        currency_upper = currency.upper()
+        now = self._monotonic()
+
+        cached = self._fx_quote_cache.get(currency_upper)
+        if cached and now - cached[1] < self.fx_cache_ttl:
+            return cached[0]
+
+        rate = await self._fetch_fx_rate(currency_upper)
+        if rate is not None:
+            self._fx_quote_cache[currency_upper] = (rate, now)
+        return rate
+
+    async def _fetch_fx_rate(self, currency: str) -> float | None:
+        """
+        Fetch FX rate converting from `currency` to base_currency.
+        """
+        pair_primary = f"{currency}{self.base_currency}"
+        rate = await self._request_fx_pair(pair_primary)
+        if rate:
+            return rate
+
+        inverse_pair = f"{self.base_currency}{currency}"
+        inverse_rate = await self._request_fx_pair(inverse_pair)
+        if inverse_rate:
+            return 1 / inverse_rate if inverse_rate != 0 else None
+        return None
+
+    async def _request_fx_pair(self, pair: str) -> float | None:
+        contract = Forex(pair, exchange=self.fx_exchange)
+
+        try:
+            req_fn = getattr(self.ib, "reqMktDataAsync", None)
+            if req_fn:
+                ticker = await asyncio.wait_for(
+                    req_fn(contract, "", False, False),
+                    timeout=self.connect_timeout,
+                )
+            else:
+                ticker = await asyncio.wait_for(
+                    asyncio.to_thread(self.ib.reqMktData, contract, "", False, False),
+                    timeout=self.connect_timeout,
+                )
+        except Exception as exc:
+            logger.warning(f"FX quote request failed for {pair}: {exc}")
+            return None
+
+        price = None
+        if ticker is None:
+            return None
+
+        price_fn = getattr(ticker, "marketPrice", None)
+        if callable(price_fn):
+            try:
+                price = price_fn()
+            except Exception:
+                price = None
+
+        if (price is None or price <= 0) and hasattr(ticker, "midpoint"):
+            try:
+                price = ticker.midpoint()
+            except Exception:
+                price = None
+
+        if (price is None or price <= 0) and hasattr(ticker, "bid") and hasattr(ticker, "ask"):
+            bid = getattr(ticker, "bid", None)
+            ask = getattr(ticker, "ask", None)
+            if bid and ask:
+                price = (bid + ask) / 2
+
+        if price is None or price <= 0:
+            return None
+        return price

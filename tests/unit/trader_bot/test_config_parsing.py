@@ -46,3 +46,26 @@ def test_client_order_prefix_defaults_when_version_missing():
     cfg_with_empty_version = reload_config({"BOT_VERSION": ""})
     assert cfg_with_empty_version.BOT_VERSION == "v1"
     assert cfg_with_empty_version.CLIENT_ORDER_PREFIX == "BOT-v1"
+
+
+def test_parse_maker_overrides_drops_invalid_entries():
+    cfg = reload_config(
+        {
+            "MAKER_PREFERENCE_OVERRIDES": (
+                "NO_COLON,BTC/USD:maybe,ETH/USD:,SOL/USD:  ,XRP/USD:true"
+            )
+        }
+    )
+
+    assert cfg.MAKER_PREFERENCE_OVERRIDES == {"XRP/USD": True}
+
+
+def test_parse_correlation_buckets_with_malformed_groups():
+    cfg = reload_config({"CORRELATION_BUCKETS": ";;BTC/USD,; ;ETH/USD;ADA/USD,,;SOL/USD,XRP/USD;;; "})
+
+    assert cfg.CORRELATION_BUCKETS == {
+        "bucket_1": ["BTC/USD"],
+        "bucket_2": ["ETH/USD"],
+        "bucket_3": ["ADA/USD"],
+        "bucket_4": ["SOL/USD", "XRP/USD"],
+    }

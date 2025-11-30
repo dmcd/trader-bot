@@ -13,7 +13,7 @@
 - [ ] `trader_bot/services/plan_monitor.py` (81%): test stop/target trail adjustments across BUY/SELL, breakeven promotion, stale price skips, and branch where open_orders contain no matching IDs; cover exception handling when DB lookups fail.
 - [ ] `trader_bot/dashboard.py` (39%): isolate helper functions for testing (timezone resolution, `is_bot_running`/`start_bot` happy/error paths, `load_history`/`get_latest_prices` empty/error handling, `get_timezone_label`); add PnL calculation scenarios with partial fills/unrealized exposure and multiple symbols; validate ratio badge thresholds and trade-spacing metrics; consider factoring UI wiring into smaller functions to allow streamlit-less testing.
 - [x] `trader_bot/trader.py` (70%): add a simple ABC enforcement test ensuring abstract methods require implementation and subclasses satisfy the interface (boosts small gap quickly).
-- [ ] `trader_bot/config.py` (98%) and `trader_bot/logger_config.py` (90%): add edge-case tests for maker overrides parsing, correlation bucket parsing with malformed input, and logger setup when env vars are absent/present.
+- [x] `trader_bot/config.py` (98%) and `trader_bot/logger_config.py` (90%): add edge-case tests for maker overrides parsing, correlation bucket parsing with malformed input, and logger setup when env vars are absent/present.
 
 ## Existing Test Improvements / Deletions
 - [x] Fix the ResourceWarnings by ensuring every `TradingDatabase` instantiation in tests uses the `test_db_path` fixture and `close()` in teardown (e.g., `tests/unit/trader_bot/test_utils_and_trader.py`, any others using the default path).

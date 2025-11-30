@@ -1,5 +1,6 @@
 import logging
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,35 @@ def test_setup_logging_respects_test_mode(tmp_path, monkeypatch):
         bot_log_path = Path(bot_logger.handlers[0].baseFilename)
         assert bot_log_path.name == "bot_test.log"
         assert bot_log_path.parent.name == "test"
+    finally:
+        _reset_logging_streams(original_stdout, original_stderr)
+
+
+def test_setup_logging_defaults_without_test_env(tmp_path, monkeypatch):
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    fake_sys = types.SimpleNamespace(stdout=original_stdout, stderr=original_stderr, modules={})
+    monkeypatch.setattr("trader_bot.logger_config.sys", fake_sys)
+    monkeypatch.chdir(tmp_path)
+
+    try:
+        bot_logger = setup_logging()
+        root_handlers = logging.getLogger().handlers
+        file_handlers = [h for h in root_handlers if isinstance(h, logging.FileHandler)]
+        filenames = {Path(h.baseFilename).name for h in file_handlers}
+
+        assert "console.log" in filenames
+        assert any(isinstance(h, logging.StreamHandler) and h.level == logging.INFO for h in root_handlers)
+        assert isinstance(fake_sys.stdout, LoggerWriter)
+
+        bot_log_path = Path(bot_logger.handlers[0].baseFilename)
+        assert bot_log_path.name == "bot.log"
+        assert bot_log_path.parent == tmp_path
+
+        telemetry_handlers = logging.getLogger("telemetry").handlers
+        telemetry_filenames = {Path(h.baseFilename).name for h in telemetry_handlers if isinstance(h, logging.FileHandler)}
+        assert "telemetry.log" in telemetry_filenames
     finally:
         _reset_logging_streams(original_stdout, original_stderr)
 

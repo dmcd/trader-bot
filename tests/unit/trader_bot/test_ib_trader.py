@@ -67,7 +67,14 @@ class FakeOrderStatus:
 
 
 class FakeTrade:
-    def __init__(self, statuses, *, order_id: int | None = None, client_id: str | None = None):
+    def __init__(
+        self,
+        statuses,
+        *,
+        order_id: int | None = None,
+        client_id: str | None = None,
+        fills=None,
+    ):
         self._statuses = list(statuses or [])
         if not self._statuses:
             self._statuses.append(FakeOrderStatus("Submitted"))
@@ -76,6 +83,7 @@ class FakeTrade:
         self.contract = None
         self.orderId = order_id or getattr(self.orderStatus, "orderId", None)
         self.clientId = client_id
+        self.fills = fills or []
 
     def advance_status(self):
         if len(self._statuses) > 1:
@@ -103,6 +111,15 @@ class FakePortfolioEntry:
         self.avgCost = avg_cost
 
 
+class FakeFill:
+    def __init__(self, price: float, size: float, timestamp_ms: int, *, commission: float | None = None, liquidity: str | None = None):
+        self.price = price
+        self.size = size
+        self.time = timestamp_ms
+        self.commission = commission
+        self.liquidity = liquidity
+
+
 class FakeIB:
     def __init__(
         self,
@@ -115,6 +132,7 @@ class FakeIB:
         order_statuses=None,
         portfolio=None,
         open_orders=None,
+        trades=None,
     ):
         self.connected = connected
         self.fail_connect = fail_connect
@@ -130,6 +148,7 @@ class FakeIB:
         self.order_statuses = order_statuses or {}
         self.portfolio_entries = portfolio or []
         self.open_orders_list = open_orders or []
+        self.trades_list = trades or []
         if not async_disconnect:
             # Shadow the coroutine so getattr returns None
             self.disconnectAsync = None
@@ -192,6 +211,9 @@ class FakeIB:
 
     async def openOrdersAsync(self):
         return list(self.open_orders_list)
+
+    async def tradesAsync(self):
+        return list(self.trades_list)
 
     def disconnect(self):
         self.disconnect_calls += 1
@@ -588,3 +610,64 @@ async def test_get_open_orders_filters_prefix_and_maps_fields():
     assert order["remaining"] == 5
     assert order["status"] == "open"
     assert order["order_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_my_trades_maps_fills_and_filters_since_and_symbol():
+    fills = [
+        FakeFill(price=100.0, size=2, timestamp_ms=1_700_000_000_000, commission=0.1, liquidity="added"),
+        FakeFill(price=101.0, size=1, timestamp_ms=1_700_000_100_000, commission=0.05, liquidity="removed"),
+    ]
+    other_fills = [FakeFill(price=50.0, size=1, timestamp_ms=1_700_000_050_000)]
+    trade1 = FakeTrade(
+        [FakeOrderStatus("Filled", filled=3, remaining=0, avg_fill_price=100.33, order_id=11, perm_id=8001)],
+        fills=fills,
+    )
+    trade1.order = type("Order", (), {"action": "BUY", "totalQuantity": 3})()
+    trade1.contract = FakeContract("BHP", "AUD")
+
+    trade2 = FakeTrade(
+        [FakeOrderStatus("Filled", filled=1, remaining=0, avg_fill_price=50, order_id=12, perm_id=8002)],
+        fills=other_fills,
+    )
+    trade2.order = type("Order", (), {"action": "SELL", "totalQuantity": 1})()
+    trade2.contract = FakeContract("CSL", "AUD")
+
+    fake_ib = FakeIB(
+        connected=True,
+        trades=[trade1, trade2],
+    )
+    trader = IBTrader(ib_client=fake_ib)
+    trader.connected = True
+
+    since = 1_700_000_050_000
+    trades = await trader.get_my_trades_async("BHP/AUD", since=since)
+
+    assert len(trades) == 1
+    t = trades[0]
+    assert t["symbol"] == "BHP/AUD"
+    assert t["side"] == "buy"
+    assert t["price"] == 101.0
+    assert t["amount"] == 1
+    assert t["fee"] == 0.05
+    assert t["liquidity"] == "removed"
+    assert t["order_id"] == 11
+    assert t["trade_id"] == 8001
+
+
+@pytest.mark.asyncio
+async def test_get_trades_from_timestamp_delegates_and_limits():
+    fills = [FakeFill(price=10, size=1, timestamp_ms=1_700_000_200_000)]
+    trade = FakeTrade([FakeOrderStatus("Filled", filled=1, remaining=0, order_id=21, perm_id=9001)], fills=fills)
+    trade.order = type("Order", (), {"action": "BUY", "totalQuantity": 1})()
+    trade.contract = FakeContract("AUD", "USD", sec_type="FX", exchange="IDEALPRO")
+
+    fake_ib = FakeIB(connected=True, trades=[trade])
+    trader = IBTrader(ib_client=fake_ib)
+    trader.connected = True
+
+    trades = await trader.get_trades_from_timestamp("AUD/USD", 1_700_000_100_000)
+
+    assert len(trades) == 1
+    assert trades[0]["symbol"] == "AUD/USD"
+    assert trades[0]["price"] == 10

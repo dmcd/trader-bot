@@ -428,11 +428,92 @@ class IBTrader(BaseTrader):
     async def cancel_open_order_async(self, order_id):  # pragma: no cover - placeholder
         raise NotImplementedError("Order cancellation not implemented for IB yet.")
 
-    async def get_my_trades_async(self, symbol: str, since: int = None, limit: int = None):  # pragma: no cover - placeholder
-        raise NotImplementedError("Trade history not implemented for IB yet.")
+    async def get_my_trades_async(self, symbol: str, since: int | None = None, limit: int | None = None):
+        if not self.connected:
+            return []
 
-    async def get_trades_from_timestamp(self, symbol: str, timestamp: int) -> list:  # pragma: no cover - placeholder
-        raise NotImplementedError("Trade history not implemented for IB yet.")
+        try:
+            contract, spec = build_ib_contract(
+                symbol,
+                allowed_instrument_types=self.allowed_instrument_types,
+                default_exchange=self.default_exchange,
+                default_primary_exchange=self.default_primary_exchange,
+                base_currency=self.base_currency,
+                fx_exchange=self.fx_exchange,
+            )
+        except Exception as exc:
+            logger.error(f"Error building IB contract for trades {symbol}: {exc}")
+            return []
+
+        try:
+            trades = await self._fetch_trades()
+        except Exception as exc:
+            logger.error(f"Error fetching IB trades: {exc}")
+            return []
+
+        normalized: list[dict[str, Any]] = []
+        for trade in trades or []:
+            trade_symbol = self._contract_to_symbol(getattr(trade, "contract", None))
+            if trade_symbol != spec.symbol:
+                continue
+
+            side = (getattr(getattr(trade, "order", None), "action", "") or "").lower()
+            status = getattr(trade, "orderStatus", None)
+            order_id = getattr(status, "orderId", None) or getattr(trade, "orderId", None)
+            perm_id = getattr(status, "permId", None)
+
+            fills = getattr(trade, "fills", None) or []
+            if fills:
+                for fill in fills:
+                    try:
+                        ts_ms = self._fill_timestamp_ms(fill)
+                    except Exception:
+                        ts_ms = None
+                    if since is not None and ts_ms is not None and ts_ms < since:
+                        continue
+                    normalized.append(
+                        {
+                            "trade_id": perm_id or order_id,
+                            "order_id": order_id,
+                            "symbol": trade_symbol,
+                            "side": side,
+                            "price": getattr(fill, "price", None),
+                            "amount": getattr(fill, "size", None),
+                            "fee": getattr(fill, "commission", None),
+                            "liquidity": getattr(fill, "liquidity", None),
+                            "timestamp": ts_ms,
+                        }
+                    )
+            else:
+                # Fallback: use aggregate status if no fills are present
+                ts_ms = int(time.time() * 1000)
+                if since is not None and ts_ms < since:
+                    continue
+                normalized.append(
+                    {
+                        "trade_id": perm_id or order_id,
+                        "order_id": order_id,
+                        "symbol": trade_symbol,
+                        "side": side,
+                        "price": getattr(status, "avgFillPrice", None),
+                        "amount": getattr(status, "filled", None),
+                        "fee": getattr(status, "commission", None),
+                        "liquidity": getattr(status, "liquidity", None),
+                        "timestamp": ts_ms,
+                    }
+                )
+
+        normalized_sorted = sorted(
+            normalized,
+            key=lambda t: (t.get("timestamp") or 0),
+            reverse=False,
+        )
+        if limit is not None:
+            normalized_sorted = normalized_sorted[-limit:]
+        return normalized_sorted
+
+    async def get_trades_from_timestamp(self, symbol: str, timestamp: int) -> list:
+        return await self.get_my_trades_async(symbol, since=timestamp)
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str = "1m", limit: int = 100) -> list:  # pragma: no cover - placeholder
         raise NotImplementedError("Historical data not implemented for IB yet.")
@@ -612,6 +693,25 @@ class IBTrader(BaseTrader):
         if fetch_fn:
             return await asyncio.wait_for(fetch_fn(), timeout=self.connect_timeout)
         return await asyncio.wait_for(asyncio.to_thread(self.ib.openOrders), timeout=self.connect_timeout)
+
+    async def _fetch_trades(self):
+        fetch_fn = getattr(self.ib, "tradesAsync", None)
+        if fetch_fn:
+            return await asyncio.wait_for(fetch_fn(), timeout=self.connect_timeout)
+        return await asyncio.wait_for(asyncio.to_thread(self.ib.trades), timeout=self.connect_timeout)
+
+    @staticmethod
+    def _fill_timestamp_ms(fill) -> int | None:
+        ts_attr = getattr(fill, "time", None)
+        if ts_attr is None:
+            return None
+        if isinstance(ts_attr, (int, float)):
+            return int(ts_attr)
+        # ib_insync uses datetime; convert to ms
+        try:
+            return int(ts_attr.timestamp() * 1000)
+        except Exception:
+            return None
 
     def _compute_limit_price(self, md: Optional[Dict[str, Any]], side: str, prefer_maker: bool) -> float | None:
         if not md:

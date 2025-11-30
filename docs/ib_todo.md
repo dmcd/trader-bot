@@ -37,7 +37,7 @@
    - [x] Market data: provide `get_market_data_async` using `reqMktData` top-of-book; populate `price/bid/ask/bid_size/ask_size/volume/spread_pct/ob_imbalance` fields.
    - [x] Orders: implement `place_order_async` with limit first, optional market for flatten, map order status/avg fill/remaining/fee (commission) and generate clientOrderId via `CLIENT_ORDER_PREFIX`. Handle rejected/filled/partial states and timeouts.
    - [x] Positions: map IB portfolio to `symbol/quantity/avg_price/current_price/timestamp`; treat short positions as negative qty.
-   - [ ] Open orders: list working orders filtered by our clientOrderId prefix; normalize to ccxt-like shape.
+   - [x] Open orders: list working orders filtered by our clientOrderId prefix; normalize to ccxt-like shape.
    - [ ] Trades/history: implement `get_my_trades_async` and `get_trades_from_timestamp` via `executions()`/`fills()` with pagination guards; include commission and liquidity (fallback `unknown`).
    - [ ] OHLCV: add `fetch_ohlcv` using `reqHistoricalData`; honor timeframe/limit from TA and tools.
    - [ ] Add reconnection/backoff hooks compatible with `HealthCircuitManager.maybe_reconnect`.

@@ -379,7 +379,51 @@ class IBTrader(BaseTrader):
         return positions
 
     async def get_open_orders_async(self):  # pragma: no cover - placeholder
-        raise NotImplementedError("Open orders not implemented for IB yet.")
+        if not self.connected:
+            return []
+
+        try:
+            open_orders = await self._fetch_open_orders()
+        except Exception as exc:
+            logger.error(f"Error fetching IB open orders: {exc}")
+            return []
+
+        results = []
+        for trade in open_orders or []:
+            order = getattr(trade, "order", None)
+            contract = getattr(trade, "contract", None)
+            status = getattr(trade, "orderStatus", None)
+
+            order_ref = getattr(order, "orderRef", None) or ""
+            if order_ref and not order_ref.startswith(CLIENT_ORDER_PREFIX):
+                continue
+
+            symbol = self._contract_to_symbol(contract)
+            if not symbol:
+                continue
+
+            side_raw = getattr(order, "action", "") or ""
+            side = side_raw.lower()
+            remaining = getattr(status, "remaining", None)
+            filled = getattr(status, "filled", None)
+
+            results.append(
+                {
+                    "order_id": getattr(status, "orderId", None) or getattr(trade, "orderId", None),
+                    "client_order_id": order_ref or getattr(order, "clientId", None),
+                    "symbol": symbol,
+                    "side": side,
+                    "price": getattr(order, "lmtPrice", None),
+                    "amount": getattr(order, "totalQuantity", None),
+                    "remaining": remaining,
+                    "filled": filled,
+                    "status": self._normalize_order_status(status),
+                    "timestamp": int(time.time() * 1000),
+                    "perm_id": getattr(status, "permId", None),
+                }
+            )
+
+        return results
 
     async def cancel_open_order_async(self, order_id):  # pragma: no cover - placeholder
         raise NotImplementedError("Order cancellation not implemented for IB yet.")
@@ -562,6 +606,12 @@ class IBTrader(BaseTrader):
             except Exception as exc:
                 logger.warning(f"Price lookup failed for {symbol}: {exc}")
         return prices
+
+    async def _fetch_open_orders(self):
+        fetch_fn = getattr(self.ib, "openOrdersAsync", None)
+        if fetch_fn:
+            return await asyncio.wait_for(fetch_fn(), timeout=self.connect_timeout)
+        return await asyncio.wait_for(asyncio.to_thread(self.ib.openOrders), timeout=self.connect_timeout)
 
     def _compute_limit_price(self, md: Optional[Dict[str, Any]], side: str, prefer_maker: bool) -> float | None:
         if not md:

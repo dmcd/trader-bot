@@ -54,6 +54,7 @@ class FakeOrderStatus:
         order_id: int | None = None,
         commission: float | None = None,
         liquidity: str | None = None,
+        perm_id: int | None = None,
     ):
         self.status = status
         self.filled = filled
@@ -62,16 +63,19 @@ class FakeOrderStatus:
         self.orderId = order_id
         self.commission = commission
         self.liquidity = liquidity
+        self.permId = perm_id
 
 
 class FakeTrade:
-    def __init__(self, statuses):
+    def __init__(self, statuses, *, order_id: int | None = None, client_id: str | None = None):
         self._statuses = list(statuses or [])
         if not self._statuses:
             self._statuses.append(FakeOrderStatus("Submitted"))
         self.orderStatus = self._statuses[0]
         self.order = None
         self.contract = None
+        self.orderId = order_id or getattr(self.orderStatus, "orderId", None)
+        self.clientId = client_id
 
     def advance_status(self):
         if len(self._statuses) > 1:
@@ -110,6 +114,7 @@ class FakeIB:
         market_data=None,
         order_statuses=None,
         portfolio=None,
+        open_orders=None,
     ):
         self.connected = connected
         self.fail_connect = fail_connect
@@ -124,6 +129,7 @@ class FakeIB:
         self.market_data = market_data or {}
         self.order_statuses = order_statuses or {}
         self.portfolio_entries = portfolio or []
+        self.open_orders_list = open_orders or []
         if not async_disconnect:
             # Shadow the coroutine so getattr returns None
             self.disconnectAsync = None
@@ -183,6 +189,9 @@ class FakeIB:
 
     async def portfolioAsync(self):
         return list(self.portfolio_entries)
+
+    async def openOrdersAsync(self):
+        return list(self.open_orders_list)
 
     def disconnect(self):
         self.disconnect_calls += 1
@@ -545,3 +554,37 @@ async def test_get_positions_handles_missing_price():
     positions = await trader.get_positions_async()
 
     assert positions[0]["current_price"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_open_orders_filters_prefix_and_maps_fields():
+    open_orders = [
+        FakeTrade(
+            [FakeOrderStatus("Submitted", remaining=5, filled=0, avg_fill_price=None, order_id=1, perm_id=9001)],
+            order_id=1,
+        ),
+        FakeTrade(
+            [FakeOrderStatus("PreSubmitted", remaining=2, filled=3, avg_fill_price=100.2, order_id=2, perm_id=9002)],
+            order_id=2,
+        ),
+    ]
+    open_orders[0].order = type("Order", (), {"totalQuantity": 5, "lmtPrice": 100.5, "action": "BUY", "orderRef": "BOT-v1-abc"})()
+    open_orders[0].contract = FakeContract("BHP", "AUD", sec_type="STK")
+    open_orders[1].order = type("Order", (), {"totalQuantity": 5, "lmtPrice": 100.0, "action": "SELL", "orderRef": "OTHER-abc"})()
+    open_orders[1].contract = FakeContract("CSL", "AUD", sec_type="STK")
+
+    fake_ib = FakeIB(connected=True, open_orders=open_orders)
+    trader = IBTrader(ib_client=fake_ib)
+    trader.connected = True
+
+    orders = await trader.get_open_orders_async()
+
+    assert len(orders) == 1
+    order = orders[0]
+    assert order["symbol"] == "BHP/AUD"
+    assert order["side"] == "buy"
+    assert order["amount"] == 5
+    assert order["price"] == 100.5
+    assert order["remaining"] == 5
+    assert order["status"] == "open"
+    assert order["order_id"] == 1

@@ -13,12 +13,6 @@
 - Market data cadence similar to current loop (5m default), with historical bars from IBKR’s `reqHistoricalData` (1m–1d) and top-of-book via `reqMktData`.
 - Order types: limit as default; allow market for flattening and plan exits where permitted. Post-only is not available; maker/taker fees are not meaningful—use commission estimates instead.
 
-## Prior Work to Reuse (commit 8d6e4c8c6b2b0614dd909f36d8699e1c76e467af)
-- Deleted `ib_trader.py` already sketched an `ib_insync` adapter: async connect/disconnect, account summary via `accountValues`, simple stock contract builder (`Stock(symbol, exchange, currency)`), market snapshot via `reqMktData`, market-order placement, positions/open orders retrieval, and clientId randomization to avoid collisions. We can cherry-pick these patterns as a starting point but need to harden them (timeouts, streaming reuse, richer status/fees, contract normalization, OHLCV/trade history).
-- Config previously included `IB_HOST/IB_PORT/IB_CLIENT_ID` and cost settings (`IB_STOCK_FEE_PER_SHARE`, `IB_MIN_FEE`); reintroduce with better naming (`IB_GATEWAY_HOST`, etc.) and base-currency awareness.
-- `CostTracker` had an IB per-share fee/min model; keep the structure but extend for FX/IBKR commissions and currency conversion.
-- A lightweight FastMCP `server.py` exposed IB tools; if MCP is still desired, we can restore it behind a feature flag after the core adapter is stable.
-- `requirements.txt` previously listed `ib_insync` and `mcp`; re-add `ib_insync` for the adapter, and consider gating MCP until needed.
 
 ## Work Plan
 1) **Dependencies & Config** ✅

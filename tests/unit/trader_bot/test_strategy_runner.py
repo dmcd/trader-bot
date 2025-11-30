@@ -266,6 +266,42 @@ async def test_monitor_trade_plans_bubbles_errors(monkeypatch, tmp_path):
         await runner._monitor_trade_plans(price_lookup={}, open_orders=[])
 
 
+@pytest.mark.asyncio
+async def test_initialize_reuses_portfolio_and_threads_run_metadata(monkeypatch, tmp_path):
+    db_path = tmp_path / "init-wiring.db"
+    monkeypatch.setenv("TRADING_DB_PATH", str(db_path))
+    monkeypatch.setattr("trader_bot.strategy_runner.GeminiTrader", FakeBot)
+    monkeypatch.setattr("trader_bot.strategy_runner.IBTrader", FakeBot)
+
+    runner = StrategyRunner(execute_orders=False)
+    runner.telemetry_logger = MagicMock()
+    await runner.initialize()
+
+    assert runner.portfolio_id is not None
+    assert runner.session_id is not None
+    first_session = runner.session_id
+    first_run = runner.run_id
+
+    runner._emit_telemetry({"type": "init_test"})
+    args, _ = runner.telemetry_logger.info.call_args
+    payload = json.loads(args[0])
+    assert payload["portfolio_id"] == runner.portfolio_id
+    assert payload["session_id"] == first_session
+    assert payload["run_id"] == first_run
+
+    # Simulate restart and ensure we reuse the same portfolio/session with a new run_id
+    runner.db.close()
+    runner_restart = StrategyRunner(execute_orders=False)
+    runner_restart.telemetry_logger = MagicMock()
+    await runner_restart.initialize()
+
+    assert runner_restart.portfolio_id == runner.portfolio_id
+    assert runner_restart.session_id == first_session
+    assert runner_restart.run_id != first_run
+
+    runner_restart.db.close()
+
+
 # --- Circuit breakers and health metrics ---
 
 

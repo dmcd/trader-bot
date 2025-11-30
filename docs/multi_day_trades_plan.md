@@ -35,7 +35,7 @@ Notes on the current session model:
     - [x] Remove `session_id` foreign keys/constraints where portfolio_id is present and add backward-compatible views/shims as needed.
     - [x] Add tests covering migration/backfill and compat accessors.
 
-- [ ] Service initialization changes
+- [x] Service initialization changes
   - [x] Update `StrategyRunner` to resolve `portfolio_id` from config/DB (create if missing) and generate a `run_id` for telemetry.
     - [x] Persist `run_id` in telemetry/logging and thread into LLM calls/traces.
   - [x] Thread `portfolio_id` through service constructors and wiring
@@ -47,7 +47,7 @@ Notes on the current session model:
     - [x] `MarketDataService`
     - [x] `StrategyOrchestrator`
     - [x] `TradingContext`
-  - [ ] Add initialization tests covering portfolio/run wiring (session reuse, telemetry metadata) and fill any gaps found.
+  - [x] Add initialization tests covering portfolio/run wiring (session reuse, telemetry metadata) and fill any gaps found.
 - [x] Add portfolio-aware DAO calls in services (positions/orders/trades/market data).
   - [x] `PlanMonitor` uses `portfolio_id` when reading/updating plans and logging trades.
   - [x] `ResyncService` persists and reloads positions/orders/trade sync markers by `portfolio_id`.

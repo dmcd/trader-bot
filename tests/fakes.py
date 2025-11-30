@@ -78,6 +78,9 @@ class FakeBot:
     async def get_my_trades_async(self, *_args, **_kwargs):
         return list(self.trades)
 
+    async def get_trades_from_timestamp(self, *_args, **_kwargs):
+        return list(self.trades)
+
     async def place_order_async(self, symbol, action, quantity, prefer_maker=True, force_market: bool = False):
         self.place_calls.append((symbol, action, quantity, prefer_maker, force_market))
         liquidity = "maker" if prefer_maker else "taker"

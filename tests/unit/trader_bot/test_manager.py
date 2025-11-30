@@ -197,6 +197,25 @@ def test_min_trade_size_uses_converted_value(risk_config):
     assert "below minimum" in result.reason
 
 
+def test_short_exposure_converts_to_base_currency(risk_config):
+    fx_provider = lambda currency, **_: 1.5 if currency == "USD" else 1.0
+    rm = RiskManager(base_currency="AUD", fx_rate_provider=fx_provider)
+    rm.update_positions({"MSFT/USD": {"quantity": -3.0, "current_price": 50.0}})
+
+    exposure = rm.get_total_exposure()
+    assert exposure == pytest.approx(225.0)
+
+
+def test_order_value_buffer_converts_fx_for_shorts(risk_config):
+    fx_provider = lambda currency, **_: 1.6 if currency == "USD" else 1.0
+    rm = RiskManager(base_currency="AUD", fx_rate_provider=fx_provider)
+
+    qty, overage = rm.apply_order_value_buffer(20.0, 40.0, symbol="AAPL/USD")
+
+    assert overage > 0
+    assert qty < 10.0
+
+
 def test_projected_exposure_for_shorts_adds_incremental_notional(risk_config):
     rm = RiskManager(base_currency="USD")
     rm.seed_start_of_day(2000.0)

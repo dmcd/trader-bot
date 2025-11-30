@@ -118,3 +118,4 @@ For a deeper dive into how the bot works, check out the documentation:
 
 *   [**Repository Guidelines**](AGENTS.md): Structure, commands, and conventions.
 *   [**Architecture Overview**](docs/architecture.md): Single-page map with diagrams and one-line component summaries.
+*   [**IB Testing Guide**](docs/ib_testing.md): How to run IB unit/playback tests and refresh fixtures.

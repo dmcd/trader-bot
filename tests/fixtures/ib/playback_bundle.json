@@ -1,0 +1,32 @@
+{
+  "account_values": [
+    {"tag": "NetLiquidation", "value": "150000", "currency": "AUD", "account": "DU-PLAYBACK"},
+    {"tag": "TotalCashValue", "value": "75000", "currency": "AUD", "account": "DU-PLAYBACK"}
+  ],
+  "market_data": {
+    "BHPAUD": {"price": 101.2, "bid": 101.1, "ask": 101.3, "bid_size": 200, "ask_size": 150, "last": 101.25, "volume": 15000},
+    "AUDUSD": {"price": 0.6565, "bid": 0.656, "ask": 0.657, "bid_size": 1200000, "ask_size": 900000, "last": 0.6562, "volume": 2400000}
+  },
+  "order_statuses": {
+    "BHPAUD": [
+      {"status": "Submitted", "filled": 5, "remaining": 5, "avg_fill_price": 101.2, "order_id": 9001, "commission": 0.0, "liquidity": null, "perm_id": 7711},
+      {"status": "Filled", "filled": 10, "remaining": 0, "avg_fill_price": 101.25, "order_id": 9001, "commission": 1.2, "liquidity": "added", "perm_id": 7711}
+    ]
+  },
+  "portfolio": [
+    {"symbol": "BHP", "currency": "AUD", "sec_type": "STK", "exchange": "ASX", "position": 10, "avg_cost": 100.0},
+    {"symbol": "AUD", "currency": "USD", "sec_type": "FX", "exchange": "IDEALPRO", "position": -25000, "avg_cost": 0.655}
+  ],
+  "open_orders": [
+    {"order_ref": "BOT-v1-playback", "symbol": "CSL", "currency": "AUD", "sec_type": "STK", "exchange": "ASX", "status": "Submitted", "remaining": 5, "filled": 0, "avg_fill_price": null, "order_id": 42, "perm_id": 8844, "action": "BUY", "lmt_price": 245.5, "total_quantity": 5}
+  ],
+  "trades": [
+    {"symbol": "BHP", "currency": "AUD", "sec_type": "STK", "exchange": "ASX", "status": "Filled", "filled": 10, "remaining": 0, "avg_fill_price": 101.3, "order_id": 9001, "perm_id": 7711, "action": "BUY", "total_quantity": 10, "commission": 1.2, "liquidity": "added", "fills": [{"price": 101.3, "size": 10, "timestamp_ms": 1700000100000, "commission": 1.2, "liquidity": "added"}]}
+  ],
+  "historical_data": {
+    "BHPAUD": [
+      {"date": 1700000000000, "open": 100.0, "high": 102.0, "low": 99.5, "close": 101.5, "volume": 1200},
+      {"date": 1700000060000, "open": 101.5, "high": 103.0, "low": 101.0, "close": 102.5, "volume": 1100}
+    ]
+  }
+}

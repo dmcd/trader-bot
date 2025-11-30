@@ -1,249 +1,19 @@
 import pytest
 
 from trader_bot.ib_trader import IBTrader
-
-
-class FakeClock:
-    def __init__(self, start: float = 0.0):
-        self.now = start
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
-
-
-class FakeTicker:
-    def __init__(
-        self,
-        price: float | None,
-        bid: float | None = None,
-        ask: float | None = None,
-        *,
-        bid_size: float | None = None,
-        ask_size: float | None = None,
-        last: float | None = None,
-        volume: float | None = None,
-    ):
-        self._price = price
-        self.bid = bid
-        self.ask = ask
-        self.bidSize = bid_size
-        self.askSize = ask_size
-        self.last = last
-        self.volume = volume
-
-    def marketPrice(self):
-        return self._price
-
-    def midpoint(self):
-        if self.bid is not None and self.ask is not None:
-            return (self.bid + self.ask) / 2
-        return self._price
-
-
-class FakeOrderStatus:
-    def __init__(
-        self,
-        status: str,
-        *,
-        filled: float | None = None,
-        remaining: float | None = None,
-        avg_fill_price: float | None = None,
-        order_id: int | None = None,
-        commission: float | None = None,
-        liquidity: str | None = None,
-        perm_id: int | None = None,
-    ):
-        self.status = status
-        self.filled = filled
-        self.remaining = remaining
-        self.avgFillPrice = avg_fill_price
-        self.orderId = order_id
-        self.commission = commission
-        self.liquidity = liquidity
-        self.permId = perm_id
-
-
-class FakeTrade:
-    def __init__(
-        self,
-        statuses,
-        *,
-        order_id: int | None = None,
-        client_id: str | None = None,
-        fills=None,
-    ):
-        self._statuses = list(statuses or [])
-        if not self._statuses:
-            self._statuses.append(FakeOrderStatus("Submitted"))
-        self.orderStatus = self._statuses[0]
-        self.order = None
-        self.contract = None
-        self.orderId = order_id or getattr(self.orderStatus, "orderId", None)
-        self.clientId = client_id
-        self.fills = fills or []
-
-    def advance_status(self):
-        if len(self._statuses) > 1:
-            self._statuses.pop(0)
-            self.orderStatus = self._statuses[0]
-
-
-class FakeContract:
-    def __init__(self, symbol: str, currency: str, *, sec_type: str = "STK", exchange: str = "ASX"):
-        self.symbol = symbol
-        self.currency = currency
-        self.secType = sec_type
-        self.exchange = exchange
-
-    def pair(self):
-        if self.secType == "FX":
-            return f"{self.symbol}{self.currency}"
-        return None
-
-
-class FakePortfolioEntry:
-    def __init__(self, contract: FakeContract, position: float, avg_cost: float):
-        self.contract = contract
-        self.position = position
-        self.avgCost = avg_cost
-
-
-class FakeFill:
-    def __init__(self, price: float, size: float, timestamp_ms: int, *, commission: float | None = None, liquidity: str | None = None):
-        self.price = price
-        self.size = size
-        self.time = timestamp_ms
-        self.commission = commission
-        self.liquidity = liquidity
-
-
-class FakeBar:
-    def __init__(self, date, open, high, low, close, volume):
-        self.date = date
-        self.open = open
-        self.high = high
-        self.low = low
-        self.close = close
-        self.volume = volume
-
-
-class FakeIB:
-    def __init__(
-        self,
-        *,
-        connected: bool = False,
-        fail_connect: bool = False,
-        fail_ping: bool = False,
-        async_disconnect: bool = False,
-        account_values=None,
-        market_data=None,
-        order_statuses=None,
-        portfolio=None,
-        open_orders=None,
-        trades=None,
-        historical_data=None,
-    ):
-        self.connected = connected
-        self.fail_connect = fail_connect
-        self.fail_ping = fail_ping
-        self.connect_calls = []
-        self.req_time_calls = 0
-        self.disconnect_calls = 0
-        self.disconnect_async_calls = 0
-        self.account_values_calls = 0
-        self.req_mkt_data_calls = []
-        self.place_order_calls = []
-        self.account_values = account_values or []
-        self.market_data = market_data or {}
-        self.order_statuses = order_statuses or {}
-        self.portfolio_entries = portfolio or []
-        self.open_orders_list = open_orders or []
-        self.trades_list = trades or []
-        self.historical_data = historical_data or {}
-        self.hist_calls = []
-        if not async_disconnect:
-            # Shadow the coroutine so getattr returns None
-            self.disconnectAsync = None
-
-    async def connectAsync(self, host, port, clientId):
-        self.connect_calls.append({"host": host, "port": port, "clientId": clientId})
-        if self.fail_connect:
-            raise RuntimeError("connect failed")
-        self.connected = True
-        return True
-
-    def isConnected(self):
-        return self.connected
-
-    async def reqCurrentTimeAsync(self):
-        if self.fail_ping:
-            raise RuntimeError("ping failed")
-        self.req_time_calls += 1
-        return 123
-
-    def reqCurrentTime(self):
-        self.req_time_calls += 1
-        return 123
-
-    async def accountValuesAsync(self):
-        self.account_values_calls += 1
-        return list(self.account_values)
-
-    def accountValues(self):
-        self.account_values_calls += 1
-        return list(self.account_values)
-
-    def _contract_key(self, contract):
-        pair_fn = getattr(contract, "pair", None)
-        if callable(pair_fn):
-            val = pair_fn()
-            if isinstance(val, str):
-                return val.replace(".", "")
-            return val
-        symbol = getattr(contract, "symbol", None)
-        currency = getattr(contract, "currency", None)
-        if symbol and currency:
-            return f"{symbol}{currency}"
-        return str(contract)
-
-    async def reqMktDataAsync(self, contract, *args, **kwargs):
-        key = self._contract_key(contract)
-        self.req_mkt_data_calls.append(key)
-        return self.market_data.get(key)
-
-    async def placeOrderAsync(self, contract, order):
-        key = self._contract_key(contract)
-        self.place_order_calls.append({"contract": key, "order": order})
-        statuses = self.order_statuses.get(key, [])
-        trade = FakeTrade(statuses)
-        trade.order = order
-        trade.contract = contract
-        return trade
-
-    async def portfolioAsync(self):
-        return list(self.portfolio_entries)
-
-    async def openOrdersAsync(self):
-        return list(self.open_orders_list)
-
-    async def tradesAsync(self):
-        return list(self.trades_list)
-
-    async def reqHistoricalDataAsync(self, contract, **params):
-        key = self._contract_key(contract)
-        self.hist_calls.append({"key": key, "params": params})
-        return list(self.historical_data.get(key, []))
-
-    def disconnect(self):
-        self.disconnect_calls += 1
-        self.connected = False
-
-    async def disconnectAsync(self):
-        self.disconnect_async_calls += 1
-        self.connected = False
+from tests.ib_fakes import (
+    FakeBar,
+    FakeClock,
+    FakeContract,
+    FakeFill,
+    FakeIB,
+    FakeOrderStatus,
+    FakePortfolioEntry,
+    FakeTicker,
+    FakeTrade,
+    load_ib_fixture_bundle,
+    make_fake_ib_from_bundle,
+)
 
 
 @pytest.mark.asyncio
@@ -324,6 +94,17 @@ async def test_connect_failure_marks_disconnected():
         await trader.connect_async()
 
     assert trader.connected is False
+
+
+def test_fixture_loader_builds_fake_ib():
+    bundle = load_ib_fixture_bundle()
+    fake_ib = make_fake_ib_from_bundle(bundle)
+
+    assert fake_ib.isConnected() is True
+    assert fake_ib.account_values
+    assert "BHPAUD" in fake_ib.market_data
+    assert fake_ib.order_statuses
+    assert fake_ib.historical_data
 
 
 class AccountValue:

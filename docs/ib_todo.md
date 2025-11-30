@@ -85,23 +85,23 @@
      - [x] Add UI tests or snapshot coverage for the new elements.
 
 9) **Testing & Validation**
-   - [ ] Unit tests: fake IB client covering symbol resolution, market data normalization, order placement mapping, trade sync paths, and cost tracking. Add risk tests for AUD sizing and short exposure.
-     - [ ] Build a reusable fake IB client covering contracts, orders, trades, and historical data.
-     - [ ] Provide fixture factory/helpers to keep scenarios readable and re-usable across tests.
-     - [ ] Add test toggles for IB vs Gemini paths where logic diverges.
-     - [ ] Add normalization tests for market data, trades, and OHLCV.
-     - [ ] Add risk and cost tracker tests for AUD and short handling.
-   - [ ] Integration/smoke: harness against IB paper account with recorded fixtures for market data, OHLCV, and order lifecycle; mark with `@pytest.mark.integration`.
-     - [ ] Create fixture capture scripts and store sanitized fixtures for CI-friendly playback.
-     - [ ] Add playback/stub mode for integration tests so CI can run without live IB Gateway.
-     - [ ] Wire CI marker/flag to skip live IB tests unless credentials and Gateway are available.
-     - [ ] Add smoke tests gated by env flag and mark as integration.
-     - [ ] Document how to record/update fixtures when IB API changes.
-   - [ ] Backfill docs on how to run IB tests (requires paper creds, Gateway running) and how to toggle to stub mode for CI.
-     - [ ] Document setup for running unit vs integration IB tests locally.
-     - [ ] Add `.env.example` entries for IB test creds and fixture playback flags.
-     - [ ] Add instructions for paper account credentials and TWS/Gateway prerequisites.
-     - [ ] Explain CI stub mode and how to enable fixture playback.
+   - [x] Unit tests: fake IB client covering symbol resolution, market data normalization, order placement mapping, trade sync paths, and cost tracking. Add risk tests for AUD sizing and short exposure.
+     - [x] Build a reusable fake IB client covering contracts, orders, trades, and historical data.
+     - [x] Provide fixture factory/helpers to keep scenarios readable and re-usable across tests.
+     - [x] Add test toggles for IB vs Gemini paths where logic diverges.
+     - [x] Add normalization tests for market data, trades, and OHLCV.
+     - [x] Add risk and cost tracker tests for AUD and short handling.
+   - [x] Integration/smoke: harness against IB paper account with recorded fixtures for market data, OHLCV, and order lifecycle; mark with `@pytest.mark.integration`.
+     - [x] Create fixture capture scripts and store sanitized fixtures for CI-friendly playback.
+     - [x] Add playback/stub mode for integration tests so CI can run without live IB Gateway.
+     - [x] Wire CI marker/flag to skip live IB tests unless credentials and Gateway are available.
+     - [x] Add smoke tests gated by env flag and mark as integration.
+     - [x] Document how to record/update fixtures when IB API changes.
+   - [x] Backfill docs on how to run IB tests (requires paper creds, Gateway running) and how to toggle to stub mode for CI.
+     - [x] Document setup for running unit vs integration IB tests locally.
+     - [x] Add `.env.example` entries for IB test creds and fixture playback flags.
+     - [x] Add instructions for paper account credentials and TWS/Gateway prerequisites.
+     - [x] Explain CI stub mode and how to enable fixture playback.
 
 10) **Rollout & Safety**
    - [ ] Log telemetry fields for IB-specific diagnostics (contract id, exchange, commission source) to `telemetry.log` for early triage.

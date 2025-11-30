@@ -31,6 +31,7 @@ import trader_bot.config as _config
 _config.LOOP_INTERVAL_SECONDS = int(os.environ.get("LOOP_INTERVAL_SECONDS", "1"))
 
 from trader_bot.strategy import LLMStrategy
+from tests.fakes import FakeBot, FakeExchange
 
 _original_showwarning = warnings.showwarning
 _original_warn = warnings.warn
@@ -160,3 +161,27 @@ def strategy_env(monkeypatch):
 
     strategy = LLMStrategy(db, ta, cost)
     return SimpleNamespace(db=db, ta=ta, cost=cost, strategy=strategy)
+
+
+@pytest.fixture
+def fake_bot():
+    """Default fake bot instance for tests that only need simple responses."""
+    return FakeBot()
+
+
+@pytest.fixture
+def fake_bot_factory():
+    """Factory for fake bots with per-test configuration."""
+    def _factory(**overrides):
+        return FakeBot(**overrides)
+
+    return _factory
+
+
+@pytest.fixture
+def fake_exchange_factory():
+    """Factory for ccxt-like exchange doubles."""
+    def _factory(**overrides):
+        return FakeExchange(**overrides)
+
+    return _factory

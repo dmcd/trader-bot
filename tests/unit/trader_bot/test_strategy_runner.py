@@ -26,6 +26,7 @@ from trader_bot.strategy_runner import (
     StrategyRunner,
 )
 from tests.factories import make_strategy_signal
+from tests.fakes import FakeBot
 
 pytestmark = pytest.mark.usefixtures("test_db_path")
 
@@ -537,19 +538,16 @@ class TestActiveSymbolSelection(unittest.TestCase):
     @patch("trader_bot.strategy_runner.ALLOWED_SYMBOLS", ["BTC/USD", "ETH/USD", "DOGE/USD"])
     def test_rebuild_symbols_use_allowlist_and_exchange_filter(self):
         runner = StrategyRunner(execute_orders=False)
-
-        class DummyBot:
-            def __init__(self):
-                self.exchange = type("Ex", (), {"symbols": ["BTC/USD", "DOGE/USD", "LTC/USD"]})()
-
-        runner.bot = DummyBot()
+        exchange = type("Ex", (), {"symbols": ["BTC/USD", "DOGE/USD", "LTC/USD"]})()
+        runner.bot = FakeBot(exchange=exchange)
         symbols = runner._get_rebuild_symbols()
         self.assertEqual(symbols, ["BTC/USD", "DOGE/USD"])
 
     @patch("trader_bot.strategy_runner.ALLOWED_SYMBOLS", [])
     def test_rebuild_symbols_fallback_when_allowlist_empty(self):
         runner = StrategyRunner(execute_orders=False)
-        runner.bot = type("Bot", (), {"exchange": type("Ex", (), {"symbols": []})()})()
+        exchange = type("Ex", (), {"symbols": []})()
+        runner.bot = FakeBot(exchange=exchange)
         symbols = runner._get_rebuild_symbols()
         self.assertEqual(symbols, ["BTC/USD"])
 
@@ -772,34 +770,6 @@ async def test_sandbox_daily_loss_check(monkeypatch):
         assert runner._kill_switch is True
 
 
-# --- Runner loop pacing ---
-
-
-class DummyBot:
-    def __init__(self, price: float = 100.0):
-        self.price = price
-        self.place_calls = []
-
-    async def get_equity_async(self):
-        return 1_000.0
-
-    async def get_market_data_async(self, symbol):
-        return {"symbol": symbol, "price": self.price, "bid": self.price - 1, "ask": self.price + 1, "spread_pct": 0.1}
-
-    async def get_positions_async(self):
-        return []
-
-    async def get_open_orders_async(self):
-        return []
-
-    async def get_my_trades_async(self, *_, **__):
-        return []
-
-    async def place_order_async(self, symbol, action, qty, prefer_maker=True):
-        self.place_calls.append((symbol, action, qty, prefer_maker))
-        return {"order_id": str(len(self.place_calls)), "liquidity": "maker"}
-
-
 class DummyDB:
     def log_equity_snapshot(self, *_, **__):
         return None
@@ -947,7 +917,7 @@ def _build_runner(signal: StrategySignal, *, risk_allowed=True, slippage_ok=True
     runner.cleanup = _cleanup
     runner.orchestrator = DummyOrchestrator()
     runner.daily_loss_pct = 10.0
-    runner.bot = DummyBot()
+    runner.bot = FakeBot(price=100.0)
     runner.db = DummyDB()
     runner.health_manager = DummyHealth()
     runner.risk_manager = SimpleNamespace(

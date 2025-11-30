@@ -8,6 +8,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 from trader_bot.services.command_processor import CommandResult
 from trader_bot.services.strategy_orchestrator import RiskCheckResult
 from trader_bot.strategy_runner import StrategyRunner
+from tests.fakes import FakeBot
 
 pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("test_db_path")]
 
@@ -48,53 +49,6 @@ class DummyOrchestrator:
     async def cleanup(self, cleanup_cb):
         self.cleanup_called = True
         # Avoid running full runner cleanup in unit tests
-        return None
-
-
-class DummyBot:
-    def __init__(self, equity=1000.0, market_price=101.0):
-        self.equity = equity
-        self.market_price = market_price
-        self.cancelled = []
-        self.open_orders = [{"id": 1, "symbol": "BTC/USD"}]
-        self.cancel_calls = 0
-
-    async def connect_async(self):
-        return None
-
-    async def get_equity_async(self):
-        return self.equity
-
-    async def get_market_data_async(self, symbol):
-        return {
-            "symbol": symbol,
-            "price": self.market_price,
-            "bid": self.market_price - 0.5,
-            "ask": self.market_price + 0.5,
-            "spread_pct": 0.5,
-            "bid_size": 1.0,
-            "ask_size": 1.0,
-            "_latency_ms": 1,
-        }
-
-    async def get_positions_async(self):
-        return []
-
-    async def get_open_orders_async(self):
-        return self.open_orders
-
-    async def cancel_open_order_async(self, order_id):
-        self.cancel_calls += 1
-        self.cancelled.append(order_id)
-        return True
-
-    async def fetch_ohlcv(self, *_args, **_kwargs):
-        return []
-
-    async def place_order_async(self, *_args, **_kwargs):
-        return {"order_id": "abc", "liquidity": "taker"}
-
-    async def close(self):
         return None
 
 
@@ -196,7 +150,7 @@ async def test_run_loop_stops_on_command_request():
 async def test_run_loop_propagates_risk_stop(monkeypatch):
     runner = StrategyRunner(execute_orders=False)
     runner.daily_loss_pct = 100.0
-    runner.bot = DummyBot(equity=2500.0)
+    runner.bot = FakeBot(equity=2500.0, price=101.0, spread_pct=0.5)
     runner.db = DummyDB()
     runner.risk_manager = DummyRiskManager()
     runner.orchestrator = DummyOrchestrator(risk_result=RiskCheckResult(True, True, shutdown_reason="risk breach"))
@@ -213,7 +167,7 @@ async def test_run_loop_propagates_risk_stop(monkeypatch):
 async def test_equity_fetch_failure_short_circuits(monkeypatch):
     runner = StrategyRunner(execute_orders=False)
     runner.daily_loss_pct = 100.0
-    runner.bot = DummyBot()
+    runner.bot = FakeBot(price=101.0, spread_pct=0.5)
     runner.db = DummyDB()
     runner.risk_manager = DummyRiskManager()
     runner.orchestrator = DummyOrchestrator()
@@ -284,7 +238,7 @@ def test_record_operational_metrics_emits_budget_branches():
 async def test_run_loop_pauses_when_health_manager_requests(monkeypatch):
     runner = StrategyRunner(execute_orders=False)
     runner.daily_loss_pct = 100.0
-    runner.bot = DummyBot()
+    runner.bot = FakeBot(price=101.0, spread_pct=0.5)
     runner.db = DummyDB()
     runner.risk_manager = DummyRiskManager()
     runner.session_id = 1
@@ -312,7 +266,7 @@ async def test_run_loop_pauses_when_health_manager_requests(monkeypatch):
 async def test_market_health_gating_records_stale(monkeypatch):
     runner = StrategyRunner(execute_orders=False)
     runner.daily_loss_pct = 100.0
-    runner.bot = DummyBot()
+    runner.bot = FakeBot(price=101.0, spread_pct=0.5)
     runner.db = DummyDB()
     runner.risk_manager = DummyRiskManager()
     runner.session_id = 1
@@ -341,7 +295,7 @@ async def test_market_health_gating_records_stale(monkeypatch):
 async def test_cancel_action_refreshes_open_orders(monkeypatch):
     runner = StrategyRunner(execute_orders=False)
     runner.daily_loss_pct = 100.0
-    runner.bot = DummyBot()
+    runner.bot = FakeBot(price=101.0, spread_pct=0.5)
     runner.db = DummyDB()
     runner.risk_manager = DummyRiskManager()
     runner.session_id = 1

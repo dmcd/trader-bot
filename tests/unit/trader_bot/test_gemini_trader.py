@@ -1,6 +1,7 @@
 import pytest
 
 from trader_bot.gemini_trader import GeminiTrader
+from tests.fakes import FakeExchange
 
 
 class SandboxExchange:
@@ -100,21 +101,6 @@ class TradesExchange:
         if self.should_fail:
             raise RuntimeError("no trades")
         return [{"id": 1, "symbol": symbol, "ts": since}]
-
-
-class DummyExchange:
-    def __init__(self, balances, tickers):
-        self._balances = balances
-        self._tickers = tickers
-
-    async def fetch_balance(self):
-        return {"total": self._balances, "timestamp": 12345}
-
-    async def fetch_ticker(self, symbol):
-        data = self._tickers.get(symbol)
-        if data is None:
-            raise RuntimeError(f"no ticker for {symbol}")
-        return data
 
 
 @pytest.mark.asyncio
@@ -223,7 +209,7 @@ async def test_fetch_ohlcv_handles_missing_method():
 async def test_get_positions_async_populates_mark_prices():
     trader = GeminiTrader()
     trader.connected = True
-    trader.exchange = DummyExchange(
+    trader.exchange = FakeExchange(
         balances={"BTC": 0.5, "ETH": 2.0, "USD": 1000.0},
         tickers={
             "BTC/USD": {"last": 30000.0},
@@ -250,7 +236,7 @@ async def test_get_positions_async_populates_mark_prices():
 async def test_get_positions_async_handles_missing_price():
     trader = GeminiTrader()
     trader.connected = True
-    trader.exchange = DummyExchange(balances={"SOL": 1.0}, tickers={})
+    trader.exchange = FakeExchange(balances={"SOL": 1.0}, tickers={})
 
     positions = await trader.get_positions_async()
 

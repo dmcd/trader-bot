@@ -92,6 +92,33 @@ def test_base_currency_column_present(tmp_path):
     db.close()
 
 
+def test_portfolio_creation_and_lookup(tmp_path):
+    db_path = tmp_path / "portfolio.db"
+    db = TradingDatabase(str(db_path))
+
+    portfolio = db.get_or_create_portfolio("main", base_currency="aud", bot_version="v1")
+
+    assert portfolio["id"] > 0
+    assert portfolio["name"] == "main"
+    assert portfolio["base_currency"] == "AUD"
+    assert portfolio["bot_version"] == "v1"
+    assert db.get_portfolio(portfolio["id"])["name"] == "main"
+    db.close()
+
+
+def test_portfolio_updates_metadata_when_reused(tmp_path):
+    db_path = tmp_path / "portfolio-reuse.db"
+    db = TradingDatabase(str(db_path))
+    first = db.get_or_create_portfolio("swing", base_currency="usd", bot_version="v1")
+
+    reused = db.get_or_create_portfolio("swing", base_currency="aud", bot_version="v2")
+
+    assert reused["id"] == first["id"]
+    assert reused["base_currency"] == "AUD"
+    assert reused["bot_version"] == "v2"
+    db.close()
+
+
 def test_market_data_preserves_integer_sizes(db_session):
     db, session_id = db_session
     db.log_market_data(

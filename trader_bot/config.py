@@ -84,6 +84,11 @@ IB_STOCK_COMMISSION_PER_SHARE = float(os.getenv('IB_STOCK_COMMISSION_PER_SHARE',
 IB_STOCK_MIN_COMMISSION = float(os.getenv('IB_STOCK_MIN_COMMISSION', '1.0'))
 IB_FX_COMMISSION_PCT = float(os.getenv('IB_FX_COMMISSION_PCT', '0.0'))
 
+# Portfolio scoping
+PORTFOLIO_NAME = os.getenv('PORTFOLIO_NAME', 'default')
+_default_portfolio_ccy = IB_BASE_CURRENCY if ACTIVE_EXCHANGE == 'IB' else 'USD'
+PORTFOLIO_BASE_CURRENCY = (os.getenv('PORTFOLIO_BASE_CURRENCY') or _default_portfolio_ccy).upper()
+
 # LLM tool/data fetch limits
 TOOL_MAX_BARS = int(os.getenv('TOOL_MAX_BARS', '2000'))  # cap per-timeframe bars returned to the LLM
 TOOL_MAX_TRADES = int(os.getenv('TOOL_MAX_TRADES', '500'))  # cap recent trades returned

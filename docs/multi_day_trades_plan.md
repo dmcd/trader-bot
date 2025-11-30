@@ -20,7 +20,7 @@ Notes on the current session model:
   - [x] Rollout: can assume fresh DB; no legacy session-only mode needed.
 
 - [ ] Data model refactor
-  - [ ] Add `portfolios` table and config to select/create active portfolio (baseline currency, bot_version tag, created_at).
+  - [x] Add `portfolios` table and config to select/create active portfolio (baseline currency, bot_version tag, created_at).
   - [ ] Add `portfolio_id` to trades, positions, open_orders, trade_plans, market_data, ohlcv_bars, indicators, equity_snapshots, llm_calls/llm_traces; add composite indexes on (portfolio_id, symbol/timeframe) where applicable.
   - [ ] Introduce optional `run_id` column for telemetry/ops without affecting portfolio scoping.
   - [ ] Create `portfolio_days` table (date, timezone, start_equity, end_equity, gross/net pnl, fees, llm_cost, drawdown) for reporting; populate start row on first equity snapshot of the day.

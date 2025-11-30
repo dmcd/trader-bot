@@ -46,6 +46,8 @@ from trader_bot.config import (
     SANDBOX_IGNORE_INITIAL_POSITIONS,
     IB_BASE_CURRENCY,
     BOT_VERSION,
+    PORTFOLIO_BASE_CURRENCY,
+    PORTFOLIO_NAME,
     TRADE_SYNC_CUTOFF_MINUTES,
     TRADING_MODE,
     EXCHANGE_ERROR_THRESHOLD,
@@ -124,6 +126,12 @@ class StrategyRunner:
         
         # Professional trading infrastructure
         self.db = TradingDatabase()
+        self.portfolio = self.db.get_or_create_portfolio(
+            name=PORTFOLIO_NAME,
+            base_currency=self.base_currency or PORTFOLIO_BASE_CURRENCY,
+            bot_version=BOT_VERSION,
+        )
+        self.portfolio_id = self.portfolio["id"] if self.portfolio else None
         self.cost_tracker = CostTracker(self.exchange_name, llm_provider=LLM_PROVIDER)
         self.technical_analysis = TechnicalAnalysis()
         self.session_id = None

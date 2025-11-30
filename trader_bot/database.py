@@ -22,6 +22,17 @@ class TradingDatabase:
         self.conn.row_factory = sqlite3.Row  # Return rows as dictionaries
         
         cursor = self.conn.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS portfolios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                base_currency TEXT,
+                bot_version TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(name)
+            )
+        """)
         
         # Sessions table
         cursor.execute("""
@@ -268,6 +279,56 @@ class TradingDatabase:
         session_id = cursor.lastrowid
         logger.info(f"Created new session {session_id} for version {bot_version} (base_currency={base_ccy or 'unset'})")
         return session_id
+
+    def get_portfolio(self, portfolio_id: int) -> Optional[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM portfolios WHERE id = ?", (portfolio_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_portfolio_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM portfolios WHERE name = ?", (name,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_or_create_portfolio(self, name: str, base_currency: Optional[str] = None, bot_version: Optional[str] = None) -> Dict[str, Any]:
+        """Return an existing portfolio by name or create one with the provided metadata."""
+        normalized_base = base_currency.upper() if base_currency else None
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM portfolios WHERE name = ?", (name,))
+        row = cursor.fetchone()
+        if row:
+            needs_update = False
+            if normalized_base and row["base_currency"] != normalized_base:
+                needs_update = True
+            if bot_version and row["bot_version"] != bot_version:
+                needs_update = True
+            if needs_update:
+                cursor.execute(
+                    """
+                    UPDATE portfolios
+                    SET base_currency = COALESCE(?, base_currency),
+                        bot_version = COALESCE(?, bot_version)
+                    WHERE id = ?
+                    """,
+                    (normalized_base, bot_version, row["id"]),
+                )
+                self.conn.commit()
+                cursor.execute("SELECT * FROM portfolios WHERE id = ?", (row["id"],))
+                row = cursor.fetchone()
+            return dict(row)
+
+        cursor.execute(
+            """
+            INSERT INTO portfolios (name, base_currency, bot_version)
+            VALUES (?, ?, ?)
+            """,
+            (name, normalized_base, bot_version),
+        )
+        self.conn.commit()
+        portfolio_id = cursor.lastrowid
+        return self.get_portfolio(portfolio_id)
 
     def get_session_id_by_version(self, bot_version: str) -> Optional[int]:
         cursor = self.conn.cursor()

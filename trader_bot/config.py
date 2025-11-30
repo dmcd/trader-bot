@@ -51,6 +51,13 @@ SANDBOX_IGNORE_INITIAL_POSITIONS = os.getenv('SANDBOX_IGNORE_INITIAL_POSITIONS',
 # Market microstructure guards
 MAX_SPREAD_PCT = float(os.getenv('MAX_SPREAD_PCT', '0.20'))  # Skip trading if spread exceeds this % of mid
 MIN_TOP_OF_BOOK_NOTIONAL = float(os.getenv('MIN_TOP_OF_BOOK_NOTIONAL', '100.0'))  # Require at least this notional at best bid/ask
+IB_EQUITY_MAX_SPREAD_PCT = float(os.getenv('IB_EQUITY_MAX_SPREAD_PCT', '0.35'))  # ASX equities spread cap (bps of mid)
+IB_FX_MAX_SPREAD_PCT = float(os.getenv('IB_FX_MAX_SPREAD_PCT', '0.08'))  # FX spread cap (bps of mid)
+IB_EQUITY_MIN_TOP_OF_BOOK_NOTIONAL = float(os.getenv('IB_EQUITY_MIN_TOP_OF_BOOK_NOTIONAL', '750.0'))  # AUD notional floor at top-of-book
+IB_FX_MIN_TOP_OF_BOOK_NOTIONAL = float(os.getenv('IB_FX_MIN_TOP_OF_BOOK_NOTIONAL', '1500.0'))  # AUD notional floor for FX top-of-book
+IB_EQUITY_MIN_QUOTE_SIZE = float(os.getenv('IB_EQUITY_MIN_QUOTE_SIZE', '100'))  # Min bid/ask size (shares) to treat book as liquid
+IB_EQUITY_TICK_SIZE = float(os.getenv('IB_EQUITY_TICK_SIZE', '0.01'))  # Tick size for ASX equities
+IB_FX_TICK_SIZE = float(os.getenv('IB_FX_TICK_SIZE', '0.0001'))  # Tick size for FX pairs
 
 # Exchange selection and symbol allowlist
 # Options: 'GEMINI', 'IB'

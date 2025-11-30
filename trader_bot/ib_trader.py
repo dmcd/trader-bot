@@ -16,6 +16,8 @@ from trader_bot.config import (
     IB_ALLOWED_INSTRUMENT_TYPES,
     IB_CLIENT_ID,
     IB_EXCHANGE,
+    IB_EQUITY_TICK_SIZE,
+    IB_FX_TICK_SIZE,
     IB_HOST,
     IB_PRIMARY_EXCHANGE,
     IB_PAPER,
@@ -52,6 +54,8 @@ class IBTrader(BaseTrader):
         allowed_instrument_types: Optional[list[str]] = None,
         fx_exchange: str = DEFAULT_FX_EXCHANGE,
         fx_cache_ttl: float = 30.0,
+        equity_tick_size: float = IB_EQUITY_TICK_SIZE,
+        fx_tick_size: float = IB_FX_TICK_SIZE,
         order_wait_timeout: float = 5.0,
         order_poll_interval: float = 0.25,
         reconnect_backoff_base: float = 1.0,
@@ -78,6 +82,8 @@ class IBTrader(BaseTrader):
         )
         self.fx_exchange = fx_exchange
         self.fx_cache_ttl = fx_cache_ttl
+        self.equity_tick_size = equity_tick_size
+        self.fx_tick_size = fx_tick_size
         self.order_wait_timeout = order_wait_timeout
         self.order_poll_interval = order_poll_interval
         self.reconnect_backoff_base = reconnect_backoff_base
@@ -282,6 +288,7 @@ class IBTrader(BaseTrader):
 
         result = {
             "symbol": spec.symbol,
+            "instrument_type": spec.instrument_type,
             "price": price,
             "bid": bid,
             "ask": ask,
@@ -291,6 +298,10 @@ class IBTrader(BaseTrader):
             "ask_size": ask_size,
             "spread_pct": spread_pct,
             "ob_imbalance": ob_imbalance,
+            "exchange": spec.exchange,
+            "primary_exchange": spec.primary_exchange,
+            "tick_size": self._tick_size_for(spec.instrument_type),
+            "venue": "IB",
             "_latency_ms": latency_ms,
         }
         result["_fetched_monotonic"] = self._monotonic()
@@ -916,23 +927,50 @@ class IBTrader(BaseTrader):
         self._next_reconnect_time = self._monotonic() + delay
         self.connected = False
 
+    def _tick_size_for(self, instrument_type: str | None) -> float | None:
+        if instrument_type == "FX":
+            return self.fx_tick_size
+        if instrument_type == "STK":
+            return self.equity_tick_size
+        return None
+
     def _compute_limit_price(self, md: Optional[Dict[str, Any]], side: str, prefer_maker: bool) -> float | None:
         if not md:
             return None
         bid = md.get("bid")
         ask = md.get("ask")
         price = md.get("price") or md.get("close")
+        instrument_type = md.get("instrument_type")
+        tick_size = md.get("tick_size") or self._tick_size_for(instrument_type)
+        if price is not None and price <= 0:
+            price = None
 
         if prefer_maker:
             if side == "BUY":
                 base = bid or price
-                return base * 0.999 if base else None
+                nudged = base * 0.999 if base else None
+                return self._apply_tick_size(nudged, tick_size, side, prefer_maker)
             base = ask or price
-            return base * 1.001 if base else None
+            nudged = base * 1.001 if base else None
+            return self._apply_tick_size(nudged, tick_size, side, prefer_maker)
 
         if side == "BUY":
-            return ask or price
-        return bid or price
+            return self._apply_tick_size(ask or price, tick_size, side, prefer_maker)
+        return self._apply_tick_size(bid or price, tick_size, side, prefer_maker)
+
+    def _apply_tick_size(self, price: float | None, tick_size: float | None, side: str, prefer_maker: bool) -> float | None:
+        if price is None or price <= 0 or not tick_size:
+            return price
+
+        steps = price / tick_size
+        if prefer_maker:
+            if side == "BUY":
+                adjusted = math.floor(steps) * tick_size
+            else:
+                adjusted = math.ceil(steps) * tick_size
+        else:
+            adjusted = round(steps) * tick_size
+        return round(adjusted, 8)
 
     async def _place_order(self, contract, order):
         place_fn = getattr(self.ib, "placeOrderAsync", None)

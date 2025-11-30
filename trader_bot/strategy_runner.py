@@ -57,6 +57,12 @@ from trader_bot.config import (
     MAKER_PREFERENCE_DEFAULT,
     MAKER_PREFERENCE_OVERRIDES,
     ALLOWED_SYMBOLS,
+    IB_ALLOWED_INSTRUMENT_TYPES,
+    IB_EQUITY_MAX_SPREAD_PCT,
+    IB_EQUITY_MIN_QUOTE_SIZE,
+    IB_EQUITY_MIN_TOP_OF_BOOK_NOTIONAL,
+    IB_FX_MAX_SPREAD_PCT,
+    IB_FX_MIN_TOP_OF_BOOK_NOTIONAL,
 )
 from trader_bot.cost_tracker import CostTracker
 from trader_bot.data_fetch_coordinator import DataFetchCoordinator
@@ -77,7 +83,7 @@ from trader_bot.services.strategy_orchestrator import StrategyOrchestrator
 from trader_bot.technical_analysis import TechnicalAnalysis
 from trader_bot.trading_context import TradingContext
 from trader_bot.utils import get_client_order_id
-from trader_bot.symbols import normalize_symbol
+from trader_bot.symbols import infer_instrument_type, normalize_symbol
 
 # Configure logging
 bot_actions_logger = setup_logging()
@@ -468,13 +474,14 @@ class StrategyRunner:
 
     def _slippage_within_limit(self, decision_price: float, latest_price: float, market_data_point: dict = None):
         """Delegate slippage cap check to action handler for compatibility."""
+        max_spread_pct, min_top_of_book_notional, _ = self._microstructure_thresholds(market_data_point or {})
         return self.action_handler.slippage_within_limit(
             decision_price,
             latest_price,
             market_data_point or {},
             max_slippage_pct=MAX_SLIPPAGE_PCT,
-            max_spread_pct=MAX_SPREAD_PCT,
-            min_top_of_book_notional=MIN_TOP_OF_BOOK_NOTIONAL,
+            max_spread_pct=max_spread_pct,
+            min_top_of_book_notional=min_top_of_book_notional,
         )
 
     def _capture_sandbox_position_baseline(self, positions: list | None):
@@ -606,12 +613,40 @@ class StrategyRunner:
         """Delegate order value buffer to action handler for compatibility."""
         return self.action_handler.apply_order_value_buffer(quantity, price, symbol=symbol)
 
+    def _microstructure_thresholds(self, market_data_point: dict | None) -> tuple[float, float, float | None]:
+        md = market_data_point or {}
+        instrument_type = md.get("instrument_type")
+        symbol = md.get("symbol")
+
+        if self.exchange_name == "IB" and not instrument_type and symbol:
+            try:
+                normalized = normalize_symbol(symbol)
+                base, quote = normalized.split("/", 1)
+                instrument_type = infer_instrument_type(
+                    base,
+                    quote,
+                    allowed_instrument_types=IB_ALLOWED_INSTRUMENT_TYPES,
+                    base_currency=IB_BASE_CURRENCY,
+                )
+            except Exception:
+                instrument_type = None
+
+        if self.exchange_name == "IB":
+            if instrument_type == "STK":
+                return IB_EQUITY_MAX_SPREAD_PCT, IB_EQUITY_MIN_TOP_OF_BOOK_NOTIONAL, IB_EQUITY_MIN_QUOTE_SIZE
+            if instrument_type == "FX":
+                return IB_FX_MAX_SPREAD_PCT, IB_FX_MIN_TOP_OF_BOOK_NOTIONAL, None
+
+        return MAX_SPREAD_PCT, MIN_TOP_OF_BOOK_NOTIONAL, None
+
     def _liquidity_ok(self, market_data_point: dict) -> bool:
         """Delegate liquidity check to action handler for compatibility."""
+        max_spread_pct, min_top_of_book_notional, min_quote_size = self._microstructure_thresholds(market_data_point)
         return self.action_handler.liquidity_ok(
             market_data_point,
-            max_spread_pct=MAX_SPREAD_PCT,
-            min_top_of_book_notional=MIN_TOP_OF_BOOK_NOTIONAL,
+            max_spread_pct=max_spread_pct,
+            min_top_of_book_notional=min_top_of_book_notional,
+            min_quote_size=min_quote_size,
         )
 
     async def _monitor_trade_plans(self, price_lookup: dict, open_orders: list):

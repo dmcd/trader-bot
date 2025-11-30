@@ -47,11 +47,11 @@
      - [x] Wire a currency converter using `IBTrader` market data/quotes so risk checks compare values in base currency.
      - [x] Normalize exposure calculations to treat short positions as negative and cap absolute exposure.
      - [x] Add tests covering AUD base currency sizing for long/short and per-order value validation.
-   - [ ] Add spread/liquidity heuristics tuned for equities/FX (e.g., min quote size in shares, tick-size aware price nudging). Revisit `MIN_TOP_OF_BOOK_NOTIONAL` defaults for AUD.
-     - [ ] Choose defaults for ASX equities vs FX pairs (spread caps, min depth, tick size guard).
-     - [ ] Wire heuristics into order pre-checks and market data sanity checks.
-     - [ ] Add config entries and docstrings for new knobs; include AUD-specific defaults.
-     - [ ] Add unit tests covering widening spreads and illiquid books for both equities and FX.
+   - [x] Add spread/liquidity heuristics tuned for equities/FX (e.g., min quote size in shares, tick-size aware price nudging). Revisit `MIN_TOP_OF_BOOK_NOTIONAL` defaults for AUD.
+     - [x] Choose defaults for ASX equities vs FX pairs (spread caps, min depth, tick size guard).
+     - [x] Wire heuristics into order pre-checks and market data sanity checks.
+     - [x] Add config entries and docstrings for new knobs; include AUD-specific defaults.
+     - [x] Add unit tests covering widening spreads and illiquid books for both equities and FX.
    - [ ] Update auto-flatten and plan-monitor exits to prefer marketable limit orders when IB disallows true market for certain contracts.
      - [ ] Detect contracts where market orders are disallowed and derive a slippage bump for marketable limits.
      - [ ] Update `PlanMonitor` exit path and any auto-flatten helpers to use the marketable limit flow.

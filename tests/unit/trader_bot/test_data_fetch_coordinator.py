@@ -174,7 +174,12 @@ async def test_order_book_meta_includes_freshness(monkeypatch):
 async def test_handle_requests_dedupes_repeat_requests(caplog):
     caplog.set_level(logging.INFO, logger="telemetry")
     exchange = StubExchange()
-    coordinator = DataFetchCoordinator(exchange, cache_ttl_seconds=0, rate_limit_window_seconds=120)
+    coordinator = DataFetchCoordinator(
+        exchange,
+        cache_ttl_seconds=0,
+        rate_limit_window_seconds=120,
+        allowed_symbols=["BTC/USD"],
+    )
     req = ToolRequest(
         id="m1",
         tool=ToolName.GET_MARKET_DATA,
@@ -196,6 +201,7 @@ async def test_rate_limit_is_per_symbol_timeframe_combination():
     coordinator = DataFetchCoordinator(
         exchange,
         cache_ttl_seconds=0,
+        allowed_symbols=["BTC/USD"],
         rate_limits={ToolName.GET_MARKET_DATA: 1},
         rate_limit_window_seconds=120,
         dedup_window_seconds=0,
@@ -235,6 +241,7 @@ async def test_rate_limit_window_resets(monkeypatch):
     coordinator = DataFetchCoordinator(
         exchange,
         cache_ttl_seconds=0,
+        allowed_symbols=["BTC/USD"],
         rate_limits={ToolName.GET_ORDER_BOOK: 1},
         rate_limit_window_seconds=5,
         dedup_window_seconds=0,
@@ -263,7 +270,12 @@ async def test_dedup_reuses_cached_response_meta(monkeypatch):
     exchange = StubExchange()
     clock = {"now": 0.0}
     monkeypatch.setattr("time.time", lambda: clock["now"])
-    coordinator = DataFetchCoordinator(exchange, cache_ttl_seconds=0, rate_limit_window_seconds=120)
+    coordinator = DataFetchCoordinator(
+        exchange,
+        cache_ttl_seconds=0,
+        rate_limit_window_seconds=120,
+        allowed_symbols=["BTC/USD"],
+    )
     req = ToolRequest(
         id="m1",
         tool=ToolName.GET_MARKET_DATA,
@@ -361,6 +373,7 @@ async def test_handle_requests_invokes_clamp_and_success(monkeypatch):
         exchange,
         cache_ttl_seconds=0,
         max_json_bytes=20,
+        allowed_symbols=["BTC/USD"],
         success_callback=lambda: successes.append("ok"),
     )
     req = ToolRequest(
@@ -401,6 +414,7 @@ async def test_stale_cached_response_is_pruned(monkeypatch):
     coordinator = DataFetchCoordinator(
         exchange,
         cache_ttl_seconds=0,
+        allowed_symbols=["BTC/USD"],
         rate_limit_window_seconds=120,
         dedup_window_seconds=1,
     )
@@ -433,6 +447,7 @@ async def test_order_book_error_surfaces_and_notifies_callback():
         cache_ttl_seconds=0,
         rate_limit_window_seconds=120,
         error_callback=error_callback,
+        allowed_symbols=["BTC/USD"],
     )
     req = ToolRequest(
         id="ob_err",

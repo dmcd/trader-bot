@@ -98,7 +98,7 @@ async def test_tool_roundtrip_executes_and_returns_decision(monkeypatch):
     db = StubDB()
     ta = StubTA()
     cost = StubCost()
-    coordinator = DataFetchCoordinator(StubExchange())
+    coordinator = DataFetchCoordinator(StubExchange(), allowed_symbols=["BTC/USD"])
     strategy = LLMStrategy(db, ta, cost, tool_coordinator=coordinator)
 
     calls = []
@@ -142,7 +142,7 @@ async def test_tool_truncation_flag_propagates_to_trace(monkeypatch):
     db = StubDB()
     ta = StubTA()
     cost = StubCost()
-    coordinator = DataFetchCoordinator(BigOrderBookExchange(), max_json_bytes=200)
+    coordinator = DataFetchCoordinator(BigOrderBookExchange(), max_json_bytes=200, allowed_symbols=["BTC/USD"])
     strategy = LLMStrategy(db, ta, cost, tool_coordinator=coordinator)
 
     async def fake_invoke(prompt, timeout=30):

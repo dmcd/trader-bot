@@ -430,6 +430,7 @@ async def test_get_market_data_maps_top_of_book_fields():
     md = await trader.get_market_data_async("BHP/AUD")
 
     assert md["symbol"] == "BHP/AUD"
+    assert md["instrument_type"] == "STK"
     assert md["price"] == pytest.approx(101.25)
     assert md["bid"] == pytest.approx(100.5)
     assert md["ask"] == pytest.approx(101.5)
@@ -438,6 +439,8 @@ async def test_get_market_data_maps_top_of_book_fields():
     assert md["volume"] == pytest.approx(15000)
     assert md["spread_pct"] == pytest.approx((101.5 - 100.5) / 101.0 * 100)
     assert md["ob_imbalance"] == pytest.approx((200 - 120) / (200 + 120))
+    assert md["tick_size"] == pytest.approx(trader.equity_tick_size)
+    assert md["venue"] == "IB"
 
 
 @pytest.mark.asyncio
@@ -464,6 +467,9 @@ async def test_get_market_data_falls_back_to_mid_when_no_last():
     assert md["price"] == pytest.approx((0.655 + 0.656) / 2)
     assert md["spread_pct"] == pytest.approx((0.656 - 0.655) / ((0.655 + 0.656) / 2) * 100)
     assert md["ob_imbalance"] == pytest.approx((1_000_000 - 800_000) / (1_000_000 + 800_000))
+    assert md["instrument_type"] == "FX"
+    assert md["tick_size"] == pytest.approx(trader.fx_tick_size)
+    assert md["venue"] == "IB"
 
 
 @pytest.mark.asyncio
@@ -489,7 +495,7 @@ async def test_place_order_limit_prefers_maker_and_maps_status():
     limit_order = call["order"]
     assert getattr(limit_order, "orderRef") is not None
     assert getattr(limit_order, "totalQuantity") == 10
-    assert getattr(limit_order, "lmtPrice") == pytest.approx(100.5 * 0.999)
+    assert getattr(limit_order, "lmtPrice") == pytest.approx(100.39)
 
     assert result["status"] == "filled"
     assert result["filled"] == 10
@@ -497,6 +503,24 @@ async def test_place_order_limit_prefers_maker_and_maps_status():
     assert result["avg_fill_price"] == pytest.approx(101.2)
     assert result["fee"] == pytest.approx(0.35)
     assert result["liquidity"] == "added"
+
+
+@pytest.mark.asyncio
+async def test_limit_price_tick_size_rounds_maker_quotes():
+    fake_ib = FakeIB(
+        connected=True,
+        market_data={"BHPAUD": FakeTicker(price=100.08, bid=100.07, ask=100.09)},
+    )
+    trader = IBTrader(ib_client=fake_ib, order_wait_timeout=0.5, equity_tick_size=0.05)
+    trader.connected = True
+
+    md = await trader.get_market_data_async("BHP/AUD")
+
+    buy_price = trader._compute_limit_price(md, "BUY", prefer_maker=True)
+    sell_price = trader._compute_limit_price(md, "SELL", prefer_maker=True)
+
+    assert buy_price == pytest.approx(99.95)
+    assert sell_price == pytest.approx(100.2)
 
 
 @pytest.mark.asyncio

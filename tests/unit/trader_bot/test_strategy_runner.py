@@ -11,7 +11,14 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from trader_bot.config import CLIENT_ORDER_PREFIX
+from trader_bot.config import (
+    CLIENT_ORDER_PREFIX,
+    IB_EQUITY_MAX_SPREAD_PCT,
+    IB_EQUITY_MIN_QUOTE_SIZE,
+    IB_EQUITY_MIN_TOP_OF_BOOK_NOTIONAL,
+    IB_FX_MAX_SPREAD_PCT,
+    IB_FX_MIN_TOP_OF_BOOK_NOTIONAL,
+)
 from trader_bot.database import TradingDatabase
 from trader_bot.risk_manager import RiskManager
 from trader_bot.services.command_processor import CommandResult
@@ -102,6 +109,36 @@ class TestDeterministicOverlays(unittest.TestCase):
         self.assertFalse(self.runner._prefer_maker("eth/usd"))
 
 
+class TestMicrostructureThresholds(unittest.TestCase):
+    def setUp(self):
+        self.runner = StrategyRunner()
+        self.runner.action_handler = MagicMock()
+
+    def test_ib_equity_thresholds_used(self):
+        self.runner.exchange_name = "IB"
+        self.runner.action_handler.liquidity_ok.return_value = True
+        md = {"symbol": "BHP/AUD", "instrument_type": "STK"}
+
+        self.runner._liquidity_ok(md)
+
+        kwargs = self.runner.action_handler.liquidity_ok.call_args.kwargs
+        self.assertEqual(kwargs["max_spread_pct"], IB_EQUITY_MAX_SPREAD_PCT)
+        self.assertEqual(kwargs["min_top_of_book_notional"], IB_EQUITY_MIN_TOP_OF_BOOK_NOTIONAL)
+        self.assertEqual(kwargs["min_quote_size"], IB_EQUITY_MIN_QUOTE_SIZE)
+
+    def test_ib_fx_thresholds_inferred_from_symbol(self):
+        self.runner.exchange_name = "IB"
+        self.runner.action_handler.liquidity_ok.return_value = True
+        md = {"symbol": "AUD/USD"}
+
+        self.runner._liquidity_ok(md)
+
+        kwargs = self.runner.action_handler.liquidity_ok.call_args.kwargs
+        self.assertEqual(kwargs["max_spread_pct"], IB_FX_MAX_SPREAD_PCT)
+        self.assertEqual(kwargs["min_top_of_book_notional"], IB_FX_MIN_TOP_OF_BOOK_NOTIONAL)
+        self.assertIsNone(kwargs["min_quote_size"])
+
+
 def test_slippage_guard_delegates_to_action_handler():
     runner = StrategyRunner()
     runner.action_handler = MagicMock()
@@ -109,13 +146,14 @@ def test_slippage_guard_delegates_to_action_handler():
     ok, move = runner._slippage_within_limit(100.0, 101.0, {"symbol": "BTC/USD"})
     assert ok is True
     assert move == 0.0
+    expected_spread, expected_min_top, _ = runner._microstructure_thresholds({"symbol": "BTC/USD"})
     runner.action_handler.slippage_within_limit.assert_called_with(
         100.0,
         101.0,
         {"symbol": "BTC/USD"},
         max_slippage_pct=MAX_SLIPPAGE_PCT,
-        max_spread_pct=MAX_SPREAD_PCT,
-        min_top_of_book_notional=MIN_TOP_OF_BOOK_NOTIONAL,
+        max_spread_pct=expected_spread,
+        min_top_of_book_notional=expected_min_top,
     )
 
 

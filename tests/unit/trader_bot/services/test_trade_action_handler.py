@@ -133,6 +133,16 @@ def test_liquidity_filter_blocks_wide_spread(handler, caplog):
     assert ok is False
 
 
+def test_liquidity_filter_enforces_min_quote_size(handler):
+    ok = handler.liquidity_ok(
+        {"bid": 10.0, "ask": 10.1, "bid_size": 20, "ask_size": 25, "instrument_type": "STK"},
+        max_spread_pct=1.0,
+        min_top_of_book_notional=50.0,
+        min_quote_size=50,
+    )
+    assert ok is False
+
+
 def test_passes_rr_filter_requires_positive_reward(handler):
     assert handler.passes_rr_filter("BUY", price=100, stop_price=99, target_price=101, min_rr=2.0) is False
     assert handler.passes_rr_filter("SELL", price=100, stop_price=101, target_price=95, min_rr=1.5) is True

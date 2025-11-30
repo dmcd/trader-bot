@@ -116,11 +116,12 @@ class TradeActionHandler:
         cap = self.compute_slippage_cap(market_data_point or {}, max_slippage_pct, max_spread_pct, min_top_of_book_notional)
         return move_pct <= cap, move_pct
 
-    def liquidity_ok(self, market_data_point: dict, max_spread_pct: float, min_top_of_book_notional: float) -> bool:
-        """Simple microstructure filters using spread and top-of-book depth."""
+    def liquidity_ok(self, market_data_point: dict, max_spread_pct: float, min_top_of_book_notional: float, min_quote_size: float | None = None) -> bool:
+        """Simple microstructure filters using spread, top-of-book depth, and quote size."""
         if not market_data_point:
             return True
 
+        instrument_type = market_data_point.get("instrument_type")
         spread_pct = market_data_point.get("spread_pct")
         bid = market_data_point.get("bid")
         ask = market_data_point.get("ask")
@@ -135,6 +136,16 @@ class TradeActionHandler:
         if spread_pct is not None and spread_pct > max_spread_pct:
             self.actions_logger.info(f"⏸️ Skipping trade: spread {spread_pct:.3f}% > cap {max_spread_pct:.3f}%")
             return False
+
+        if min_quote_size and instrument_type == "STK":
+            sizes = [s for s in (bid_size, ask_size) if s is not None]
+            if sizes:
+                min_size = min(sizes)
+                if min_size < min_quote_size:
+                    self.actions_logger.info(
+                        f"⏸️ Skipping trade: quote size {min_size:.2f} < min shares {min_quote_size:.2f}"
+                    )
+                    return False
 
         if bid and ask and bid_size and ask_size:
             # Use the weaker side as liquidity floor

@@ -61,6 +61,32 @@ class TradingDatabase:
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS portfolio_days (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                portfolio_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                timezone TEXT NOT NULL,
+                start_equity REAL,
+                end_equity REAL,
+                gross_pnl REAL,
+                net_pnl REAL,
+                fees REAL,
+                llm_cost REAL,
+                max_drawdown REAL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(portfolio_id, date, timezone),
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+            )
+        """)
+        try:
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_portfolio_days_portfolio_date ON portfolio_days (portfolio_id, date DESC)"
+            )
+        except Exception as exc:
+            logger.debug(f"Could not create portfolio_days index: {exc}")
         
         # Trades table
         cursor.execute("""
@@ -375,6 +401,29 @@ class TradingDatabase:
         cursor.execute("SELECT * FROM portfolios WHERE name = ?", (name,))
         row = cursor.fetchone()
         return dict(row) if row else None
+
+    def ensure_portfolio_day(self, portfolio_id: int, day: date, timezone: str) -> Dict[str, Any]:
+        """
+        Create a portfolio_days row if missing for the given date/timezone and return the row.
+        Called when capturing the first equity snapshot of a day.
+        """
+        cursor = self.conn.cursor()
+        day_str = day.isoformat()
+        cursor.execute(
+            """
+            INSERT INTO portfolio_days (portfolio_id, date, timezone)
+            VALUES (?, ?, ?)
+            ON CONFLICT(portfolio_id, date, timezone) DO NOTHING
+            """,
+            (portfolio_id, day_str, timezone),
+        )
+        self.conn.commit()
+        cursor.execute(
+            "SELECT * FROM portfolio_days WHERE portfolio_id = ? AND date = ? AND timezone = ?",
+            (portfolio_id, day_str, timezone),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else {}
 
     def get_or_create_portfolio(self, name: str, base_currency: Optional[str] = None, bot_version: Optional[str] = None) -> Dict[str, Any]:
         """Return an existing portfolio by name or create one with the provided metadata."""

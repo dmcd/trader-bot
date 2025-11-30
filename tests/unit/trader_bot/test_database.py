@@ -520,3 +520,18 @@ def test_start_of_day_equity_uses_cache_when_risk_state_missing(db_session):
     db.conn.commit()
 
     assert db.get_start_of_day_equity(session_id) == pytest.approx(321.0)
+
+
+def test_portfolio_days_upsert(tmp_path):
+    db_path = tmp_path / "portfolio-days.db"
+    db = TradingDatabase(str(db_path))
+    portfolio = db.get_or_create_portfolio("swing", base_currency="usd", bot_version="v1")
+
+    first = db.ensure_portfolio_day(portfolio["id"], datetime(2024, 1, 1).date(), timezone="AEST")
+    second = db.ensure_portfolio_day(portfolio["id"], datetime(2024, 1, 1).date(), timezone="AEST")
+
+    assert first["id"] == second["id"]
+    assert first["portfolio_id"] == portfolio["id"]
+    idx = {row["name"] for row in db.conn.execute("PRAGMA index_list(portfolio_days)")}
+    assert "idx_portfolio_days_portfolio_date" in idx
+    db.close()

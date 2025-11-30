@@ -23,7 +23,7 @@ Notes on the current session model:
   - [x] Add `portfolios` table and config to select/create active portfolio (baseline currency, bot_version tag, created_at).
   - [x] Add `portfolio_id` to trades, positions, open_orders, trade_plans, market_data, ohlcv_bars, indicators, equity_snapshots, llm_calls/llm_traces; add composite indexes on (portfolio_id, symbol/timeframe) where applicable.
   - [x] Introduce optional `run_id` column for telemetry/ops without affecting portfolio scoping.
-  - [ ] Create `portfolio_days` table (date, timezone, start_equity, end_equity, gross/net pnl, fees, llm_cost, drawdown) for reporting; populate start row on first equity snapshot of the day.
+  - [x] Create `portfolio_days` table (date, timezone, start_equity, end_equity, gross/net pnl, fees, llm_cost, drawdown) for reporting; populate start row on first equity snapshot of the day.
   - [ ] Replace `risk_state`/`session_stats_cache` with portfolio-scoped stats cache (exposure totals, gross pnl, fees, llm cost) and drop daily-loss baselines.
   - [ ] Deprecate/rename `sessions` table: migrate data into `portfolios` (id swap, bot_version/date preserved), add view/compat shim if needed, and remove session_id foreign keys once portfolio_id is wired.
 

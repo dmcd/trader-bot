@@ -11,10 +11,14 @@ from trader_bot.config import (
     IB_ACCOUNT_ID,
     IB_BASE_CURRENCY,
     IB_CLIENT_ID,
+    IB_EXCHANGE,
     IB_HOST,
+    IB_PRIMARY_EXCHANGE,
     IB_PAPER,
     IB_PORT,
+    IB_ALLOWED_INSTRUMENT_TYPES,
 )
+from trader_bot.ib_contracts import build_ib_contract
 from trader_bot.symbols import DEFAULT_FX_EXCHANGE
 from trader_bot.trader import BaseTrader
 
@@ -40,6 +44,9 @@ class IBTrader(BaseTrader):
         connect_timeout: float = 5.0,
         heartbeat_interval: float = 30.0,
         base_currency: str = IB_BASE_CURRENCY,
+        default_exchange: str | None = IB_EXCHANGE,
+        default_primary_exchange: str | None = IB_PRIMARY_EXCHANGE,
+        allowed_instrument_types: Optional[list[str]] = None,
         fx_exchange: str = DEFAULT_FX_EXCHANGE,
         fx_cache_ttl: float = 30.0,
         ib_client: Optional[IB] = None,
@@ -54,6 +61,11 @@ class IBTrader(BaseTrader):
         self.connect_timeout = connect_timeout
         self.heartbeat_interval = heartbeat_interval
         self.base_currency = base_currency.upper()
+        self.default_exchange = default_exchange
+        self.default_primary_exchange = default_primary_exchange
+        self.allowed_instrument_types = (
+            list(allowed_instrument_types) if allowed_instrument_types is not None else list(IB_ALLOWED_INSTRUMENT_TYPES)
+        )
         self.fx_exchange = fx_exchange
         self.fx_cache_ttl = fx_cache_ttl
         self.ib: IB = ib_client or IB()
@@ -157,8 +169,95 @@ class IBTrader(BaseTrader):
 
         return summary
 
-    async def get_market_data_async(self, symbol):  # pragma: no cover - placeholder
-        raise NotImplementedError("Market data not implemented for IB yet.")
+    async def get_market_data_async(self, symbol):
+        if not self.connected:
+            return None
+
+        try:
+            contract, spec = build_ib_contract(
+                symbol,
+                allowed_instrument_types=self.allowed_instrument_types,
+                default_exchange=self.default_exchange,
+                default_primary_exchange=self.default_primary_exchange,
+                base_currency=self.base_currency,
+                fx_exchange=self.fx_exchange,
+            )
+        except Exception as exc:
+            logger.error(f"Error building IB contract for {symbol}: {exc}")
+            return None
+
+        started = self._monotonic()
+        try:
+            req_fn = getattr(self.ib, "reqMktDataAsync", None)
+            if req_fn:
+                ticker = await asyncio.wait_for(
+                    req_fn(contract, "", False, False),
+                    timeout=self.connect_timeout,
+                )
+            else:
+                ticker = await asyncio.wait_for(
+                    asyncio.to_thread(self.ib.reqMktData, contract, "", False, False),
+                    timeout=self.connect_timeout,
+                )
+        except Exception as exc:
+            logger.error(f"Error fetching IB market data for {symbol}: {exc}")
+            return None
+
+        if ticker is None:
+            return None
+
+        bid = getattr(ticker, "bid", None)
+        ask = getattr(ticker, "ask", None)
+        bid_size = getattr(ticker, "bidSize", None)
+        ask_size = getattr(ticker, "askSize", None)
+        last = getattr(ticker, "last", None)
+        close = getattr(ticker, "close", None)
+        volume = getattr(ticker, "volume", None)
+        if volume is None:
+            volume = getattr(ticker, "lastSize", None)
+
+        price = last if last is not None and last > 0 else None
+        if price is None:
+            price_fn = getattr(ticker, "marketPrice", None)
+            if callable(price_fn):
+                try:
+                    candidate = price_fn()
+                    if candidate is not None and candidate > 0:
+                        price = candidate
+                except Exception:
+                    price = None
+        if price is None and bid is not None and ask is not None:
+            price = (bid + ask) / 2
+        if price is None:
+            price = bid if bid is not None else ask
+
+        spread_pct = None
+        if bid is not None and ask is not None:
+            mid = (bid + ask) / 2
+            if mid not in (None, 0):
+                spread_pct = ((ask - bid) / mid) * 100
+
+        ob_imbalance = None
+        if bid_size is not None and ask_size is not None:
+            denom = bid_size + ask_size
+            if denom:
+                ob_imbalance = (bid_size - ask_size) / denom
+
+        latency_ms = (self._monotonic() - started) * 1000
+
+        return {
+            "symbol": spec.symbol,
+            "price": price,
+            "bid": bid,
+            "ask": ask,
+            "close": close,
+            "volume": volume,
+            "bid_size": bid_size,
+            "ask_size": ask_size,
+            "spread_pct": spread_pct,
+            "ob_imbalance": ob_imbalance,
+            "_latency_ms": latency_ms,
+        }
 
     async def place_order_async(self, symbol, action, quantity):  # pragma: no cover - placeholder
         raise NotImplementedError("Order placement not implemented for IB yet.")

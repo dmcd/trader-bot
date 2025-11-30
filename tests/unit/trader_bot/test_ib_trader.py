@@ -15,10 +15,24 @@ class FakeClock:
 
 
 class FakeTicker:
-    def __init__(self, price: float, bid: float | None = None, ask: float | None = None):
+    def __init__(
+        self,
+        price: float | None,
+        bid: float | None = None,
+        ask: float | None = None,
+        *,
+        bid_size: float | None = None,
+        ask_size: float | None = None,
+        last: float | None = None,
+        volume: float | None = None,
+    ):
         self._price = price
         self.bid = bid
         self.ask = ask
+        self.bidSize = bid_size
+        self.askSize = ask_size
+        self.last = last
+        self.volume = volume
 
     def marketPrice(self):
         return self._price
@@ -263,3 +277,61 @@ async def test_get_equity_falls_back_to_cash_when_no_net_liquidation():
     equity = await trader.get_equity_async()
 
     assert equity == pytest.approx(500.0)
+
+
+@pytest.mark.asyncio
+async def test_get_market_data_maps_top_of_book_fields():
+    fake_ib = FakeIB(
+        connected=True,
+        market_data={
+            "BHPAUD": FakeTicker(
+                price=101.0,
+                bid=100.5,
+                ask=101.5,
+                bid_size=200,
+                ask_size=120,
+                last=101.25,
+                volume=15000,
+            )
+        },
+    )
+    trader = IBTrader(ib_client=fake_ib)
+    trader.connected = True
+
+    md = await trader.get_market_data_async("BHP/AUD")
+
+    assert md["symbol"] == "BHP/AUD"
+    assert md["price"] == pytest.approx(101.25)
+    assert md["bid"] == pytest.approx(100.5)
+    assert md["ask"] == pytest.approx(101.5)
+    assert md["bid_size"] == pytest.approx(200)
+    assert md["ask_size"] == pytest.approx(120)
+    assert md["volume"] == pytest.approx(15000)
+    assert md["spread_pct"] == pytest.approx((101.5 - 100.5) / 101.0 * 100)
+    assert md["ob_imbalance"] == pytest.approx((200 - 120) / (200 + 120))
+
+
+@pytest.mark.asyncio
+async def test_get_market_data_falls_back_to_mid_when_no_last():
+    fake_ib = FakeIB(
+        connected=True,
+        market_data={
+            "AUDUSD": FakeTicker(
+                price=None,
+                bid=0.655,
+                ask=0.656,
+                bid_size=1_000_000,
+                ask_size=800_000,
+                last=None,
+                volume=None,
+            )
+        },
+    )
+    trader = IBTrader(ib_client=fake_ib)
+    trader.connected = True
+
+    md = await trader.get_market_data_async("AUD/USD")
+
+    assert md["price"] == pytest.approx((0.655 + 0.656) / 2)
+    assert md["spread_pct"] == pytest.approx((0.656 - 0.655) / ((0.655 + 0.656) / 2) * 100)
+    assert md["ob_imbalance"] == pytest.approx((1_000_000 - 800_000) / (1_000_000 + 800_000))

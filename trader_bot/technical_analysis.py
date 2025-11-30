@@ -52,6 +52,10 @@ class TechnicalAnalysis:
             indicators['sma_20'] = df['price'].rolling(window=20).mean().iloc[-1]
             if len(df) >= 50:
                 indicators['sma_50'] = df['price'].rolling(window=50).mean().iloc[-1]
+
+            if any(pd.isna(val) or np.isinf(val) for val in indicators.values()):
+                logger.warning("Indicator calculation produced invalid values; skipping snapshot")
+                return None
             
             logger.debug(f"Calculated indicators: RSI={indicators['rsi']:.2f}, MACD={indicators['macd']:.4f}")
             return indicators
@@ -93,12 +97,14 @@ class TechnicalAnalysis:
         
         upper_band = sma + (std * std_dev)
         lower_band = sma - (std * std_dev)
+        middle = sma.iloc[-1]
+        width = ((upper_band.iloc[-1] - lower_band.iloc[-1]) / middle * 100) if middle else float("nan")
         
         return {
             'upper': upper_band.iloc[-1],
-            'middle': sma.iloc[-1],
+            'middle': middle,
             'lower': lower_band.iloc[-1],
-            'width': (upper_band.iloc[-1] - lower_band.iloc[-1]) / sma.iloc[-1] * 100
+            'width': width
         }
     
     def get_trading_signals(self, indicators: Dict[str, float], current_price: float) -> Dict[str, str]:

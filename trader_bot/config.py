@@ -53,7 +53,7 @@ MAX_SPREAD_PCT = float(os.getenv('MAX_SPREAD_PCT', '0.20'))  # Skip trading if s
 MIN_TOP_OF_BOOK_NOTIONAL = float(os.getenv('MIN_TOP_OF_BOOK_NOTIONAL', '100.0'))  # Require at least this notional at best bid/ask
 
 # Exchange selection and symbol allowlist
-# Options: 'GEMINI'
+# Options: 'GEMINI', 'IB'
 ACTIVE_EXCHANGE = os.getenv('ACTIVE_EXCHANGE', 'GEMINI').upper()
 # Comma-separated symbols to trade/monitor and allow for tool access; preserves order
 _ALLOWED_SYMBOLS_RAW = os.getenv('ALLOWED_SYMBOLS', 'BTC/USD')

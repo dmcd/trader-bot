@@ -6,3 +6,5 @@ __pycache__/
 .DS_Store
 trading.db
 telemetry.json
+.coverage
+coverage.xml

@@ -21,7 +21,7 @@
 - [x] `trader_bot/technical_analysis.py` (target ≥85%): cover RSI/MACD/Bollinger edge cases (insufficient bars, NaN handling) and signal summary branches. 
 - [x] `trader_bot/config.py` (target ≥95%): `_parse_maker_overrides` truthy/falsey parsing, `_parse_correlation_buckets` empty tokens, and `CLIENT_ORDER_PREFIX` default composition when BOT_VERSION missing.
 - [x] `trader_bot/cost_tracker.py` (target ≥98%): `calculate_llm_burn` ISO parsing with "Z" suffix vs bad strings and min-window normalization.
-- [ ] `trader_bot/utils.py` + `trader_bot/trader.py` (targets ≥90%): `get_client_order_id` fallbacks, trader session lifecycle logging, and error branch when strategy missing.
+- [x] `trader_bot/utils.py` + `trader_bot/trader.py` (targets ≥90%): `get_client_order_id` fallbacks, trader session lifecycle logging, and error branch when strategy missing.
 - [ ] `trader_bot/logger_config.py` + `metrics_validator.py` (targets ≥95%): ensure logger setup respects env vars/handlers and metrics validator rejects missing/negative fields.
 
 ## Priority 4: Dashboard/UI

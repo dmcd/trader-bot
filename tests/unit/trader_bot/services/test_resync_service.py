@@ -162,7 +162,7 @@ class SyncStubDB:
     def get_processed_trade_ids(self, session_id, portfolio_id=None):
         return set()
 
-    def get_latest_trade_timestamp(self, session_id):
+    def get_latest_trade_timestamp(self, session_id, portfolio_id=None):
         return None
 
     def log_trade(self, *args, **kwargs):

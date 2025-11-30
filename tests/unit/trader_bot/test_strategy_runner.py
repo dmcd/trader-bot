@@ -1238,7 +1238,7 @@ async def test_flatten_helper_requests_marketable_orders():
         def __init__(self):
             self.trades = []
 
-        def get_positions(self, session_id):
+        def get_positions(self, session_id, portfolio_id=None):
             return [{"symbol": "BHP/AUD", "quantity": 10.0}]
 
         def log_trade(self, *args, **kwargs):

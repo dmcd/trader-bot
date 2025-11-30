@@ -83,7 +83,7 @@ class PortfolioTracker:
 
     def load_holdings_from_db(self) -> None:
         """Rebuild holdings from historical trades for this session."""
-        trades = self.db.get_trades_for_session(self.session_id)
+        trades = self.db.get_trades_for_session(self.session_id, portfolio_id=self.portfolio_id)
         self.holdings = {}
         for trade in trades:
             self.apply_trade_to_holdings(
@@ -203,7 +203,7 @@ class PortfolioTracker:
 
     def rebuild_session_stats_from_trades(self, current_equity: float | None = None) -> dict:
         """Recompute session_stats from recorded trades and update cache."""
-        trades = self.db.get_trades_for_session(self.session_id)
+        trades = self.db.get_trades_for_session(self.session_id, portfolio_id=self.portfolio_id)
         self.reset_holdings()
         self.reset_stats()
         for trade in trades:

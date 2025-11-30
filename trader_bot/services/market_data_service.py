@@ -71,7 +71,7 @@ class MarketDataService:
                     self.db.log_ohlcv_batch(self.session_id, symbol, tf, bars, portfolio_id=self.portfolio_id)
                     if self.ohlcv_retention_limit:
                         try:
-                            self.db.prune_ohlcv(self.session_id, symbol, tf, self.ohlcv_retention_limit)
+                            self.db.prune_ohlcv(self.session_id, symbol, tf, self.ohlcv_retention_limit, portfolio_id=self.portfolio_id)
                         except Exception as exc:
                             self.logger.debug(f"OHLCV prune failed for {symbol} {tf}: {exc}")
                 self._last_ohlcv_capture[last_key] = now

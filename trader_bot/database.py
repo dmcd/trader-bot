@@ -778,16 +778,18 @@ class TradingDatabase:
                 stats["clamped"] += 1
         return stats
 
-    def get_recent_llm_traces(self, session_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+    def get_recent_llm_traces(self, session_id: int, limit: int = 5, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
         """Return recent LLM traces (decision + execution) for memory/context."""
         cursor = self.conn.cursor()
-        cursor.execute("""
+        query = """
             SELECT id, timestamp, decision_json, execution_result
             FROM llm_traces
-            WHERE session_id = ?
+            WHERE {scope}
             ORDER BY timestamp DESC
             LIMIT ?
-        """, (session_id, limit))
+        """
+        scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
+        cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id), limit))
         return [dict(row) for row in cursor.fetchall()]
     
     @staticmethod
@@ -817,16 +819,22 @@ class TradingDatabase:
         """, (session_id, portfolio_id or self.get_session_portfolio_id(session_id), datetime.now().isoformat(), symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance))
         self.conn.commit()
 
-    def prune_market_data(self, session_id: int, retention_minutes: int):
+    def prune_market_data(self, session_id: int, retention_minutes: int, portfolio_id: int | None = None):
         """Trim market data older than the retention window."""
         if retention_minutes is None or retention_minutes <= 0:
             return
         cutoff = (datetime.now() - timedelta(minutes=retention_minutes)).isoformat()
         cursor = self.conn.cursor()
-        cursor.execute(
-            "DELETE FROM market_data WHERE session_id = ? AND timestamp < ?",
-            (session_id, cutoff),
-        )
+        if portfolio_id is not None:
+            cursor.execute(
+                "DELETE FROM market_data WHERE portfolio_id = ? AND timestamp < ?",
+                (portfolio_id, cutoff),
+            )
+        else:
+            cursor.execute(
+                "DELETE FROM market_data WHERE session_id = ? AND timestamp < ?",
+                (session_id, cutoff),
+            )
         self.conn.commit()
     
     def get_recent_trades(self, session_id: int | None = None, limit: int = 10, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
@@ -866,24 +874,28 @@ class TradingDatabase:
             """, (session_id,))
         return [dict(row) for row in cursor.fetchall()]
     
-    def get_recent_market_data(self, session_id: int, symbol: str, limit: int = 100, before_timestamp: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_recent_market_data(self, session_id: int, symbol: str, limit: int = 100, before_timestamp: Optional[str] = None, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
         """Get recent market data for technical analysis."""
         cursor = self.conn.cursor()
         
         if before_timestamp:
-            cursor.execute("""
+            query = """
                 SELECT * FROM market_data 
-                WHERE session_id = ? AND symbol = ? AND timestamp <= ?
+                WHERE {scope} AND symbol = ? AND timestamp <= ?
                 ORDER BY timestamp DESC
                 LIMIT ?
-            """, (session_id, symbol, before_timestamp, limit))
+            """
+            scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
+            cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id), symbol, before_timestamp, limit))
         else:
-            cursor.execute("""
+            query = """
                 SELECT * FROM market_data 
-                WHERE session_id = ? AND symbol = ?
+                WHERE {scope} AND symbol = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
-            """, (session_id, symbol, limit))
+            """
+            scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
+            cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id), symbol, limit))
         
         rows = [dict(row) for row in cursor.fetchall()]
         for row in rows:
@@ -939,40 +951,52 @@ class TradingDatabase:
         """, records)
         self.conn.commit()
 
-    def prune_ohlcv(self, session_id: int, symbol: str, timeframe: str, retain: int):
+    def prune_ohlcv(self, session_id: int, symbol: str, timeframe: str, retain: int, portfolio_id: int | None = None):
         """Keep only the most recent `retain` rows for a symbol/timeframe."""
         if retain is None or retain <= 0:
             return
         cursor = self.conn.cursor()
-        cursor.execute(
-            """
+        query = """
             DELETE FROM ohlcv_bars
-            WHERE session_id = ?
+            WHERE {scope}
               AND symbol = ?
               AND timeframe = ?
               AND id NOT IN (
                 SELECT id FROM ohlcv_bars
-                WHERE session_id = ?
+                WHERE {scope}
                   AND symbol = ?
                   AND timeframe = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
               )
-            """,
-            (session_id, symbol, timeframe, session_id, symbol, timeframe, retain),
+            """
+        scope_clause = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
+        cursor.execute(
+            query.format(scope=scope_clause),
+            (
+                portfolio_id if portfolio_id is not None else session_id,
+                symbol,
+                timeframe,
+                portfolio_id if portfolio_id is not None else session_id,
+                symbol,
+                timeframe,
+                retain,
+            ),
         )
         self.conn.commit()
 
-    def get_recent_ohlcv(self, session_id: int, symbol: str, timeframe: str, limit: int = 200) -> List[Dict[str, Any]]:
+    def get_recent_ohlcv(self, session_id: int, symbol: str, timeframe: str, limit: int = 200, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
         """Fetch recent OHLCV bars for a symbol/timeframe."""
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT timestamp, open, high, low, close, volume
             FROM ohlcv_bars
-            WHERE session_id = ? AND symbol = ? AND timeframe = ?
+            WHERE {scope} AND symbol = ? AND timeframe = ?
             ORDER BY timestamp DESC
             LIMIT ?
-        """, (session_id, symbol, timeframe, limit))
+        """.format(scope="portfolio_id = ?" if portfolio_id is not None else "session_id = ?"),
+            (portfolio_id if portfolio_id is not None else session_id, symbol, timeframe, limit),
+        )
         return [dict(row) for row in cursor.fetchall()]
 
     def get_latest_equity(self, session_id: int) -> Optional[float]:
@@ -1071,7 +1095,10 @@ class TradingDatabase:
     def replace_positions(self, session_id: int, positions: List[Dict[str, Any]], portfolio_id: int | None = None):
         """Replace stored positions snapshot for the session."""
         cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM positions WHERE session_id = ?", (session_id,))
+        if portfolio_id is not None:
+            cursor.execute("DELETE FROM positions WHERE portfolio_id = ?", (portfolio_id,))
+        else:
+            cursor.execute("DELETE FROM positions WHERE session_id = ?", (session_id,))
         portfolio_ref = portfolio_id or self.get_session_portfolio_id(session_id)
         for pos in positions:
             cursor.execute("""
@@ -1105,7 +1132,10 @@ class TradingDatabase:
     def replace_open_orders(self, session_id: int, orders: List[Dict[str, Any]], portfolio_id: int | None = None):
         """Replace stored open orders snapshot for the session."""
         cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM open_orders WHERE session_id = ?", (session_id,))
+        if portfolio_id is not None:
+            cursor.execute("DELETE FROM open_orders WHERE portfolio_id = ?", (portfolio_id,))
+        else:
+            cursor.execute("DELETE FROM open_orders WHERE session_id = ?", (session_id,))
         portfolio_ref = portfolio_id or self.get_session_portfolio_id(session_id)
         for order in orders:
             cursor.execute("""
@@ -1153,22 +1183,28 @@ class TradingDatabase:
         rows = cursor.fetchall()
         return {row['symbol']: row['net_qty'] for row in rows}
 
-    def get_trade_count(self, session_id: int) -> int:
-        """Return count of trades for a session."""
+    def get_trade_count(self, session_id: int, portfolio_id: int | None = None) -> int:
+        """Return count of trades for a session/portfolio."""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT COUNT(*) as cnt FROM trades WHERE session_id = ?", (session_id,))
+        query = "SELECT COUNT(*) as cnt FROM trades WHERE {scope}"
+        scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
+        cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id),))
         row = cursor.fetchone()
         return row['cnt'] if row else 0
 
-    def get_latest_trade_timestamp(self, session_id: int) -> Optional[str]:
+    def get_latest_trade_timestamp(self, session_id: int, portfolio_id: int | None = None) -> Optional[str]:
         cursor = self.conn.cursor()
-        cursor.execute("SELECT timestamp FROM trades WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1", (session_id,))
+        query = "SELECT timestamp FROM trades WHERE {scope} ORDER BY timestamp DESC LIMIT 1"
+        scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
+        cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id),))
         row = cursor.fetchone()
         return row['timestamp'] if row else None
 
-    def get_distinct_trade_symbols(self, session_id: int) -> List[str]:
+    def get_distinct_trade_symbols(self, session_id: int, portfolio_id: int | None = None) -> List[str]:
         cursor = self.conn.cursor()
-        cursor.execute("SELECT DISTINCT symbol FROM trades WHERE session_id = ?", (session_id,))
+        query = "SELECT DISTINCT symbol FROM trades WHERE {scope}"
+        scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
+        cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id),))
         return [row['symbol'] for row in cursor.fetchall()]
     
     def create_command(self, command: str):
@@ -1349,17 +1385,19 @@ class TradingDatabase:
         """, (status, closed_at, reason, plan_id))
         self.conn.commit()
 
-    def get_open_trade_plans(self, session_id: int) -> List[Dict[str, Any]]:
+    def get_open_trade_plans(self, session_id: int, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
         self.ensure_trade_plans_table()
         cursor = self.conn.cursor()
-        cursor.execute("""
+        query = """
             SELECT * FROM trade_plans
-            WHERE session_id = ? AND status = 'open'
+            WHERE {scope} AND status = 'open'
             ORDER BY opened_at DESC
-        """, (session_id,))
+        """
+        scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
+        cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id),))
         return [dict(row) for row in cursor.fetchall()]
 
-    def get_trade_plan_reason_by_order(self, session_id: int, order_id: str = None, client_order_id: str = None) -> Optional[str]:
+    def get_trade_plan_reason_by_order(self, session_id: int, order_id: str = None, client_order_id: str = None, portfolio_id: int | None = None) -> Optional[str]:
         """
         Lookup a trade plan reason using either exchange order_id or client_order_id.
         Returns None when not found.
@@ -1369,47 +1407,50 @@ class TradingDatabase:
             return None
 
         cursor = self.conn.cursor()
+        scope_value = portfolio_id if portfolio_id is not None else session_id
         if order_id and client_order_id:
             cursor.execute(
                 """
                 SELECT reason FROM trade_plans
-                WHERE session_id = ? AND (entry_order_id = ? OR entry_client_order_id = ?)
+                WHERE {scope} AND (entry_order_id = ? OR entry_client_order_id = ?)
                 ORDER BY opened_at DESC
                 LIMIT 1
-                """,
-                (session_id, str(order_id), str(client_order_id)),
+                """.format(scope="portfolio_id = ?" if portfolio_id is not None else "session_id = ?"),
+                (scope_value, str(order_id), str(client_order_id)),
             )
         elif order_id:
             cursor.execute(
                 """
                 SELECT reason FROM trade_plans
-                WHERE session_id = ? AND entry_order_id = ?
+                WHERE {scope} AND entry_order_id = ?
                 ORDER BY opened_at DESC
                 LIMIT 1
-                """,
-                (session_id, str(order_id)),
+                """.format(scope="portfolio_id = ?" if portfolio_id is not None else "session_id = ?"),
+                (scope_value, str(order_id)),
             )
         else:
             cursor.execute(
                 """
                 SELECT reason FROM trade_plans
-                WHERE session_id = ? AND entry_client_order_id = ?
+                WHERE {scope} AND entry_client_order_id = ?
                 ORDER BY opened_at DESC
                 LIMIT 1
-                """,
-                (session_id, str(client_order_id)),
+                """.format(scope="portfolio_id = ?" if portfolio_id is not None else "session_id = ?"),
+                (scope_value, str(client_order_id)),
             )
         row = cursor.fetchone()
         return row["reason"] if row and row["reason"] else None
 
-    def count_open_trade_plans_for_symbol(self, session_id: int, symbol: str) -> int:
+    def count_open_trade_plans_for_symbol(self, session_id: int, symbol: str, portfolio_id: int | None = None) -> int:
         """Return number of open plans for a symbol."""
         self.ensure_trade_plans_table()
         cursor = self.conn.cursor()
-        cursor.execute("""
+        query = """
             SELECT COUNT(*) as cnt FROM trade_plans
-            WHERE session_id = ? AND symbol = ? AND status = 'open'
-        """, (session_id, symbol))
+            WHERE {scope} AND symbol = ? AND status = 'open'
+        """
+        scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
+        cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id), symbol))
         row = cursor.fetchone()
         return row['cnt'] if row else 0
 

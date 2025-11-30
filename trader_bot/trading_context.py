@@ -64,7 +64,7 @@ class TradingContext:
         max_trades = 5
 
         session = self.db.get_session_stats(self.session_id)
-        recent_trades = list(reversed(self.db.get_recent_trades(self.session_id, limit=50)))  # chronological
+        recent_trades = list(reversed(self.db.get_recent_trades(self.session_id, limit=50, portfolio_id=self.portfolio_id)))  # chronological
 
         # Calculate session duration (hours, rounded) and win/loss counts
         session_start = datetime.fromisoformat(session['created_at'])
@@ -101,7 +101,7 @@ class TradingContext:
         win_rate = (wins / total_closed * 100) if total_closed > 0 else 0.0
 
         # Recent market trend (quick delta)
-        market_data = self.db.get_recent_market_data(self.session_id, symbol, limit=20)
+        market_data = self.db.get_recent_market_data(self.session_id, symbol, limit=20, portfolio_id=self.portfolio_id)
         price_trend_pct = None
         if len(market_data) >= 2 and market_data[-1].get('price'):
             recent_price = market_data[0]['price']
@@ -123,7 +123,7 @@ class TradingContext:
             avg_price = pos.get('avg_price') or 0
 
             current_price = avg_price
-            recent_data = self.db.get_recent_market_data(self.session_id, sym, limit=1)
+            recent_data = self.db.get_recent_market_data(self.session_id, sym, limit=1, portfolio_id=self.portfolio_id)
             if recent_data and recent_data[0].get('price'):
                 current_price = recent_data[0]['price']
 
@@ -223,7 +223,7 @@ class TradingContext:
         memory = {"open_plans": [], "recent_decisions": []}
 
         try:
-            plans = self.db.get_open_trade_plans(self.session_id)[:max_plans]
+            plans = self.db.get_open_trade_plans(self.session_id, portfolio_id=self.portfolio_id)[:max_plans]
             for plan in plans:
                 memory["open_plans"].append(
                     {
@@ -242,7 +242,7 @@ class TradingContext:
             logger.debug(f"Failed to fetch open plans for memory: {exc}")
 
         try:
-            traces = self.db.get_recent_llm_traces(self.session_id, limit=max_traces)
+            traces = self.db.get_recent_llm_traces(self.session_id, limit=max_traces, portfolio_id=self.portfolio_id)
             for trace in traces:
                 decision = trace.get("decision_json")
                 execution = trace.get("execution_result")
@@ -290,7 +290,7 @@ class TradingContext:
     
     def get_recent_performance(self) -> Dict[str, Any]:
         """Get recent performance metrics."""
-        recent_trades = list(reversed(self.db.get_recent_trades(self.session_id, limit=50)))  # chronological
+        recent_trades = list(reversed(self.db.get_recent_trades(self.session_id, limit=50, portfolio_id=self.portfolio_id)))  # chronological
         
         if not recent_trades:
             return {

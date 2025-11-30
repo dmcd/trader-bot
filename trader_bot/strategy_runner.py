@@ -303,17 +303,17 @@ class StrategyRunner:
         symbols.extend([s for s in ALLOWED_SYMBOLS if s])
         # 2) Live state from DB snapshots
         try:
-            positions = self.db.get_positions(self.session_id) if self.session_id else []
+            positions = self.db.get_positions(self.session_id, portfolio_id=self.portfolio_id) if self.session_id else []
             symbols.extend([p.get("symbol") for p in positions or [] if p.get("symbol")])
         except Exception:
             pass
         try:
-            orders = self.db.get_open_orders(self.session_id) if self.session_id else []
+            orders = self.db.get_open_orders(self.session_id, portfolio_id=self.portfolio_id) if self.session_id else []
             symbols.extend([o.get("symbol") for o in orders or [] if o.get("symbol")])
         except Exception:
             pass
         try:
-            plans = self.db.get_open_trade_plans(self.session_id) if self.session_id else []
+            plans = self.db.get_open_trade_plans(self.session_id, portfolio_id=self.portfolio_id) if self.session_id else []
             symbols.extend([p.get("symbol") for p in plans or [] if p.get("symbol")])
         except Exception:
             pass
@@ -361,10 +361,10 @@ class StrategyRunner:
         """Collect symbols from DB state for trade sync."""
         symbols = set()
         try:
-            symbols.update(self.db.get_distinct_trade_symbols(self.session_id) or [])
-            symbols.update({p.get('symbol') for p in self.db.get_positions(self.session_id) or [] if p.get('symbol')})
-            symbols.update({p.get('symbol') for p in self.db.get_open_trade_plans(self.session_id) or [] if p.get('symbol')})
-            symbols.update({o.get('symbol') for o in self.db.get_open_orders(self.session_id) or [] if o.get('symbol')})
+            symbols.update(self.db.get_distinct_trade_symbols(self.session_id, portfolio_id=self.portfolio_id) or [])
+            symbols.update({p.get('symbol') for p in self.db.get_positions(self.session_id, portfolio_id=self.portfolio_id) or [] if p.get('symbol')})
+            symbols.update({p.get('symbol') for p in self.db.get_open_trade_plans(self.session_id, portfolio_id=self.portfolio_id) or [] if p.get('symbol')})
+            symbols.update({o.get('symbol') for o in self.db.get_open_orders(self.session_id, portfolio_id=self.portfolio_id) or [] if o.get('symbol')})
         except Exception:
             pass
         normalized = set()
@@ -830,7 +830,7 @@ class StrategyRunner:
         # But we might want to log initial positions to DB for debugging.
         live_positions = await self.bot.get_positions_async()
         self._capture_sandbox_position_baseline(live_positions)
-        self.db.replace_positions(self.session_id, live_positions)
+        self.db.replace_positions(self.session_id, live_positions, portfolio_id=self.portfolio_id)
         
         self.daily_loss_pct = MAX_DAILY_LOSS_PERCENT
 
@@ -912,7 +912,7 @@ class StrategyRunner:
     async def _close_all_positions_safely(self):
         """Attempt to flatten all positions using market-ish orders."""
         try:
-            positions = self.db.get_positions(self.session_id)
+            positions = self.db.get_positions(self.session_id, portfolio_id=self.portfolio_id)
             if not positions:
                 return
             for pos in positions:
@@ -961,7 +961,9 @@ class StrategyRunner:
             session_id=self.session_id,
             processed_trade_ids=self.processed_trade_ids,
             order_reasons=self.order_reasons,
-            plan_reason_lookup=self.db.get_trade_plan_reason_by_order,
+            plan_reason_lookup=lambda sid, order_id, client_oid: self.db.get_trade_plan_reason_by_order(
+                sid, order_id=order_id, client_order_id=client_oid, portfolio_id=self.portfolio_id
+            ),
             get_symbols=lambda: self._get_sync_symbols(),
         )
 
@@ -1087,7 +1089,7 @@ class StrategyRunner:
 
                     if self.session_id is not None:
                         try:
-                            self.db.log_equity_snapshot(self.session_id, current_equity)
+                            self.db.log_equity_snapshot(self.session_id, current_equity, portfolio_id=self.portfolio_id)
                         except Exception as e:
                             logger.warning(f"Could not log equity snapshot: {e}")
                     self.risk_manager.update_equity(current_equity)
@@ -1154,12 +1156,13 @@ class StrategyRunner:
                                     bid_size=md.get('bid_size'),
                                     ask_size=md.get('ask_size'),
                                     ob_imbalance=md.get('ob_imbalance'),
+                                    portfolio_id=self.portfolio_id,
                                 )
                             except Exception as e:
                                 logger.warning(f"Could not log market data: {e}")
                     if self.session_id:
                         try:
-                            self.db.prune_market_data(self.session_id, MARKET_DATA_RETENTION_MINUTES)
+                            self.db.prune_market_data(self.session_id, MARKET_DATA_RETENTION_MINUTES, portfolio_id=self.portfolio_id)
                         except Exception as e:
                             logger.debug(f"Could not prune market data: {e}")
 
@@ -1190,7 +1193,7 @@ class StrategyRunner:
                     try:
                         live_positions = await self.bot.get_positions_async()
                         self._capture_sandbox_position_baseline(live_positions)
-                        self.db.replace_positions(self.session_id, live_positions)
+                        self.db.replace_positions(self.session_id, live_positions, portfolio_id=self.portfolio_id)
                     except Exception as e:
                         logger.warning(f"Could not refresh positions: {e}")
                         self.health_manager.record_exchange_failure("get_positions_async", e)
@@ -1200,7 +1203,7 @@ class StrategyRunner:
                     try:
                         open_orders = await self.bot.get_open_orders_async()
                         open_orders = self._filter_our_orders(open_orders)
-                        self.db.replace_open_orders(self.session_id, open_orders)
+                        self.db.replace_open_orders(self.session_id, open_orders, portfolio_id=self.portfolio_id)
                     except Exception as e:
                         logger.warning(f"Could not refresh open orders: {e}")
                         self.health_manager.record_exchange_failure("get_open_orders_async", e)
@@ -1219,13 +1222,13 @@ class StrategyRunner:
                     current_exposure = 0.0
                     price_lookup = {}
                     try:
-                        positions_data = self.db.get_positions(self.session_id)
+                        positions_data = self.db.get_positions(self.session_id, portfolio_id=self.portfolio_id)
                         for pos in positions_data:
                             sym = pos['symbol']
                             current_price = pos.get('current_price') or pos.get('avg_price') or 0
 
                             # Prefer most recent market tick
-                            recent_data = self.db.get_recent_market_data(self.session_id, sym, limit=1)
+                            recent_data = self.db.get_recent_market_data(self.session_id, sym, limit=1, portfolio_id=self.portfolio_id)
                             if recent_data and recent_data[0].get('price'):
                                 current_price = recent_data[0]['price']
 
@@ -1248,7 +1251,7 @@ class StrategyRunner:
                             sym = ord.get('symbol')
                             if sym and sym in price_lookup:
                                 continue
-                            latest = self.db.get_recent_market_data(self.session_id, sym, limit=1) if sym else None
+                            latest = self.db.get_recent_market_data(self.session_id, sym, limit=1, portfolio_id=self.portfolio_id) if sym else None
                             if latest and latest[0].get('price'):
                                 price_lookup[sym] = latest[0]['price']
                         self.risk_manager.update_pending_orders(open_orders, price_lookup=price_lookup)
@@ -1287,7 +1290,7 @@ class StrategyRunner:
                         exchange_error_seen = True
                     # Keep session stats cache fresh if DB trades grew
                     try:
-                        db_trade_count = self.db.get_trade_count(self.session_id)
+                        db_trade_count = self.db.get_trade_count(self.session_id, portfolio_id=self.portfolio_id)
                         if db_trade_count > self.session_stats.get('total_trades', 0):
                             await self._rebuild_session_stats_from_trades(current_equity)
                     except Exception as e:
@@ -1367,7 +1370,7 @@ class StrategyRunner:
                                 # Refresh open orders snapshot so strategy context stays current
                                 try:
                                     open_orders = await self.bot.get_open_orders_async()
-                                    self.db.replace_open_orders(self.session_id, open_orders)
+                                    self.db.replace_open_orders(self.session_id, open_orders, portfolio_id=self.portfolio_id)
                                 except Exception as e:
                                     logger.warning(f"Could not refresh open orders after cancel: {e}")
                             except Exception as e:
@@ -1465,11 +1468,11 @@ class StrategyRunner:
 
                             # Enforce per-symbol plan cap before placing order
                             try:
-                                open_plan_count = self.db.count_open_trade_plans_for_symbol(self.session_id, symbol)
+                                open_plan_count = self.db.count_open_trade_plans_for_symbol(self.session_id, symbol, portfolio_id=self.portfolio_id)
                                 if open_plan_count >= self.max_plans_per_symbol:
                                     if AUTO_REPLACE_PLAN_ON_CAP:
                                         try:
-                                            plans = self.db.get_open_trade_plans(self.session_id)
+                                            plans = self.db.get_open_trade_plans(self.session_id, portfolio_id=self.portfolio_id)
                                             candidates = [p for p in plans if p.get('symbol') == symbol]
                                             if candidates:
                                                 victim = sorted(candidates, key=lambda p: p.get('opened_at'))[0]
@@ -1621,7 +1624,7 @@ class StrategyRunner:
                                 # Snapshot open orders if any remain
                                 try:
                                     open_orders = await self.bot.get_open_orders_async()
-                                    self.db.replace_open_orders(self.session_id, open_orders)
+                                    self.db.replace_open_orders(self.session_id, open_orders, portfolio_id=self.portfolio_id)
                                 except Exception as e:
                                     logger.warning(f"Could not snapshot open orders: {e}")
 

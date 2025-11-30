@@ -43,10 +43,10 @@ class StubDB:
         self.traces = []
         self.calls = []
 
-    def get_recent_ohlcv(self, session_id, symbol, timeframe, limit=50):
+    def get_recent_ohlcv(self, session_id, symbol, timeframe, limit=50, portfolio_id=None):
         return [{"close": 10, "volume": 1}, {"close": 11, "volume": 2}]
 
-    def get_recent_market_data(self, session_id, symbol, limit=50, before_timestamp=None):
+    def get_recent_market_data(self, session_id, symbol, limit=50, before_timestamp=None, portfolio_id=None):
         return [{"price": 10}]
 
     def log_llm_call(self, *args, **kwargs):

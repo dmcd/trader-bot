@@ -162,10 +162,10 @@ class TestTradingContext(unittest.TestCase):
             pass
 
         class BrokenDB:
-            def get_open_trade_plans(self, session_id):
+            def get_open_trade_plans(self, session_id, portfolio_id=None):
                 return [{"id": 1, "symbol": "BTC/USD", "side": "BUY", "size": Weird(), "entry_price": 1}]
 
-            def get_recent_llm_traces(self, session_id, limit=5):
+            def get_recent_llm_traces(self, session_id, limit=5, portfolio_id=None):
                 return []
 
         ctx = TradingContext(BrokenDB(), session_id=1)

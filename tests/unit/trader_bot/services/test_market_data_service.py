@@ -78,7 +78,7 @@ async def test_capture_ohlcv_invokes_prune_with_limit():
         def log_ohlcv_batch(self, session_id, symbol, timeframe, bars, portfolio_id=None):
             self.logged.append((session_id, symbol, timeframe, len(bars)))
 
-        def prune_ohlcv(self, session_id, symbol, timeframe, retain):
+        def prune_ohlcv(self, session_id, symbol, timeframe, retain, portfolio_id=None):
             self.pruned.append((session_id, symbol, timeframe, retain))
 
     db = StubDB()

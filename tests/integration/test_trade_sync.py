@@ -31,19 +31,19 @@ class StubDB:
         # Mirror TradingDatabase interface for tests that clean up explicitly
         return None
 
-    def get_distinct_trade_symbols(self, session_id):
+    def get_distinct_trade_symbols(self, session_id, portfolio_id=None):
         return ["BTC/USD"]
 
     def get_positions(self, session_id, portfolio_id=None):
         return []
 
-    def get_open_trade_plans(self, session_id):
+    def get_open_trade_plans(self, session_id, portfolio_id=None):
         return []
 
     def get_open_orders(self, session_id, portfolio_id=None):
         return []
 
-    def get_latest_trade_timestamp(self, session_id):
+    def get_latest_trade_timestamp(self, session_id, portfolio_id=None):
         return None
 
     def log_trade(self, session_id, symbol, action, quantity, price, fee, reason, liquidity="unknown", realized_pnl=0.0, trade_id=None, timestamp=None, portfolio_id=None):
@@ -64,7 +64,7 @@ class StubDB:
             }
         )
 
-    def get_trade_plan_reason_by_order(self, session_id, order_id=None, client_order_id=None):
+    def get_trade_plan_reason_by_order(self, session_id, order_id=None, client_order_id=None, portfolio_id=None):
         return self.plan_reason
 
     def get_processed_trade_ids(self, session_id, portfolio_id=None):
@@ -206,7 +206,7 @@ async def test_sync_trades_skips_invalid_symbols():
     runner.telemetry_logger = None
 
     class SymbolDB(StubDB):
-        def get_distinct_trade_symbols(self, session_id):
+        def get_distinct_trade_symbols(self, session_id, portfolio_id=None):
             return ["USD", "BTC/USD"]
 
     runner.db = SymbolDB()
@@ -312,10 +312,10 @@ def test_trading_context_filters_foreign_open_orders():
                 "total_trades": 0,
             }
 
-        def get_recent_trades(self, session_id, limit=50):
+        def get_recent_trades(self, session_id, limit=50, portfolio_id=None):
             return []
 
-        def get_recent_market_data(self, session_id, symbol, limit=20, before_timestamp=None):
+        def get_recent_market_data(self, session_id, symbol, limit=20, before_timestamp=None, portfolio_id=None):
             return [{"price": 100}, {"price": 100}]
 
         def get_positions(self, session_id, portfolio_id=None):

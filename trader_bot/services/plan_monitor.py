@@ -91,7 +91,7 @@ class PlanMonitor:
         if portfolio_id is not None:
             self.portfolio_id = portfolio_id
         try:
-            open_plans = self.db.get_open_trade_plans(session_id)
+            open_plans = self.db.get_open_trade_plans(session_id, portfolio_id=self.portfolio_id)
             now = now or datetime.now(timezone.utc)
             now_iso = now.isoformat()
             day_end_cutoff = None
@@ -235,6 +235,7 @@ class PlanMonitor:
                             reason,
                             liquidity=order_result.get("liquidity") if order_result else "taker",
                             realized_pnl=realized,
+                            portfolio_id=self.portfolio_id,
                         )
                         self.session_stats_applier(
                             order_result.get("order_id") if order_result else None,

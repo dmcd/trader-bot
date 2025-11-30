@@ -14,7 +14,7 @@ class StubDB:
         self.closed = []
         self.logged_trades = []
 
-    def get_open_trade_plans(self, session_id):
+    def get_open_trade_plans(self, session_id, portfolio_id=None):
         return self.plans
 
     def update_trade_plan_prices(self, plan_id, *, stop_price, reason):
@@ -189,7 +189,7 @@ async def test_plan_monitor_requests_marketable_exit():
 @pytest.mark.asyncio
 async def test_handles_db_failure_gracefully(caplog):
     class FailingDB(StubDB):
-        def get_open_trade_plans(self, session_id):
+        def get_open_trade_plans(self, session_id, portfolio_id=None):
             raise RuntimeError("db unavailable")
 
     monitor, _ = _monitor_with(FailingDB(plans=[]))

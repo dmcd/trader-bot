@@ -181,7 +181,7 @@ class ResyncService:
             if not symbols:
                 symbols = {"BTC/USD"}
 
-            since_iso = self.db.get_latest_trade_timestamp(session_id)
+            since_iso = self.db.get_latest_trade_timestamp(session_id, portfolio_id=self.portfolio_id)
             since_ms = None
             if since_iso:
                 try:
@@ -216,7 +216,16 @@ class ResyncService:
                         if trade_id in processed_trade_ids:
                             continue
 
-                        existing = self.db.conn.execute("SELECT id FROM trades WHERE trade_id = ?", (trade_id,)).fetchone()
+                        if self.portfolio_id is not None:
+                            existing = self.db.conn.execute(
+                                "SELECT id FROM trades WHERE trade_id = ? AND portfolio_id = ?",
+                                (trade_id, self.portfolio_id),
+                            ).fetchone()
+                        else:
+                            existing = self.db.conn.execute(
+                                "SELECT id FROM trades WHERE trade_id = ? AND session_id = ?",
+                                (trade_id, session_id),
+                            ).fetchone()
                         if existing:
                             processed_trade_ids.add(trade_id)
                             new_processed.add((trade_id, client_oid))

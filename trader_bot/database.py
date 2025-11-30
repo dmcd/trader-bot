@@ -54,6 +54,8 @@ class TradingDatabase:
                 liquidity TEXT DEFAULT 'unknown',
                 realized_pnl REAL DEFAULT 0.0,
                 reason TEXT,
+                trade_id TEXT,
+                UNIQUE(trade_id),
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
@@ -99,21 +101,6 @@ class TradingDatabase:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
-
-        # Backfill liquidity column for existing installs (SQLite allows additive ALTER)
-        try:
-            cursor.execute("ALTER TABLE trades ADD COLUMN liquidity TEXT DEFAULT 'unknown'")
-        except sqlite3.OperationalError:
-            # Column already exists
-            pass
-        try:
-            cursor.execute("ALTER TABLE trades ADD COLUMN realized_pnl REAL DEFAULT 0.0")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            cursor.execute("ALTER TABLE trades ADD COLUMN trade_id TEXT")
-        except sqlite3.OperationalError:
-            pass
         
         # Market data table
         cursor.execute("""
@@ -133,15 +120,6 @@ class TradingDatabase:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
-        # Backfill additive columns on existing installs
-        try:
-            cursor.execute("PRAGMA table_info(market_data)")
-            cols = {row['name'] for row in cursor.fetchall()}
-            for col in ["spread_pct", "bid_size", "ask_size", "ob_imbalance"]:
-                if col not in cols:
-                    cursor.execute(f"ALTER TABLE market_data ADD COLUMN {col} REAL")
-        except Exception as e:
-            logger.warning(f"Could not ensure market_data schema: {e}")
 
         # OHLCV bars table (multi-timeframe)
         cursor.execute("""
@@ -257,14 +235,6 @@ class TradingDatabase:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
-        # Add missing columns for existing databases
-        try:
-            cursor.execute("PRAGMA table_info(session_stats_cache)")
-            cols = {row['name'] for row in cursor.fetchall()}
-            if 'start_of_day_equity' not in cols:
-                cursor.execute("ALTER TABLE session_stats_cache ADD COLUMN start_of_day_equity REAL")
-        except Exception as e:
-            logger.warning(f"Could not ensure session_stats_cache schema: {e}")
 
         # Risk state table to persist daily loss baselines across restarts
         cursor.execute("""
@@ -275,22 +245,8 @@ class TradingDatabase:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
-        
-        # Add bot_version column and index for version-based sessions
-        try:
-            cursor.execute("ALTER TABLE sessions ADD COLUMN bot_version TEXT")
-        except sqlite3.OperationalError:
-            pass
-        # Backfill base_currency for existing databases
-        try:
-            cursor.execute("ALTER TABLE sessions ADD COLUMN base_currency TEXT")
-        except sqlite3.OperationalError:
-            pass
+
         # Allow multiple sessions per version; keep a non-unique index for lookups
-        try:
-            cursor.execute("DROP INDEX IF EXISTS idx_sessions_bot_version")
-        except Exception as e:
-            logger.warning(f"Could not drop legacy unique index on bot_version: {e}")
         try:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_bot_version ON sessions(bot_version)")
         except Exception as e:
@@ -968,18 +924,6 @@ class TradingDatabase:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
-        # Backfill additive columns
-        try:
-            cursor.execute("PRAGMA table_info(trade_plans)")
-            cols = {row['name'] for row in cursor.fetchall()}
-            if 'version' not in cols:
-                cursor.execute("ALTER TABLE trade_plans ADD COLUMN version INTEGER DEFAULT 1")
-            if 'entry_order_id' not in cols:
-                cursor.execute("ALTER TABLE trade_plans ADD COLUMN entry_order_id TEXT")
-            if 'entry_client_order_id' not in cols:
-                cursor.execute("ALTER TABLE trade_plans ADD COLUMN entry_client_order_id TEXT")
-        except Exception as e:
-            logger.debug(f"Could not ensure trade_plans version column: {e}")
         self.conn.commit()
 
     def create_trade_plan(self, session_id: int, symbol: str, side: str, entry_price: float, stop_price: float, target_price: float, size: float, reason: str = "", entry_order_id: str = None, entry_client_order_id: str = None) -> int:

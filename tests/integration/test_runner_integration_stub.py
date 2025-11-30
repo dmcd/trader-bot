@@ -4,12 +4,15 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
+import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from trader_bot.config import MIN_TRADE_INTERVAL_SECONDS
 from trader_bot.risk_manager import RiskManager
 from trader_bot.strategy import StrategySignal
 from trader_bot.strategy_runner import StrategyRunner
+
+pytestmark = pytest.mark.integration
 
 
 # Ensure tests never write to the production trading.db

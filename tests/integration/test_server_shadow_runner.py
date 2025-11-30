@@ -3,6 +3,8 @@ import pytest
 from trader_bot import server
 from trader_bot import shadow_runner
 
+pytestmark = pytest.mark.integration
+
 
 class StubBot:
     def __init__(self):

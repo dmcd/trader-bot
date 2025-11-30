@@ -7,6 +7,8 @@ from trader_bot.data_fetch_coordinator import DataFetchCoordinator
 from trader_bot.llm_tools import ToolName
 from trader_bot.strategy import LLMStrategy, StrategySignal
 
+pytestmark = pytest.mark.integration
+
 
 class StubExchange:
     def __init__(self):

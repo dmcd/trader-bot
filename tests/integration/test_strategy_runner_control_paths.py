@@ -12,6 +12,8 @@ from trader_bot.services.command_processor import CommandResult
 from trader_bot.services.strategy_orchestrator import RiskCheckResult
 from trader_bot.strategy_runner import StrategyRunner
 
+pytestmark = pytest.mark.integration
+
 # Ensure tests never write to the production trading.db
 _fd, _db_path = tempfile.mkstemp(prefix="trader-bot-test-", suffix=".db")
 os.close(_fd)

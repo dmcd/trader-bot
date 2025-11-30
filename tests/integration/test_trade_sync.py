@@ -10,6 +10,8 @@ from trader_bot.strategy_runner import StrategyRunner
 from trader_bot.trading_context import TradingContext
 from trader_bot.utils import get_client_order_id
 
+pytestmark = pytest.mark.integration
+
 
 class StubConn:
     def execute(self, *args, **kwargs):

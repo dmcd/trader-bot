@@ -10,10 +10,10 @@ Context: 48 test modules under `tests/`, mixing `unittest` and `pytest`, with no
 - Shared fixtures live in `tests/conftest.py` (global) and scoped `tests/unit/conftest.py` / `tests/integration/conftest.py` as needed; avoid duplicating helpers inside individual test files.
 
 ## Action plan
-- [ ] Normalize layout and naming
-  - [ ] Create `tests/unit/trader_bot/` and move current unit-leaning modules there; keep service tests in `tests/unit/trader_bot/services/` to mirror package structure.
-  - [ ] Create `tests/integration/` and move higher-level flows (`test_runner_integration_stub.py`, `test_strategy_runner_control_paths.py`, `test_restart_recovery.py`, `test_tool_roundtrip_integration.py`, `test_server_shadow_runner.py`, `test_trade_sync.py`) into it; add `@pytest.mark.integration`.
-  - [ ] Remove or fix `tests/test_server.py` (currently defines stubs with no assertions); if kept, rewrite as an integration/contract check that exercises the public server API.
+- [x] Normalize layout and naming
+  - [x] Create `tests/unit/trader_bot/` and move current unit-leaning modules there; keep service tests in `tests/unit/trader_bot/services/` to mirror package structure.
+  - [x] Create `tests/integration/` and move higher-level flows (`test_runner_integration_stub.py`, `test_strategy_runner_control_paths.py`, `test_restart_recovery.py`, `test_tool_roundtrip_integration.py`, `test_server_shadow_runner.py`, `test_trade_sync.py`) into it; add `@pytest.mark.integration`.
+  - [x] Remove or fix `tests/test_server.py` (currently defines stubs with no assertions); if kept, rewrite as an integration/contract check that exercises the public server API.
 - [ ] Consolidate overlapping suites
   - [ ] Merge `test_database_unit.py` and `test_database_additional.py` into a single `tests/unit/trader_bot/test_database.py` with a shared fixture, parameterized pruning cases, and explicit integration markers for any slow DB work.
   - [ ] Merge strategy-focused files (`test_strategy.py`, `test_strategy_additional_unit.py`, and portions of `test_strategy_llm_validation.py`) under `tests/unit/trader_bot/strategy/` using shared setup fixtures; split out any true LLM/plan-monitor flows into integration tests.

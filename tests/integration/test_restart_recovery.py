@@ -1,7 +1,8 @@
 import pytest
 from trader_bot.config import CLIENT_ORDER_PREFIX
-
 from trader_bot.strategy_runner import StrategyRunner
+
+pytestmark = pytest.mark.integration
 
 
 class StubBot:

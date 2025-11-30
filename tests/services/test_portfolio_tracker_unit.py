@@ -73,3 +73,39 @@ def test_apply_exchange_trades_for_rebuild_skips_bad_entries(caplog):
 
     assert stats["total_trades"] == 1
     assert "Skipped 1 malformed trades" in "\n".join(caplog.messages)
+
+
+def test_extract_fee_cost_aggregates_sequences():
+    total = PortfolioTracker.extract_fee_cost([{"cost": 1.0}, {"cost": "0.5"}, None])
+    assert total == pytest.approx(1.5)
+    assert PortfolioTracker.extract_fee_cost("bad") == 0.0
+
+
+def test_load_holdings_resets_before_rebuild():
+    db = FakeDB()
+    db.trades = [
+        {"symbol": "BTC/USD", "action": "BUY", "quantity": 1.0, "price": 100.0},
+        {"symbol": "BTC/USD", "action": "SELL", "quantity": 1.0, "price": 110.0},
+    ]
+    tracker = PortfolioTracker(db, session_id=9, logger=logging.getLogger("test"))
+    tracker.holdings["OLD"] = {"qty": 5.0, "avg_cost": 10.0}
+
+    tracker.load_holdings_from_db()
+
+    assert "OLD" not in tracker.holdings
+    assert tracker.holdings["BTC/USD"]["qty"] == pytest.approx(0.0)
+
+
+def test_apply_exchange_trades_for_rebuild_accumulates_fees():
+    db = FakeDB()
+    tracker = PortfolioTracker(db, session_id=4, logger=logging.getLogger("test"))
+    trades = [
+        {"symbol": "BTC/USD", "side": "buy", "amount": 1, "price": 100.0, "fee": [{"cost": 0.1}, {"cost": 0.2}]},
+        {"symbol": "BTC/USD", "side": "sell", "amount": 1, "price": 110.0, "fee": {"cost": 0.05}},
+    ]
+
+    stats = tracker.apply_exchange_trades_for_rebuild(trades)
+
+    assert stats["total_trades"] == 2
+    assert stats["gross_pnl"] == pytest.approx(10.0)
+    assert stats["total_fees"] == pytest.approx(0.35)

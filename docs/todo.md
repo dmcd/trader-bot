@@ -15,7 +15,7 @@
 - [x] `trader_bot/data_fetch_coordinator.py` (target ≥85%): rate-limit window reset and dedupe cache reuse (meta.deduped), symbol allowlist rejection, cache TTL expiry, and fallback trades→candles when OHLCV fails. Cover clamp_payload_size invocation and error/success callbacks.
 - [x] `trader_bot/gemini_trader.py` (target ≥70%): stub ccxt exchange to test precision population, post-only price computation, maker/taker preference flag, and rejection handling in `place_order_async`. Cover mark-price aggregation in `_fetch_mark_prices`, `get_trades_from_timestamp` pagination window, and `fetch_ohlcv` passthrough with unsupported exchange methods raising.
 - [x] `trader_bot/database.py` (target ≥80%): tests for health state setters/getters, command retention pruning, trade plan CRUD (open/update/close) with versioning, equity snapshot logging/pruning, and graceful handling of missing rows (e.g., get_open_orders when empty). Include concurrency-safe path for `log_llm_trace` JSON serialization failures.
-- [ ] `trader_bot/services/market_data_service.py` + `portfolio_tracker.py` (targets ≥85%): ensure timeframe parsing, OHLCV pruning limits, and capture spacing guards; portfolio tracker rebuild from trades, fee netting, and cache invalidation on replace_positions.
+- [x] `trader_bot/services/market_data_service.py` + `portfolio_tracker.py` (targets ≥85%): ensure timeframe parsing, OHLCV pruning limits, and capture spacing guards; portfolio tracker rebuild from trades, fee netting, and cache invalidation on replace_positions.
 
 ## Priority 3: Calculations, config, utilities
 - [x] `trader_bot/technical_analysis.py` (target ≥85%): cover RSI/MACD/Bollinger edge cases (insufficient bars, NaN handling) and signal summary branches. 

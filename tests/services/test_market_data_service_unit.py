@@ -65,3 +65,34 @@ async def test_capture_ohlcv_spacing_and_prune(tmp_path):
         "SELECT COUNT(*) as cnt FROM ohlcv_bars WHERE session_id = ? AND timeframe = '1m'", (session_id,)
     ).fetchone()["cnt"]
     assert latest_count == 2
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_capture_ohlcv_invokes_prune_with_limit():
+    class StubDB:
+        def __init__(self):
+            self.logged = []
+            self.pruned = []
+
+        def log_ohlcv_batch(self, session_id, symbol, timeframe, bars):
+            self.logged.append((session_id, symbol, timeframe, len(bars)))
+
+        def prune_ohlcv(self, session_id, symbol, timeframe, retain):
+            self.pruned.append((session_id, symbol, timeframe, retain))
+
+    db = StubDB()
+    bot = StubBot()
+    svc = MarketDataService(
+        db=db,
+        bot=bot,
+        session_id=42,
+        monotonic=lambda: 0.0,
+        ohlcv_min_capture_spacing_seconds=30,
+        ohlcv_retention_limit=1,
+    )
+
+    await svc.capture_ohlcv("ETH/USD", timeframes=["5m"])
+
+    assert db.logged == [(42, "ETH/USD", "5m", 1)]
+    assert db.pruned == [(42, "ETH/USD", "5m", 1)]

@@ -79,6 +79,26 @@ class FakeTrade:
             self.orderStatus = self._statuses[0]
 
 
+class FakeContract:
+    def __init__(self, symbol: str, currency: str, *, sec_type: str = "STK", exchange: str = "ASX"):
+        self.symbol = symbol
+        self.currency = currency
+        self.secType = sec_type
+        self.exchange = exchange
+
+    def pair(self):
+        if self.secType == "FX":
+            return f"{self.symbol}{self.currency}"
+        return None
+
+
+class FakePortfolioEntry:
+    def __init__(self, contract: FakeContract, position: float, avg_cost: float):
+        self.contract = contract
+        self.position = position
+        self.avgCost = avg_cost
+
+
 class FakeIB:
     def __init__(
         self,
@@ -89,6 +109,7 @@ class FakeIB:
         account_values=None,
         market_data=None,
         order_statuses=None,
+        portfolio=None,
     ):
         self.connected = connected
         self.fail_connect = fail_connect
@@ -102,6 +123,7 @@ class FakeIB:
         self.account_values = account_values or []
         self.market_data = market_data or {}
         self.order_statuses = order_statuses or {}
+        self.portfolio_entries = portfolio or []
         if not async_disconnect:
             # Shadow the coroutine so getattr returns None
             self.disconnectAsync = None
@@ -158,6 +180,9 @@ class FakeIB:
         trade.order = order
         trade.contract = contract
         return trade
+
+    async def portfolioAsync(self):
+        return list(self.portfolio_entries)
 
     def disconnect(self):
         self.disconnect_calls += 1
@@ -463,3 +488,60 @@ async def test_place_order_times_out_with_partial_status():
     assert result["status"] in ("submitted", "open")
     assert result["filled"] == 3
     assert result["remaining"] == 7
+
+
+@pytest.mark.asyncio
+async def test_get_positions_maps_long_and_short_with_prices():
+    portfolio = [
+        FakePortfolioEntry(FakeContract("BHP", "AUD", sec_type="STK"), position=10, avg_cost=100.0),
+        FakePortfolioEntry(FakeContract("AUD", "USD", sec_type="FX", exchange="IDEALPRO"), position=-5000, avg_cost=0.655),
+    ]
+    fake_ib = FakeIB(
+        connected=True,
+        portfolio=portfolio,
+        market_data={
+            "BHPAUD": FakeTicker(price=101.0),
+            "AUDUSD": FakeTicker(price=0.656),
+        },
+    )
+    trader = IBTrader(ib_client=fake_ib)
+    trader.connected = True
+
+    positions = await trader.get_positions_async()
+
+    assert positions == [
+        {
+            "symbol": "BHP/AUD",
+            "quantity": 10,
+            "avg_price": 100.0,
+            "current_price": 101.0,
+            "timestamp": positions[0]["timestamp"],
+        },
+        {
+            "symbol": "AUD/USD",
+            "quantity": -5000,
+            "avg_price": 0.655,
+            "current_price": 0.656,
+            "timestamp": positions[1]["timestamp"],
+        },
+    ]
+    assert positions[0]["timestamp"] is not None
+    assert positions[1]["timestamp"] is not None
+
+
+@pytest.mark.asyncio
+async def test_get_positions_handles_missing_price():
+    portfolio = [
+        FakePortfolioEntry(FakeContract("CSL", "AUD", sec_type="STK"), position=3, avg_cost=25.0),
+    ]
+    fake_ib = FakeIB(
+        connected=True,
+        portfolio=portfolio,
+        market_data={},
+    )
+    trader = IBTrader(ib_client=fake_ib)
+    trader.connected = True
+
+    positions = await trader.get_positions_async()
+
+    assert positions[0]["current_price"] is None

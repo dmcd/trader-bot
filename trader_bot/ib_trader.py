@@ -20,7 +20,7 @@ from trader_bot.config import (
     IB_PORT,
 )
 from trader_bot.ib_contracts import build_ib_contract
-from trader_bot.symbols import DEFAULT_FX_EXCHANGE
+from trader_bot.symbols import DEFAULT_FX_EXCHANGE, format_symbol
 from trader_bot.trader import BaseTrader
 
 logger = logging.getLogger(__name__)
@@ -331,7 +331,52 @@ class IBTrader(BaseTrader):
             return None
 
     async def get_positions_async(self):  # pragma: no cover - placeholder
-        raise NotImplementedError("Positions not implemented for IB yet.")
+        if not self.connected:
+            return []
+
+        try:
+            entries = await self._fetch_portfolio()
+        except Exception as exc:
+            logger.error(f"Error fetching IB positions: {exc}")
+            return []
+
+        positions: list[dict[str, Any]] = []
+        symbols: list[str] = []
+        now_ms = int(time.time() * 1000)
+
+        for entry in entries or []:
+            contract = getattr(entry, "contract", None)
+            symbol = self._contract_to_symbol(contract)
+            if not symbol:
+                continue
+            qty_raw = getattr(entry, "position", 0)
+            try:
+                quantity = float(qty_raw)
+            except (TypeError, ValueError):
+                quantity = 0.0
+            avg_cost_raw = getattr(entry, "avgCost", None)
+            try:
+                avg_cost = float(avg_cost_raw) if avg_cost_raw is not None else None
+            except (TypeError, ValueError):
+                avg_cost = None
+
+            positions.append(
+                {
+                    "symbol": symbol,
+                    "quantity": quantity,
+                    "avg_price": avg_cost,
+                    "current_price": None,
+                    "timestamp": now_ms,
+                }
+            )
+            symbols.append(symbol)
+
+        price_map = await self._fetch_prices(symbols)
+        for pos in positions:
+            if pos["symbol"] in price_map:
+                pos["current_price"] = price_map[pos["symbol"]]
+
+        return positions
 
     async def get_open_orders_async(self):  # pragma: no cover - placeholder
         raise NotImplementedError("Open orders not implemented for IB yet.")
@@ -477,6 +522,46 @@ class IBTrader(BaseTrader):
         if price is None or price <= 0:
             return None
         return price
+
+    async def _fetch_portfolio(self):
+        fetch_fn = getattr(self.ib, "portfolioAsync", None)
+        if fetch_fn:
+            return await asyncio.wait_for(fetch_fn(), timeout=self.connect_timeout)
+        return await asyncio.wait_for(asyncio.to_thread(self.ib.portfolio), timeout=self.connect_timeout)
+
+    def _contract_to_symbol(self, contract) -> str | None:
+        if contract is None:
+            return None
+        pair_fn = getattr(contract, "pair", None)
+        if callable(pair_fn):
+            try:
+                pair_val = pair_fn()
+                if isinstance(pair_val, str) and len(pair_val) >= 6:
+                    base = pair_val[:-3]
+                    quote = pair_val[-3:]
+                    return format_symbol(base, quote)
+            except Exception:
+                pass
+
+        base = getattr(contract, "symbol", None) or getattr(contract, "localSymbol", None)
+        quote = getattr(contract, "currency", None)
+        if base and quote:
+            try:
+                return format_symbol(base, quote)
+            except Exception:
+                return None
+        return None
+
+    async def _fetch_prices(self, symbols: list[str]) -> dict[str, float]:
+        prices: dict[str, float] = {}
+        for symbol in symbols:
+            try:
+                md = await self.get_market_data_async(symbol)
+                if md and md.get("price") is not None:
+                    prices[symbol] = md["price"]
+            except Exception as exc:
+                logger.warning(f"Price lookup failed for {symbol}: {exc}")
+        return prices
 
     def _compute_limit_price(self, md: Optional[Dict[str, Any]], side: str, prefer_maker: bool) -> float | None:
         if not md:

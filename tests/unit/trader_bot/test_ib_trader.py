@@ -538,8 +538,29 @@ async def test_fetch_ohlcv_maps_bars_and_clamps_limit():
     ohlcv = await trader.fetch_ohlcv("BHP/AUD", timeframe="1m", limit=1)
 
     assert fake_ib.hist_calls[0]["params"]["barSizeSetting"] == "1 min"
-    assert fake_ib.hist_calls[0]["params"]["durationStr"] == "1 M"
+    assert fake_ib.hist_calls[0]["params"]["durationStr"] == "60 S"
     assert ohlcv == [[1_700_000_060_000, 101, 102, 100, 101.5, 900]]
+
+
+def test_timeframe_to_ib_uses_seconds_for_intraday_windows():
+    bar_size, duration = IBTrader._timeframe_to_ib("1m", limit=50)
+
+    assert bar_size == "1 min"
+    assert duration == "3000 S"
+
+
+def test_timeframe_to_ib_rolls_hourly_limits_into_days():
+    bar_size, duration = IBTrader._timeframe_to_ib("1h", limit=24)
+
+    assert bar_size == "1 hour"
+    assert duration == "1 D"
+
+
+def test_timeframe_to_ib_converts_long_daily_limits_to_months():
+    bar_size, duration = IBTrader._timeframe_to_ib("1d", limit=40)
+
+    assert bar_size == "1 day"
+    assert duration == "2 M"
 
 
 @pytest.mark.asyncio

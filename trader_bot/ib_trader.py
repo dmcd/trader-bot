@@ -681,17 +681,28 @@ class IBTrader(BaseTrader):
 
     @staticmethod
     def _seconds_to_duration(seconds: float) -> str:
-        total = seconds if seconds > 0 else 1
-        if total >= 86_400:
-            days = math.ceil(total / 86_400)
-            return f"{days} D"
-        if total >= 3_600:
-            hours = math.ceil(total / 3_600)
-            return f"{hours} H"
-        if total >= 60:
-            minutes = math.ceil(total / 60)
-            return f"{minutes} M"
-        return f"{math.ceil(total)} S"
+        """
+        Format durations using IBKR's accepted units (S, D, W, M, Y).
+
+        IB interprets "M" as months, so intraday windows must be expressed
+        in seconds to avoid invalid month-based durations for minute/hour data.
+        """
+        total_seconds = math.ceil(seconds if seconds > 0 else 1)
+
+        if total_seconds < 86_400:
+            return f"{total_seconds} S"
+
+        days = math.ceil(total_seconds / 86_400)
+        if days >= 365:
+            years = math.ceil(days / 365)
+            return f"{years} Y"
+        if days >= 28:
+            months = math.ceil(days / 30)
+            return f"{months} M"
+        if days >= 7:
+            weeks = math.ceil(days / 7)
+            return f"{weeks} W"
+        return f"{days} D"
 
     @staticmethod
     def _bar_timestamp_ms(bar) -> int | None:

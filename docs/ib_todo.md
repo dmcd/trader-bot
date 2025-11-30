@@ -32,7 +32,7 @@
    - [x] Add validation/translation for `ALLOWED_SYMBOLS` so mis-specified entries fail fast with actionable errors.
 
 3) **IBTrader Adapter (implements BaseTrader)**
-   - [ ] Connection lifecycle: manage `IB().connect()` with paper/live routing, heartbeat/ping, and graceful disconnects.
+   - [x] Connection lifecycle: manage `IB().connect()` with paper/live routing, heartbeat/ping, and graceful disconnects.
    - [ ] Account/equity: fetch `accountValues` in base currency; convert non-base positions using FX quotes (cache quotes to minimize rate calls). Surface `get_equity_async` in AUD.
    - [ ] Market data: provide `get_market_data_async` using `reqMktData` top-of-book; populate `price/bid/ask/bid_size/ask_size/volume/spread_pct/ob_imbalance` fields.
    - [ ] Orders: implement `place_order_async` with limit first, optional market for flatten, map order status/avg fill/remaining/fee (commission) and generate clientOrderId via `CLIENT_ORDER_PREFIX`. Handle rejected/filled/partial states and timeouts.

@@ -31,6 +31,7 @@ class StrategyOrchestrator:
         loop_interval_seconds: float,
         logger: logging.Logger,
         actions_logger: logging.Logger,
+        portfolio_id: int | None = None,
     ):
         self.command_processor = command_processor
         self.plan_monitor = plan_monitor
@@ -41,6 +42,7 @@ class StrategyOrchestrator:
         self.logger = logger
         self.actions_logger = actions_logger
         self.running = False
+        self.portfolio_id = portfolio_id
 
     async def start(self, initialize_cb: Callable[[], Awaitable[None]]):
         """Initialize dependencies and mark orchestrator as running."""
@@ -114,6 +116,7 @@ class StrategyOrchestrator:
         open_orders: list,
         config: PlanMonitorConfig,
         refresh_bindings_cb: Callable[[], None],
+        portfolio_id: int | None = None,
     ):
         """Refresh bindings and run the plan monitor for the loop."""
         refresh_bindings_cb()
@@ -122,6 +125,7 @@ class StrategyOrchestrator:
             price_lookup=price_lookup,
             open_orders=open_orders,
             config=config,
+            portfolio_id=portfolio_id if portfolio_id is not None else self.portfolio_id,
         )
 
     def emit_market_health(self, primary_data: dict):

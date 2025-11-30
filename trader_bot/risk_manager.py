@@ -94,6 +94,7 @@ class RiskManager:
         ignore_baseline_positions: bool = False,
         base_currency: str | None = None,
         fx_rate_provider=None,
+        portfolio_id: int | None = None,
     ):
         self.bot = bot # Optional, mostly for position checks if needed
         self.daily_loss = 0.0
@@ -109,6 +110,7 @@ class RiskManager:
         self.position_baseline: dict[str, float] = {}
         self.base_currency = base_currency.upper() if base_currency else None
         self._converter = QuoteToBaseConverter(self.base_currency, fx_rate_provider)
+        self.portfolio_id = portfolio_id
 
     def seed_start_of_day(self, start_equity: float):
         """Persist start-of-day equity so restarts keep loss limits consistent."""
@@ -183,6 +185,10 @@ class RiskManager:
 
     def _convert_notional_to_base(self, symbol: str | None, notional: float, price: float | None = None) -> tuple[float, float | None]:
         return self._converter.convert_notional(symbol, notional, price)
+
+    def set_portfolio(self, portfolio_id: int | None):
+        """Update the active portfolio scope for downstream services."""
+        self.portfolio_id = portfolio_id
 
     def apply_order_value_buffer(self, quantity: float, price: float, symbol: str | None = None):
         """Trim quantity so notional stays under the order cap minus buffer."""

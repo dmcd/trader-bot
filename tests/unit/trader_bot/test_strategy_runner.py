@@ -201,7 +201,7 @@ async def test_reconcile_exchange_state_refreshes_bindings(monkeypatch, tmp_path
     assert runner.resync_service.bot is runner.bot
     assert runner.resync_service.risk_manager is runner.risk_manager
     assert runner.resync_service.trade_sync_cutoff_minutes == TRADE_SYNC_CUTOFF_MINUTES
-    runner.resync_service.set_session.assert_called_with(7)
+    runner.resync_service.set_session.assert_called_with(7, portfolio_id=runner.portfolio_id)
     runner.resync_service.reconcile_exchange_state.assert_awaited_once()
 
 
@@ -214,7 +214,7 @@ async def test_reconcile_open_orders_refreshes_bindings(monkeypatch, tmp_path):
     runner.resync_service.set_session = MagicMock()
     runner.resync_service.reconcile_open_orders = AsyncMock()
     await runner._reconcile_open_orders()
-    runner.resync_service.set_session.assert_called_with(9)
+    runner.resync_service.set_session.assert_called_with(9, portfolio_id=runner.portfolio_id)
     runner.resync_service.reconcile_open_orders.assert_awaited_once()
 
 
@@ -228,12 +228,13 @@ async def test_monitor_trade_plans_refreshes_bindings(monkeypatch, tmp_path):
     runner.plan_monitor.refresh_bindings = MagicMock()
     captured = {}
 
-    async def fake_monitor(session_id, price_lookup, open_orders, config, refresh_bindings_cb):
+    async def fake_monitor(session_id, price_lookup, open_orders, config, refresh_bindings_cb, portfolio_id=None):
         refresh_bindings_cb()
         captured["session_id"] = session_id
         captured["price_lookup"] = price_lookup
         captured["open_orders"] = open_orders
         captured["config"] = config
+        captured["portfolio_id"] = portfolio_id
 
     runner.orchestrator = SimpleNamespace(monitor_trade_plans=fake_monitor)
     await runner._monitor_trade_plans(price_lookup={"BTC/USD": 100.0}, open_orders=[{"id": 1}])
@@ -242,7 +243,9 @@ async def test_monitor_trade_plans_refreshes_bindings(monkeypatch, tmp_path):
     assert kwargs["bot"] is runner.bot
     assert kwargs["db"] is runner.db
     assert kwargs["risk_manager"] is runner.risk_manager
+    assert kwargs["portfolio_id"] == runner.portfolio_id
     assert captured["session_id"] == runner.session_id
+    assert captured["portfolio_id"] == runner.portfolio_id
     assert captured["price_lookup"] == {"BTC/USD": 100.0}
     assert captured["open_orders"] == [{"id": 1}]
     assert captured["config"].max_plan_age_minutes == 15
@@ -484,6 +487,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
             on_trade_rejected=self.runner.strategy.on_trade_rejected,
             actions_logger=getattr(self.runner.strategy, "logger", None),
             logger=None,
+            portfolio_id=self.runner.portfolio_id,
         )
         self.runner.plan_monitor.refresh_bindings(
             bot=self.runner.bot,
@@ -493,6 +497,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
             prefer_maker=self.runner._prefer_maker,
             holdings_updater=self.runner._update_holdings_and_realized,
             session_stats_applier=self.runner._apply_fill_to_session_stats,
+            portfolio_id=self.runner.portfolio_id,
         )
 
     async def _run_monitor(self, price_lookup, open_orders):
@@ -507,6 +512,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
             price_lookup=price_lookup,
             open_orders=open_orders,
             config=config,
+            portfolio_id=self.runner.portfolio_id,
         )
 
     @patch("trader_bot.strategy_runner.datetime")
@@ -778,7 +784,7 @@ async def test_rebuild_session_stats_checks_equity(monkeypatch, tmp_path):
     runner.portfolio_tracker.rebuild_session_stats_from_trades = MagicMock(return_value={"gross_pnl": 1.0})
     runner._sanity_check_equity_vs_stats = MagicMock()
     await runner._rebuild_session_stats_from_trades(current_equity=123.0)
-    runner.portfolio_tracker.set_session.assert_called_with(1)
+    runner.portfolio_tracker.set_session.assert_called_with(1, portfolio_id=runner.portfolio_id)
     runner._sanity_check_equity_vs_stats.assert_called_with(123.0)
     assert runner.session_stats == {"gross_pnl": 1.0}
 

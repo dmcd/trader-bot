@@ -29,6 +29,7 @@ class PlanMonitor:
         holdings_updater: Callable[[str, str, float, float, float], float],
         session_stats_applier: Callable[[str | None, float, float], None],
         max_total_exposure: float = MAX_TOTAL_EXPOSURE,
+        portfolio_id: int | None = None,
     ):
         self.db = db
         self.bot = bot
@@ -38,6 +39,7 @@ class PlanMonitor:
         self.holdings_updater = holdings_updater
         self.session_stats_applier = session_stats_applier
         self.max_total_exposure = max_total_exposure
+        self.portfolio_id = portfolio_id
 
     def refresh_bindings(
         self,
@@ -49,6 +51,7 @@ class PlanMonitor:
         prefer_maker: Callable[[str], bool] | None = None,
         holdings_updater: Callable[[str, str, float, float, float], float] | None = None,
         session_stats_applier: Callable[[str | None, float, float], None] | None = None,
+        portfolio_id: int | None = None,
     ) -> None:
         """Allow tests/runners to swap dependencies without rebuilding the service."""
         if bot is not None:
@@ -65,6 +68,8 @@ class PlanMonitor:
             self.holdings_updater = holdings_updater
         if session_stats_applier is not None:
             self.session_stats_applier = session_stats_applier
+        if portfolio_id is not None:
+            self.portfolio_id = portfolio_id
 
     async def monitor(
         self,
@@ -74,6 +79,7 @@ class PlanMonitor:
         config: PlanMonitorConfig,
         *,
         now: datetime | None = None,
+        portfolio_id: int | None = None,
     ) -> None:
         """
         Monitor open trade plans for stop/target hits and enforce max age/day-end flattening per symbol.
@@ -82,6 +88,8 @@ class PlanMonitor:
         """
         if not session_id:
             return
+        if portfolio_id is not None:
+            self.portfolio_id = portfolio_id
         try:
             open_plans = self.db.get_open_trade_plans(session_id)
             now = now or datetime.now(timezone.utc)

@@ -133,6 +133,7 @@ class StrategyRunner:
             bot_version=BOT_VERSION,
         )
         self.portfolio_id = self.portfolio["id"] if self.portfolio else None
+        self.risk_manager.set_portfolio(self.portfolio_id)
         self.cost_tracker = CostTracker(self.exchange_name, llm_provider=LLM_PROVIDER)
         self.technical_analysis = TechnicalAnalysis()
         self.session_id = None
@@ -238,6 +239,7 @@ class StrategyRunner:
             loop_interval_seconds=LOOP_INTERVAL_SECONDS,
             logger=logger,
             actions_logger=bot_actions_logger,
+            portfolio_id=self.portfolio_id,
         )
 
     def _emit_telemetry(self, record: dict):
@@ -274,6 +276,7 @@ class StrategyRunner:
             holdings_updater=self._update_holdings_and_realized,
             session_stats_applier=self._apply_fill_to_session_stats,
             max_total_exposure=MAX_TOTAL_EXPOSURE,
+            portfolio_id=self.portfolio_id,
         )
 
     def _refresh_resync_bindings(self):
@@ -281,7 +284,7 @@ class StrategyRunner:
         self.resync_service.db = self.db
         self.resync_service.bot = self.bot
         self.resync_service.risk_manager = self.risk_manager
-        self.resync_service.set_session(self.session_id)
+        self.resync_service.set_session(self.session_id, portfolio_id=self.portfolio_id)
         self.resync_service.trade_sync_cutoff_minutes = TRADE_SYNC_CUTOFF_MINUTES
 
     def _refresh_orchestrator_bindings(self):
@@ -290,6 +293,8 @@ class StrategyRunner:
         self.orchestrator.plan_monitor = self.plan_monitor
         self.orchestrator.risk_manager = self.risk_manager
         self.orchestrator.health_manager = self.health_manager
+        self.orchestrator.portfolio_id = self.portfolio_id
+        self.plan_monitor.portfolio_id = self.portfolio_id
 
     def _get_active_symbols(self) -> list[str]:
         """Return ordered list of symbols to monitor/trade."""
@@ -459,7 +464,7 @@ class StrategyRunner:
 
     def _apply_exchange_trades_for_rebuild(self, trades: list) -> dict:
         """Delegate trade replay to portfolio tracker (kept for compatibility)."""
-        self.portfolio_tracker.set_session(self.session_id)
+        self.portfolio_tracker.set_session(self.session_id, portfolio_id=self.portfolio_id)
         stats = self.portfolio_tracker.apply_exchange_trades_for_rebuild(trades)
         self.session_stats = self.portfolio_tracker.session_stats
         return stats
@@ -625,7 +630,7 @@ class StrategyRunner:
         self.market_data_service.monotonic = self._monotonic
         self.market_data_service.ohlcv_min_capture_spacing_seconds = self.ohlcv_min_capture_spacing_seconds
         self.market_data_service.ohlcv_retention_limit = self.ohlcv_retention_limit
-        self.market_data_service.set_session(self.session_id)
+        self.market_data_service.set_session(self.session_id, portfolio_id=self.portfolio_id)
         await self.market_data_service.capture_ohlcv(symbol)
 
     def _apply_order_value_buffer(self, quantity: float, price: float, symbol: str | None = None):
@@ -698,6 +703,7 @@ class StrategyRunner:
             prefer_maker=self._prefer_maker,
             holdings_updater=self._update_holdings_and_realized,
             session_stats_applier=self._apply_fill_to_session_stats,
+            portfolio_id=self.portfolio_id,
         )
         await self.orchestrator.monitor_trade_plans(
             self.session_id,
@@ -705,6 +711,7 @@ class StrategyRunner:
             open_orders=open_orders,
             config=config,
             refresh_bindings_cb=refresh_bindings,
+            portfolio_id=self.portfolio_id,
         )
 
     async def initialize(self):
@@ -845,13 +852,13 @@ class StrategyRunner:
 
     def _load_holdings_from_db(self):
         """Rebuild holdings via portfolio tracker."""
-        self.portfolio_tracker.set_session(self.session_id)
+        self.portfolio_tracker.set_session(self.session_id, portfolio_id=self.portfolio_id)
         self.portfolio_tracker.load_holdings_from_db()
         self.session_stats = self.portfolio_tracker.session_stats
 
     def _apply_fill_to_session_stats(self, order_id: str, actual_fee: float, realized_pnl: float):
         """Delegate session accounting to portfolio tracker (kept for compatibility)."""
-        self.portfolio_tracker.set_session(self.session_id)
+        self.portfolio_tracker.set_session(self.session_id, portfolio_id=self.portfolio_id)
         self.portfolio_tracker.apply_fill_to_session_stats(order_id, actual_fee, realized_pnl, estimated_fee_map=self._estimated_fees)
         self.session_stats = self.portfolio_tracker.session_stats
 
@@ -891,7 +898,7 @@ class StrategyRunner:
 
     async def _rebuild_session_stats_from_trades(self, current_equity: float = None):
         """Recompute session_stats from recorded trades and update cache via portfolio tracker."""
-        self.portfolio_tracker.set_session(self.session_id)
+        self.portfolio_tracker.set_session(self.session_id, portfolio_id=self.portfolio_id)
         self.session_stats = self.portfolio_tracker.rebuild_session_stats_from_trades(current_equity)
         logger.info(f"Session stats rebuilt from trades: {self.session_stats}")
         if current_equity is not None:

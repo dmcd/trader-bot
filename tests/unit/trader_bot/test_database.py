@@ -19,32 +19,34 @@ def db_session(tmp_path):
 
 def _insert_market_data_rows(db, session_id, old_ts, recent_ts):
     cursor = db.conn.cursor()
+    portfolio_id = db.get_session_portfolio_id(session_id)
     cursor.execute(
         """
-        INSERT INTO market_data (session_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO market_data (session_id, portfolio_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (session_id, old_ts.isoformat(), "BTC/USD", 10.0, 9.5, 10.5, 1.0, None, None, None, None),
+        (session_id, portfolio_id, old_ts.isoformat(), "BTC/USD", 10.0, 9.5, 10.5, 1.0, None, None, None, None),
     )
     cursor.execute(
         """
-        INSERT INTO market_data (session_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO market_data (session_id, portfolio_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (session_id, recent_ts.isoformat(), "BTC/USD", 11.0, 10.5, 11.5, 2.0, None, None, None, None),
+        (session_id, portfolio_id, recent_ts.isoformat(), "BTC/USD", 11.0, 10.5, 11.5, 2.0, None, None, None, None),
     )
     db.conn.commit()
 
 
 def _insert_llm_traces(db, session_id, old_ts, recent_ts):
     cursor = db.conn.cursor()
+    portfolio_id = db.get_session_portfolio_id(session_id)
     cursor.execute(
-        "INSERT INTO llm_traces (session_id, timestamp, prompt, response, decision_json, market_context) VALUES (?, ?, ?, ?, ?, ?)",
-        (session_id, old_ts.isoformat(), "old", "resp", "{}", "{}"),
+        "INSERT INTO llm_traces (session_id, portfolio_id, timestamp, prompt, response, decision_json, market_context) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (session_id, portfolio_id, old_ts.isoformat(), "old", "resp", "{}", "{}"),
     )
     cursor.execute(
-        "INSERT INTO llm_traces (session_id, timestamp, prompt, response, decision_json, market_context) VALUES (?, ?, ?, ?, ?, ?)",
-        (session_id, recent_ts.isoformat(), "new", "resp", "{}", "{}"),
+        "INSERT INTO llm_traces (session_id, portfolio_id, timestamp, prompt, response, decision_json, market_context) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (session_id, portfolio_id, recent_ts.isoformat(), "new", "resp", "{}", "{}"),
     )
     db.conn.commit()
 
@@ -648,9 +650,10 @@ def test_llm_trace_roundtrip_and_prune(db_session):
     assert row["run_id"] == "run-1"
 
     old_ts = (datetime.now() - timedelta(days=10)).isoformat()
+    portfolio_id = db.get_session_portfolio_id(session_id)
     db.conn.execute(
-        "INSERT INTO llm_traces (session_id, timestamp, prompt, response, decision_json) VALUES (?, ?, ?, ?, ?)",
-        (session_id, old_ts, "old", "resp", "{}"),
+        "INSERT INTO llm_traces (session_id, portfolio_id, timestamp, prompt, response, decision_json) VALUES (?, ?, ?, ?, ?, ?)",
+        (session_id, portfolio_id, old_ts, "old", "resp", "{}"),
     )
     db.conn.commit()
 

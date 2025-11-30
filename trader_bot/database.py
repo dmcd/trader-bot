@@ -108,8 +108,8 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                portfolio_id INTEGER,
+                session_id INTEGER,
+                portfolio_id INTEGER NOT NULL,
                 timestamp TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 action TEXT NOT NULL,
@@ -128,12 +128,12 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS processed_trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                portfolio_id INTEGER,
+                session_id INTEGER,
+                portfolio_id INTEGER NOT NULL,
                 trade_id TEXT NOT NULL,
                 client_order_id TEXT,
                 recorded_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(session_id, trade_id),
+                UNIQUE(portfolio_id, trade_id),
                 FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
@@ -142,8 +142,8 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS llm_calls (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                portfolio_id INTEGER,
+                session_id INTEGER,
+                portfolio_id INTEGER NOT NULL,
                 run_id TEXT,
                 timestamp TEXT NOT NULL,
                 input_tokens INTEGER DEFAULT 0,
@@ -159,8 +159,8 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS llm_traces (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                portfolio_id INTEGER,
+                session_id INTEGER,
+                portfolio_id INTEGER NOT NULL,
                 run_id TEXT,
                 timestamp TEXT NOT NULL,
                 prompt TEXT,
@@ -176,8 +176,8 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS market_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                portfolio_id INTEGER,
+                session_id INTEGER,
+                portfolio_id INTEGER NOT NULL,
                 timestamp TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 price REAL,
@@ -196,8 +196,8 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS ohlcv_bars (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                portfolio_id INTEGER,
+                session_id INTEGER,
+                portfolio_id INTEGER NOT NULL,
                 timestamp TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 timeframe TEXT NOT NULL,
@@ -218,8 +218,8 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS equity_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                portfolio_id INTEGER,
+                session_id INTEGER,
+                portfolio_id INTEGER NOT NULL,
                 timestamp TEXT NOT NULL,
                 equity REAL,
                 FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
@@ -230,8 +230,8 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS indicators (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                portfolio_id INTEGER,
+                session_id INTEGER,
+                portfolio_id INTEGER NOT NULL,
                 timestamp TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 rsi REAL,
@@ -247,8 +247,8 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS positions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                portfolio_id INTEGER,
+                session_id INTEGER,
+                portfolio_id INTEGER NOT NULL,
                 symbol TEXT NOT NULL,
                 quantity REAL NOT NULL,
                 avg_price REAL,
@@ -262,8 +262,8 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS open_orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                portfolio_id INTEGER,
+                session_id INTEGER,
+                portfolio_id INTEGER NOT NULL,
                 order_id TEXT,
                 symbol TEXT NOT NULL,
                 side TEXT,
@@ -394,14 +394,26 @@ class TradingDatabase:
         """Create a new session for this run, tagged by bot version."""
         cursor = self.conn.cursor()
         base_ccy = base_currency.upper() if base_currency else None
+        portfolio_ref = portfolio_id
+        if portfolio_ref is None:
+            # Auto-provision a portfolio for compatibility with legacy session-based callers.
+            portfolio_name = f"{(bot_version or 'portfolio').lower()}-auto"
+            portfolio = self.get_or_create_portfolio(
+                name=portfolio_name,
+                base_currency=base_currency,
+                bot_version=bot_version,
+            )
+            portfolio_ref = portfolio["id"] if portfolio else None
+        if portfolio_ref is None:
+            raise ValueError("portfolio_id is required to create a session")
         cursor.execute("""
             INSERT INTO sessions (date, bot_version, portfolio_id, starting_balance, base_currency)
             VALUES (?, ?, ?, ?, ?)
-        """, (date.today().isoformat(), bot_version, portfolio_id, starting_balance, base_ccy))
+        """, (date.today().isoformat(), bot_version, portfolio_ref, starting_balance, base_ccy))
         self.conn.commit()
         
         session_id = cursor.lastrowid
-        logger.info(f"Created new session {session_id} for version {bot_version} (base_currency={base_ccy or 'unset'})")
+        logger.info(f"Created new session {session_id} for version {bot_version} (base_currency={base_ccy or 'unset'}, portfolio_id={portfolio_ref})")
         return session_id
 
     def get_or_create_portfolio_session(
@@ -704,7 +716,8 @@ class TradingDatabase:
         """Persist processed trade ids to avoid reprocessing across restarts."""
         if not entries:
             return
-        payload = [(session_id, portfolio_id, trade_id, client_oid) for trade_id, client_oid in entries if trade_id]
+        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
+        payload = [(session_id, portfolio_ref, trade_id, client_oid) for trade_id, client_oid in entries if trade_id]
         if not payload:
             return
         cursor = self.conn.cursor()
@@ -721,6 +734,7 @@ class TradingDatabase:
                   quantity: float, price: float, fee: float, reason: str = "", liquidity: str = "unknown", realized_pnl: float = 0.0, trade_id: str = None, timestamp: str = None, portfolio_id: int | None = None):
         """Log a trade to the database."""
         cursor = self.conn.cursor()
+        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
         
         # Check for duplicates if trade_id is provided
         if trade_id:
@@ -734,7 +748,7 @@ class TradingDatabase:
         cursor.execute("""
             INSERT INTO trades (session_id, portfolio_id, timestamp, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, portfolio_id or self.get_session_portfolio_id(session_id), ts, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id))
+        """, (session_id, portfolio_ref, ts, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id))
         
         # Update session trade count and fees
         cursor.execute("""
@@ -776,8 +790,7 @@ class TradingDatabase:
         """Log an LLM API call."""
         cursor = self.conn.cursor()
         total_tokens = input_tokens + output_tokens
-
-        portfolio_ref = portfolio_id if portfolio_id is not None else self.get_session_portfolio_id(session_id)
+        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
         cursor.execute("""
             INSERT INTO llm_calls (session_id, portfolio_id, run_id, timestamp, input_tokens, output_tokens, total_tokens, cost, decision)
             VALUES (
@@ -815,7 +828,7 @@ class TradingDatabase:
             market_context_str = json.dumps(market_context, default=str) if market_context is not None else None
         except Exception:
             market_context_str = str(market_context)
-        portfolio_ref = portfolio_id if portfolio_id is not None else self.get_session_portfolio_id(session_id)
+        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
         cursor.execute("""
             INSERT INTO llm_traces (session_id, portfolio_id, run_id, timestamp, prompt, response, decision_json, market_context)
             VALUES (
@@ -900,6 +913,17 @@ class TradingDatabase:
             return value
         return value
 
+    def _resolve_portfolio_id(self, session_id: int | None, portfolio_id: int | None) -> int:
+        """Resolve a portfolio id from explicit input or the linked session; raise if missing."""
+        if portfolio_id is not None:
+            return portfolio_id
+        if session_id is None:
+            raise ValueError("portfolio_id is required when session_id is not provided")
+        portfolio_ref = self.get_session_portfolio_id(session_id)
+        if portfolio_ref is None:
+            raise ValueError("portfolio_id is required for portfolio-scoped tables")
+        return portfolio_ref
+
     def log_market_data(self, session_id: int, symbol: str, price: float | int | None,
                        bid: float | int | None, ask: float | int | None, volume: float | int | None = None,
                        spread_pct: float | int | None = None, bid_size: float | int | None = None,
@@ -909,10 +933,11 @@ class TradingDatabase:
         bid_size = self._preserve_integer_if_whole(bid_size)
         ask_size = self._preserve_integer_if_whole(ask_size)
         cursor = self.conn.cursor()
+        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
         cursor.execute("""
             INSERT INTO market_data (session_id, portfolio_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, portfolio_id or self.get_session_portfolio_id(session_id), datetime.now().isoformat(), symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance))
+        """, (session_id, portfolio_ref, datetime.now().isoformat(), symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance))
         self.conn.commit()
 
     def prune_market_data(self, session_id: int, retention_minutes: int, portfolio_id: int | None = None):
@@ -1012,7 +1037,7 @@ class TradingDatabase:
         cursor = self.conn.cursor()
         ts = self._normalize_timestamp(timestamp)
         ts_str = ts.isoformat()
-        portfolio_ref = portfolio_id or self.get_session_portfolio_id(session_id)
+        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
         cursor.execute(
             """
             INSERT INTO equity_snapshots (session_id, portfolio_id, timestamp, equity)
@@ -1036,6 +1061,7 @@ class TradingDatabase:
         if not bars:
             return
         cursor = self.conn.cursor()
+        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
         records = []
         for bar in bars:
             try:
@@ -1049,7 +1075,7 @@ class TradingDatabase:
                     ts_iso = str(ts)
                 records.append((
                     session_id,
-                    portfolio_id or self.get_session_portfolio_id(session_id),
+                    portfolio_ref,
                     ts_iso,
                     symbol,
                     timeframe,
@@ -1228,14 +1254,11 @@ class TradingDatabase:
     def replace_positions(self, session_id: int, positions: List[Dict[str, Any]], portfolio_id: int | None = None):
         """Replace stored positions snapshot for the session."""
         cursor = self.conn.cursor()
-        if portfolio_id is not None:
-            cursor.execute(
-                "DELETE FROM positions WHERE portfolio_id = ? OR (session_id = ? AND portfolio_id IS NULL)",
-                (portfolio_id, session_id),
-            )
-        else:
-            cursor.execute("DELETE FROM positions WHERE session_id = ?", (session_id,))
-        portfolio_ref = portfolio_id or self.get_session_portfolio_id(session_id)
+        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
+        cursor.execute(
+            "DELETE FROM positions WHERE portfolio_id = ? OR session_id = ?",
+            (portfolio_ref, session_id),
+        )
         for pos in positions:
             cursor.execute("""
                 INSERT INTO positions (session_id, portfolio_id, symbol, quantity, avg_price, exchange_timestamp)
@@ -1268,14 +1291,11 @@ class TradingDatabase:
     def replace_open_orders(self, session_id: int, orders: List[Dict[str, Any]], portfolio_id: int | None = None):
         """Replace stored open orders snapshot for the session."""
         cursor = self.conn.cursor()
-        if portfolio_id is not None:
-            cursor.execute(
-                "DELETE FROM open_orders WHERE portfolio_id = ? OR (session_id = ? AND portfolio_id IS NULL)",
-                (portfolio_id, session_id),
-            )
-        else:
-            cursor.execute("DELETE FROM open_orders WHERE session_id = ?", (session_id,))
-        portfolio_ref = portfolio_id or self.get_session_portfolio_id(session_id)
+        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
+        cursor.execute(
+            "DELETE FROM open_orders WHERE portfolio_id = ? OR session_id = ?",
+            (portfolio_ref, session_id),
+        )
         for order in orders:
             cursor.execute("""
                 INSERT INTO open_orders (session_id, portfolio_id, order_id, symbol, side, price, amount, remaining, status, exchange_timestamp)
@@ -1444,8 +1464,8 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS trade_plans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                portfolio_id INTEGER,
+                session_id INTEGER,
+                portfolio_id INTEGER NOT NULL,
                 symbol TEXT NOT NULL,
                 side TEXT NOT NULL,
                 entry_price REAL NOT NULL,
@@ -1464,10 +1484,6 @@ class TradingDatabase:
             )
         """)
         try:
-            self._ensure_column(cursor, "trade_plans", "portfolio_id INTEGER")
-        except Exception as exc:
-            logger.debug(f"Could not add portfolio_id to trade_plans: {exc}")
-        try:
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_trade_plans_portfolio_symbol_status ON trade_plans (portfolio_id, symbol, status)"
             )
@@ -1475,13 +1491,14 @@ class TradingDatabase:
             logger.debug(f"Could not create trade_plans index: {exc}")
         self.conn.commit()
 
-    def create_trade_plan(self, session_id: int, symbol: str, side: str, entry_price: float, stop_price: float, target_price: float, size: float, reason: str = "", entry_order_id: str = None, entry_client_order_id: str = None) -> int:
+    def create_trade_plan(self, session_id: int, symbol: str, side: str, entry_price: float, stop_price: float, target_price: float, size: float, reason: str = "", entry_order_id: str = None, entry_client_order_id: str = None, portfolio_id: int | None = None) -> int:
         self.ensure_trade_plans_table()
         cursor = self.conn.cursor()
+        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
         cursor.execute("""
-            INSERT INTO trade_plans (session_id, symbol, side, entry_price, stop_price, target_price, size, reason, entry_order_id, entry_client_order_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, symbol, side, entry_price, stop_price, target_price, size, reason, entry_order_id, entry_client_order_id))
+            INSERT INTO trade_plans (session_id, portfolio_id, symbol, side, entry_price, stop_price, target_price, size, reason, entry_order_id, entry_client_order_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, portfolio_ref, symbol, side, entry_price, stop_price, target_price, size, reason, entry_order_id, entry_client_order_id))
         self.conn.commit()
         return cursor.lastrowid
 

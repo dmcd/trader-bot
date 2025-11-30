@@ -24,11 +24,11 @@ Notes on the current session model:
   - [x] Add `portfolio_id` to trades, positions, open_orders, trade_plans, market_data, ohlcv_bars, indicators, equity_snapshots, llm_calls/llm_traces; add composite indexes on (portfolio_id, symbol/timeframe) where applicable.
   - [x] Introduce optional `run_id` column for telemetry/ops without affecting portfolio scoping.
   - [x] Create `portfolio_days` table (date, timezone, start_equity, end_equity, gross/net pnl, fees, llm_cost, drawdown) for reporting; populate start row on first equity snapshot of the day.
-  - [ ] Replace `risk_state`/`session_stats_cache` with portfolio-scoped stats cache (exposure totals, gross pnl, fees, llm cost) and drop daily-loss baselines.
-    - [ ] Add portfolio-scoped stats cache schema without daily baseline columns.
-    - [ ] Update `PortfolioTracker`/`RiskManager` to read/write portfolio stats cache.
-    - [ ] Remove `risk_state` start_of_day equity usage across code/tests.
-    - [ ] Add tests for portfolio stats persistence and restart restore behavior.
+  - [x] Replace `risk_state`/`session_stats_cache` with portfolio-scoped stats cache (exposure totals, gross pnl, fees, llm cost) and drop daily-loss baselines.
+    - [x] Add portfolio-scoped stats cache schema without daily baseline columns.
+    - [x] Update `PortfolioTracker`/`RiskManager` to read/write portfolio stats cache.
+    - [x] Remove `risk_state` start_of_day equity usage across code/tests.
+    - [x] Add tests for portfolio stats persistence and restart restore behavior.
   - [ ] Deprecate/rename `sessions` table: migrate data into `portfolios` (id swap, bot_version/date preserved), add view/compat shim if needed, and remove session_id foreign keys once portfolio_id is wired.
 
 - [ ] Service initialization changes

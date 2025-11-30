@@ -51,6 +51,7 @@ class TradingDatabase:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT NOT NULL,
                 bot_version TEXT,
+                portfolio_id INTEGER,
                 starting_balance REAL,
                 ending_balance REAL,
                 base_currency TEXT,
@@ -58,7 +59,8 @@ class TradingDatabase:
                 total_fees REAL DEFAULT 0.0,
                 total_llm_cost REAL DEFAULT 0.0,
                 net_pnl REAL DEFAULT 0.0,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
 
@@ -87,6 +89,19 @@ class TradingDatabase:
             )
         except Exception as exc:
             logger.debug(f"Could not create portfolio_days index: {exc}")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS portfolio_stats_cache (
+                portfolio_id INTEGER PRIMARY KEY,
+                total_trades INTEGER DEFAULT 0,
+                total_fees REAL DEFAULT 0.0,
+                gross_pnl REAL DEFAULT 0.0,
+                total_llm_cost REAL DEFAULT 0.0,
+                exposure_notional REAL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+            )
+        """)
         
         # Trades table
         cursor.execute("""
@@ -373,22 +388,47 @@ class TradingDatabase:
         except Exception as e:
             logger.warning(f"Could not create non-unique index on bot_version: {e}")
 
+        # Backfill new columns for existing deployments
+        try:
+            self._ensure_column(cursor, "sessions", "portfolio_id INTEGER")
+        except Exception as exc:
+            logger.debug(f"Could not add portfolio_id to sessions: {exc}")
+        try:
+            self._ensure_column(cursor, "session_stats_cache", "start_of_day_equity REAL")
+        except Exception:
+            # column may already exist; ignore errors
+            pass
+
         self.conn.commit()
         logger.info(f"Database initialized at {self.db_path}")
     
-    def get_or_create_session(self, starting_balance: float, bot_version: str, base_currency: Optional[str] = None) -> int:
+    def get_or_create_session(self, starting_balance: float, bot_version: str, base_currency: Optional[str] = None, portfolio_id: Optional[int] = None) -> int:
         """Create a new session for this run, tagged by bot version."""
         cursor = self.conn.cursor()
         base_ccy = base_currency.upper() if base_currency else None
         cursor.execute("""
-            INSERT INTO sessions (date, bot_version, starting_balance, base_currency)
-            VALUES (?, ?, ?, ?)
-        """, (date.today().isoformat(), bot_version, starting_balance, base_ccy))
+            INSERT INTO sessions (date, bot_version, portfolio_id, starting_balance, base_currency)
+            VALUES (?, ?, ?, ?, ?)
+        """, (date.today().isoformat(), bot_version, portfolio_id, starting_balance, base_ccy))
         self.conn.commit()
         
         session_id = cursor.lastrowid
         logger.info(f"Created new session {session_id} for version {bot_version} (base_currency={base_ccy or 'unset'})")
         return session_id
+
+    def set_session_portfolio(self, session_id: int, portfolio_id: Optional[int]):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE sessions SET portfolio_id = ? WHERE id = ?",
+            (portfolio_id, session_id),
+        )
+        self.conn.commit()
+
+    def get_session_portfolio_id(self, session_id: int) -> Optional[int]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT portfolio_id FROM sessions WHERE id = ?", (session_id,))
+        row = cursor.fetchone()
+        return row["portfolio_id"] if row else None
 
     def get_portfolio(self, portfolio_id: int) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()
@@ -476,6 +516,50 @@ class TradingDatabase:
         cursor = self.conn.cursor()
         cursor.execute("SELECT DISTINCT bot_version FROM sessions WHERE bot_version IS NOT NULL ORDER BY created_at DESC")
         return [row['bot_version'] for row in cursor.fetchall()]
+
+    def get_portfolio_stats_cache(self, portfolio_id: int) -> Optional[Dict[str, Any]]:
+        """Return persisted portfolio stats aggregates if present."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT portfolio_id, total_trades, total_fees, gross_pnl, total_llm_cost, exposure_notional, updated_at
+            FROM portfolio_stats_cache
+            WHERE portfolio_id = ?
+            """,
+            (portfolio_id,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def set_portfolio_stats_cache(self, portfolio_id: int, stats: Dict[str, Any]):
+        """Upsert portfolio stats aggregates for restart resilience."""
+        if portfolio_id is None:
+            return
+        existing = self.get_portfolio_stats_cache(portfolio_id) or {}
+        merged = {**existing, **(stats or {})}
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO portfolio_stats_cache (portfolio_id, total_trades, total_fees, gross_pnl, total_llm_cost, exposure_notional, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(portfolio_id) DO UPDATE SET
+                total_trades=excluded.total_trades,
+                total_fees=excluded.total_fees,
+                gross_pnl=excluded.gross_pnl,
+                total_llm_cost=excluded.total_llm_cost,
+                exposure_notional=excluded.exposure_notional,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (
+                portfolio_id,
+                merged.get("total_trades", 0) or 0,
+                merged.get("total_fees", 0.0) or 0.0,
+                merged.get("gross_pnl", 0.0) or 0.0,
+                merged.get("total_llm_cost", 0.0) or 0.0,
+                merged.get("exposure_notional"),
+            ),
+        )
+        self.conn.commit()
 
     def get_session(self, session_id: int) -> Optional[Dict[str, Any]]:
         """Fetch a session row by id."""
@@ -566,7 +650,8 @@ class TradingDatabase:
         """Log an LLM API call."""
         cursor = self.conn.cursor()
         total_tokens = input_tokens + output_tokens
-        
+
+        portfolio_ref = portfolio_id if portfolio_id is not None else self.get_session_portfolio_id(session_id)
         cursor.execute("""
             INSERT INTO llm_calls (session_id, portfolio_id, run_id, timestamp, input_tokens, output_tokens, total_tokens, cost, decision)
             VALUES (
@@ -577,7 +662,7 @@ class TradingDatabase:
             )
         """, (
             session_id,
-            portfolio_id,
+            portfolio_ref,
             run_id,
             datetime.now().isoformat(),
             input_tokens,
@@ -604,6 +689,7 @@ class TradingDatabase:
             market_context_str = json.dumps(market_context, default=str) if market_context is not None else None
         except Exception:
             market_context_str = str(market_context)
+        portfolio_ref = portfolio_id if portfolio_id is not None else self.get_session_portfolio_id(session_id)
         cursor.execute("""
             INSERT INTO llm_traces (session_id, portfolio_id, run_id, timestamp, prompt, response, decision_json, market_context)
             VALUES (
@@ -612,7 +698,7 @@ class TradingDatabase:
                 ?,
                 ?, ?, ?, ?, ?
             )
-        """, (session_id, portfolio_id, run_id, datetime.now().isoformat(), prompt, response, decision_json, market_context_str))
+        """, (session_id, portfolio_ref, run_id, datetime.now().isoformat(), prompt, response, decision_json, market_context_str))
         self.conn.commit()
         return cursor.lastrowid
 
@@ -1268,6 +1354,9 @@ class TradingDatabase:
     # Session stats cache helpers
     def get_session_stats_cache(self, session_id: int) -> Optional[Dict[str, Any]]:
         """Return persisted session stats aggregates if present."""
+        portfolio_id = self.get_session_portfolio_id(session_id)
+        if portfolio_id is not None:
+            return self.get_portfolio_stats_cache(portfolio_id)
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT session_id, total_trades, total_fees, gross_pnl, total_llm_cost, start_of_day_equity
@@ -1279,6 +1368,10 @@ class TradingDatabase:
 
     def set_session_stats_cache(self, session_id: int, stats: Dict[str, Any]):
         """Upsert session stats aggregates for restart resilience."""
+        portfolio_id = self.get_session_portfolio_id(session_id)
+        if portfolio_id is not None:
+            self.set_portfolio_stats_cache(portfolio_id, stats)
+            return
         existing = self.get_session_stats_cache(session_id) or {}
         merged = {**existing, **(stats or {})}
         cursor = self.conn.cursor()
@@ -1303,33 +1396,9 @@ class TradingDatabase:
         self.conn.commit()
 
     def get_start_of_day_equity(self, session_id: int) -> Optional[float]:
-        """Return persisted start-of-day equity for loss checks."""
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT start_of_day_equity FROM risk_state
-            WHERE session_id = ?
-        """, (session_id,))
-        row = cursor.fetchone()
-        if row and row['start_of_day_equity'] is not None:
-            return row['start_of_day_equity']
-
-        # Fallback to cache column if present
-        stats = self.get_session_stats_cache(session_id)
-        if stats and stats.get('start_of_day_equity') is not None:
-            return stats['start_of_day_equity']
+        """Deprecated: start-of-day baselines are no longer persisted."""
         return None
 
     def set_start_of_day_equity(self, session_id: int, equity: float):
-        """Persist start-of-day equity, keeping cache in sync."""
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT INTO risk_state (session_id, start_of_day_equity)
-            VALUES (?, ?)
-            ON CONFLICT(session_id) DO UPDATE SET
-                start_of_day_equity=excluded.start_of_day_equity
-        """, (session_id, equity))
-        self.conn.commit()
-        try:
-            self.set_session_stats_cache(session_id, {'start_of_day_equity': equity})
-        except Exception as e:
-            logger.debug(f"Could not sync start_of_day_equity to cache: {e}")
+        """Deprecated: start-of-day baselines are no longer persisted."""
+        return

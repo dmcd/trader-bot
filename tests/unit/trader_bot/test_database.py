@@ -177,6 +177,20 @@ def test_run_id_columns_and_indexes(tmp_path):
     db.close()
 
 
+def test_portfolio_stats_cache_roundtrip(tmp_path):
+    db_path = tmp_path / "portfolio-stats.db"
+    db = TradingDatabase(str(db_path))
+    portfolio = db.get_or_create_portfolio("stats", base_currency="usd", bot_version="v1")
+
+    db.set_portfolio_stats_cache(portfolio["id"], {"total_trades": 3, "gross_pnl": 10.0, "total_fees": 1.0})
+    cached = db.get_portfolio_stats_cache(portfolio["id"])
+
+    assert cached["total_trades"] == 3
+    assert cached["gross_pnl"] == pytest.approx(10.0)
+    assert cached["total_fees"] == pytest.approx(1.0)
+    db.close()
+
+
 def test_market_data_preserves_integer_sizes(db_session):
     db, session_id = db_session
     db.log_market_data(
@@ -197,15 +211,6 @@ def test_market_data_preserves_integer_sizes(db_session):
     assert isinstance(rows[0]["volume"], int)
     assert rows[0]["bid_size"] == 150
     assert rows[0]["ask_size"] == 120
-
-
-def test_start_of_day_equity_persistence(db_session):
-    db, session_id = db_session
-    baseline = 1234.5
-    db.set_start_of_day_equity(session_id, baseline)
-
-    stored = db.get_start_of_day_equity(session_id)
-    assert stored == baseline
 
 
 def test_log_and_fetch_ohlcv(db_session):
@@ -511,15 +516,6 @@ def test_trade_plan_reason_lookup_and_counts(db_session):
     assert reason_by_order == "entry"
     assert reason_by_client == "entry"
     assert count == 1
-
-
-def test_start_of_day_equity_uses_cache_when_risk_state_missing(db_session):
-    db, session_id = db_session
-    db.set_session_stats_cache(session_id, {"start_of_day_equity": 321.0})
-    db.conn.execute("DELETE FROM risk_state WHERE session_id = ?", (session_id,))
-    db.conn.commit()
-
-    assert db.get_start_of_day_equity(session_id) == pytest.approx(321.0)
 
 
 def test_portfolio_days_upsert(tmp_path):

@@ -743,7 +743,13 @@ class StrategyRunner:
             base_currency=self.base_currency,
         )
         self.session = self.db.get_session(self.session_id)
-        self.portfolio_tracker.set_session(self.session_id)
+        try:
+            self.db.set_session_portfolio(self.session_id, self.portfolio_id)
+            # refresh session with portfolio mapping
+            self.session = self.db.get_session(self.session_id)
+        except Exception as exc:
+            logger.debug(f"Could not attach portfolio_id to session {self.session_id}: {exc}")
+        self.portfolio_tracker.set_session(self.session_id, portfolio_id=self.portfolio_id)
         self.resync_service.set_session(self.session_id)
         # In PAPER mode, reset starting_balance baseline to current equity to avoid mismatch against old sandbox inventories
         if TRADING_MODE == 'PAPER' and self.session.get('starting_balance') != initial_equity:
@@ -768,7 +774,7 @@ class StrategyRunner:
 
         # Initialize session stats with persistence awareness
         logger.info("Initializing session stats...")
-        cached_stats = self.db.get_session_stats_cache(self.session_id)
+        cached_stats = self.db.get_portfolio_stats_cache(self.portfolio_id) if self.portfolio_id else None
         if cached_stats:
             self.portfolio_tracker.session_stats = {
                 'total_trades': cached_stats.get('total_trades', 0),
@@ -777,65 +783,30 @@ class StrategyRunner:
                 'total_llm_cost': cached_stats.get('total_llm_cost', 0.0),
             }
             self.session_stats = self.portfolio_tracker.session_stats
-            logger.info(f"Loaded session stats from cache: {self.session_stats}")
-            # If cache is stale vs DB trades, rebuild
-            db_trade_count = self.db.get_trade_count(self.session_id)
-            if db_trade_count > self.session_stats['total_trades']:
-                logger.info(f"Cache stale (cache trades={self.session_stats['total_trades']}, db trades={db_trade_count}); rebuilding stats from trades...")
-                await self._rebuild_session_stats_from_trades(initial_equity)
+            logger.info(f"Loaded portfolio stats from cache: {self.session_stats}")
         else:
-            logger.info("No cached stats found; rebuilding from exchange trades...")
-            # 1. Determine start of day (UTC) for "Daily" stats
+            logger.info("No cached portfolio stats found; rebuilding from exchange trades...")
             now = datetime.now(timezone.utc)
             start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
             start_ts_ms = int(start_of_day.timestamp() * 1000)
             
-            # 2. Fetch trades for the day across active symbols
             symbols = self._get_rebuild_symbols()
             trades = []
             for sym in symbols:
                 sym_trades = await self.bot.get_trades_from_timestamp(sym, start_ts_ms)
                 trades.extend(sym_trades)
             
-            # 3. Rebuild Holdings and Stats
             self._apply_exchange_trades_for_rebuild(trades)
 
-            # Load LLM costs from DB (since exchange doesn't track this)
             db_stats = self.db.get_session_stats(self.session_id)
             self.session_stats['total_llm_cost'] = db_stats.get('total_llm_cost', 0.0)
             self.portfolio_tracker.session_stats = self.session_stats
-            self.db.set_session_stats_cache(self.session_id, self.session_stats)
-            logger.info(f"Session Stats Rebuilt: {self.session_stats}")
+            if self.portfolio_id:
+                self.db.set_portfolio_stats_cache(self.portfolio_id, self.session_stats)
+            logger.info(f"Portfolio Stats Rebuilt: {self.session_stats}")
 
-        # Seed risk manager with persisted start-of-day equity to survive restarts
-        start_equity = None
-        try:
-            persisted_baseline = self.db.get_start_of_day_equity(self.session_id)
-        except Exception as e:
-            logger.warning(f"Could not fetch persisted start-of-day equity: {e}")
-            persisted_baseline = None
-
-        if TRADING_MODE == 'PAPER':
-            # In sandbox, always reset start-of-day equity to current to avoid false daily loss triggers
-            start_equity = initial_equity
-            logger.info(f"Sandbox Mode: Resetting start_of_day_equity to current: ${start_equity:,.2f}")
-        elif persisted_baseline is not None:
-            start_equity = persisted_baseline
-        elif self.session and self.session.get('starting_balance') is not None:
-            start_equity = self.session.get('starting_balance')
-        else:
-            # Prefer latest broker equity snapshot if available
-            latest_equity = self.db.get_latest_equity(self.session_id)
-            start_equity = latest_equity if latest_equity is not None else initial_equity
-
-        # Persist baseline if it's new so restarts retain loss guard
-        try:
-            if start_equity is not None and persisted_baseline is None:
-                self.db.set_start_of_day_equity(self.session_id, start_equity)
-        except Exception as e:
-            logger.warning(f"Could not persist start-of-day equity: {e}")
-
-        self.risk_manager.seed_start_of_day(start_equity)
+        # Seed risk manager baseline to current equity (no persisted daily baseline)
+        self.risk_manager.seed_start_of_day(initial_equity)
         
         # No need to reconcile_exchange_state in the old way; we just trust the exchange now.
         # But we might want to log initial positions to DB for debugging.

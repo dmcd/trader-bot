@@ -8,9 +8,10 @@ class PortfolioTracker:
     Extracted from StrategyRunner so PnL math and cache updates can be unit tested in isolation.
     """
 
-    def __init__(self, db: Any, session_id: Optional[int] = None, logger: Optional[logging.Logger] = None):
+    def __init__(self, db: Any, session_id: Optional[int] = None, portfolio_id: Optional[int] = None, logger: Optional[logging.Logger] = None):
         self.db = db
         self.session_id = session_id
+        self.portfolio_id = portfolio_id
         self.logger = logger or logging.getLogger(__name__)
         self.holdings: dict[str, dict[str, float]] = {}
         self.session_stats = {
@@ -20,8 +21,15 @@ class PortfolioTracker:
             "total_llm_cost": 0.0,
         }
 
-    def set_session(self, session_id: int) -> None:
+    def set_session(self, session_id: int, portfolio_id: Optional[int] = None) -> None:
         self.session_id = session_id
+        if portfolio_id is not None:
+            self.portfolio_id = portfolio_id
+        elif hasattr(self.db, "get_session_portfolio_id") and self.session_id is not None:
+            try:
+                self.portfolio_id = self.db.get_session_portfolio_id(self.session_id)
+            except Exception:
+                self.portfolio_id = None
 
     def reset_holdings(self) -> None:
         self.holdings.clear()
@@ -108,7 +116,9 @@ class PortfolioTracker:
         self.session_stats["total_fees"] += fee_delta
         self.session_stats["gross_pnl"] += realized_pnl
         try:
-            if self.session_id is not None:
+            if self.portfolio_id is not None:
+                self.db.set_portfolio_stats_cache(self.portfolio_id, self.session_stats)
+            elif self.session_id is not None:
                 self.db.set_session_stats_cache(self.session_id, self.session_stats)
         except Exception as exc:  # pragma: no cover - defensive
             self.logger.warning(f"Failed to persist session stats cache: {exc}")
@@ -215,7 +225,10 @@ class PortfolioTracker:
         # Pull LLM costs from session row
         db_stats = self.db.get_session_stats(self.session_id)
         self.session_stats["total_llm_cost"] = db_stats.get("total_llm_cost", 0.0)
-        self.db.set_session_stats_cache(self.session_id, self.session_stats)
+        if self.portfolio_id is not None:
+            self.db.set_portfolio_stats_cache(self.portfolio_id, self.session_stats)
+        else:
+            self.db.set_session_stats_cache(self.session_id, self.session_stats)
         try:
             self.db.update_session_totals(
                 self.session_id,

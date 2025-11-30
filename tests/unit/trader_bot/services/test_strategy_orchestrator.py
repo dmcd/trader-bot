@@ -1,8 +1,11 @@
-import pytest
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from trader_bot.services.command_processor import CommandResult
+import pytest
+
+from trader_bot.services.command_processor import CommandProcessor, CommandResult
+from trader_bot.services.health_manager import HealthCircuitManager
 from trader_bot.services.strategy_orchestrator import StrategyOrchestrator
 
 
@@ -25,6 +28,89 @@ def _build_orchestrator(
         logger=logger or MagicMock(),
         actions_logger=actions_logger or MagicMock(),
     )
+
+
+class _Clock:
+    def __init__(self, now: float = 0.0):
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.mark.asyncio
+async def test_close_all_positions_command_executes_and_marks():
+    db = MagicMock()
+    db.get_pending_commands.return_value = [{"id": 1, "command": "CLOSE_ALL_POSITIONS"}]
+    db.mark_command_executed = MagicMock()
+    close_cb = AsyncMock()
+    stop_cb = MagicMock()
+
+    processor = CommandProcessor(db)
+    result = await processor.process(close_cb, stop_cb)
+
+    close_cb.assert_awaited_once()
+    db.mark_command_executed.assert_called_once_with(1)
+    stop_cb.assert_not_called()
+    assert result.stop_requested is False
+
+
+@pytest.mark.asyncio
+async def test_stop_bot_command_sets_reason_and_returns_stop():
+    db = MagicMock()
+    db.get_pending_commands.return_value = [{"id": 3, "command": "STOP_BOT"}]
+    db.mark_command_executed = MagicMock()
+    close_cb = AsyncMock()
+    stop_cb = MagicMock()
+
+    processor = CommandProcessor(db)
+    result = await processor.process(close_cb, stop_cb)
+
+    close_cb.assert_not_called()
+    db.mark_command_executed.assert_called_once_with(3)
+    stop_cb.assert_called_once_with("manual stop")
+    assert result.stop_requested is True
+    assert result.shutdown_reason == "manual stop"
+
+
+def test_pause_window_accumulates_longer_durations():
+    clock = _Clock(10.0)
+    manager = HealthCircuitManager(monotonic=clock)
+
+    first = manager.request_pause(20)
+    assert first == pytest.approx(30.0)
+
+    clock.now = 25.0
+    second = manager.request_pause(2)
+    assert second == pytest.approx(30.0)
+    assert manager.should_pause(clock.now) is True
+    assert manager.pause_remaining(clock.now) == pytest.approx(5.0)
+
+    clock.now = 31.0
+    assert manager.should_pause(clock.now) is False
+    assert manager.pause_remaining(clock.now) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_maybe_reconnect_throttles_calls():
+    clock = _Clock(0.0)
+    manager = HealthCircuitManager(monotonic=clock, reconnect_cooldown_seconds=30, logger=logging.getLogger("test"))
+    bot = type("Bot", (), {})()
+    bot.connect_async = AsyncMock()
+
+    first = await manager.maybe_reconnect(bot)
+    assert first is True
+    bot.connect_async.assert_awaited_once()
+
+    clock.now = 10.0
+    second = await manager.maybe_reconnect(bot)
+    assert second is False
+    assert bot.connect_async.call_count == 1
+
+    clock.now = 45.0
+    third = await manager.maybe_reconnect(bot)
+    assert third is True
+    assert bot.connect_async.call_count == 2
 
 
 @pytest.mark.asyncio

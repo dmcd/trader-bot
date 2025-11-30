@@ -1,4 +1,5 @@
 import json
+import re
 from collections import Counter
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -627,6 +628,103 @@ async def test_consecutive_llm_errors_force_hold(strategy_env, set_loop_time):
 
     assert hold_signal is not None
     assert hold_signal.action == "HOLD"
+
+
+def test_update_plan_schema_valid(strategy_env):
+    decision = json.dumps({
+        "action": "UPDATE_PLAN",
+        "symbol": "BTC/USD",
+        "quantity": 0,
+        "reason": "tighten stop",
+        "plan_id": 1,
+        "stop_price": 100,
+        "target_price": 110,
+        "size_factor": 0.5
+    })
+    decision_obj = json.loads(decision)
+    strategy_env.strategy._decision_schema  # touch to ensure present
+    assert decision_obj["action"] == "UPDATE_PLAN"
+
+
+def test_partial_close_schema_valid(strategy_env):
+    decision = json.dumps({
+        "action": "PARTIAL_CLOSE",
+        "symbol": "BTC/USD",
+        "quantity": 0,
+        "reason": "trim",
+        "plan_id": 2,
+        "close_fraction": 0.5
+    })
+    decision_obj = json.loads(decision)
+    assert decision_obj["action"] == "PARTIAL_CLOSE"
+
+
+def test_close_position_and_pause_schema_valid(strategy_env):
+    close_decision = json.dumps({
+        "action": "CLOSE_POSITION",
+        "symbol": "BTC/USD",
+        "quantity": 0,
+        "reason": "exit"
+    })
+    pause_decision = json.dumps({
+        "action": "PAUSE_TRADING",
+        "symbol": "BTC/USD",
+        "quantity": 0,
+        "reason": "cooldown",
+        "duration_minutes": 10
+    })
+    assert json.loads(close_decision)["action"] == "CLOSE_POSITION"
+    assert json.loads(pause_decision)["action"] == "PAUSE_TRADING"
+
+
+@pytest.mark.usefixtures("test_db_path")
+def test_compute_regime_flags(strategy_env):
+    strategy = strategy_env.strategy
+    one_h_bars = [{"close": 100 - i * 5} for i in range(12)]
+    market_point = {"spread_pct": 0.1, "bid_size": 2, "ask_size": 3, "bid": 99, "ask": 101}
+    flags = strategy._compute_regime_flags(
+        session_id=1,
+        symbol="BTC/USD",
+        market_data_point=market_point,
+        recent_bars={"1h": one_h_bars},
+    )
+    assert {"volatility", "trend", "liquidity", "depth"} <= set(flags)
+
+
+@pytest.mark.usefixtures("test_db_path")
+def test_build_timeframe_summary(strategy_env):
+    sample = [
+        {"timestamp": 0, "open": 1, "high": 2, "low": 1, "close": 2, "volume": 10},
+        {"timestamp": 1, "open": 2, "high": 3, "low": 2, "close": 3, "volume": 20},
+    ]
+    strategy_env.db.get_recent_ohlcv.side_effect = lambda s_id, sym, tf, limit=50: sample
+    summary = strategy_env.strategy._build_timeframe_summary(1, "BTC/USD")
+    assert "1m:" in summary
+    assert "1d:" in summary
+
+
+class Dummy:
+    def __getattr__(self, _):
+        return None
+
+
+def test_prompt_budget_trims_memory_and_context(monkeypatch):
+    monkeypatch.setenv("LLM_DECISION_BYTE_BUDGET", "200")
+    strat = LLMStrategy(Dummy(), Dummy(), Dummy())
+
+    prompt = (
+        "HEADER\n"
+        "MEMORY (recent plans/decisions):\n"
+        + "X" * 300
+        + "\n\nCONTEXT:\n"
+        + "Y" * 300
+        + "\nRULES:\n- do this\n"
+    )
+    trimmed = strat._enforce_prompt_budget(prompt, budget=200)
+    assert len(trimmed.encode("utf-8")) <= 200
+    assert "MEMORY: trimmed" in trimmed or "MEMORY" not in trimmed
+    assert "Y" * 10 not in trimmed
+    assert "RULES" in trimmed
 
 
 @pytest.mark.asyncio

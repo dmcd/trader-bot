@@ -57,6 +57,24 @@ ACTIVE_EXCHANGE = os.getenv('ACTIVE_EXCHANGE', 'GEMINI').upper()
 _ALLOWED_SYMBOLS_RAW = os.getenv('ALLOWED_SYMBOLS', 'BTC/USD')
 ALLOWED_SYMBOLS = [s.strip().upper() for s in _ALLOWED_SYMBOLS_RAW.split(',') if s.strip()]
 
+# Interactive Brokers settings
+IB_HOST = os.getenv('IB_HOST', '127.0.0.1')
+IB_PORT = int(os.getenv('IB_PORT', '7497'))
+IB_CLIENT_ID = int(os.getenv('IB_CLIENT_ID', '1'))
+IB_ACCOUNT_ID = os.getenv('IB_ACCOUNT_ID', '')
+IB_PAPER = os.getenv('IB_PAPER', 'true').lower() == 'true'
+IB_BASE_CURRENCY = os.getenv('IB_BASE_CURRENCY', 'AUD').upper()
+IB_EXCHANGE = os.getenv('IB_EXCHANGE', 'SMART')
+IB_PRIMARY_EXCHANGE = os.getenv('IB_PRIMARY_EXCHANGE', 'ASX')
+
+def _parse_ib_allowed_types(raw: str):
+    return [token.strip().upper() for token in raw.split(',') if token.strip()]
+
+IB_ALLOWED_INSTRUMENT_TYPES = _parse_ib_allowed_types(os.getenv('IB_ALLOWED_INSTRUMENT_TYPES', 'STK,FX'))
+IB_STOCK_COMMISSION_PER_SHARE = float(os.getenv('IB_STOCK_COMMISSION_PER_SHARE', '0.005'))  # AUD/USD depending on listing
+IB_STOCK_MIN_COMMISSION = float(os.getenv('IB_STOCK_MIN_COMMISSION', '1.0'))
+IB_FX_COMMISSION_PCT = float(os.getenv('IB_FX_COMMISSION_PCT', '0.0'))
+
 # LLM tool/data fetch limits
 TOOL_MAX_BARS = int(os.getenv('TOOL_MAX_BARS', '2000'))  # cap per-timeframe bars returned to the LLM
 TOOL_MAX_TRADES = int(os.getenv('TOOL_MAX_TRADES', '500'))  # cap recent trades returned

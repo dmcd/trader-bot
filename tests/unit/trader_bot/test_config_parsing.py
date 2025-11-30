@@ -69,3 +69,52 @@ def test_parse_correlation_buckets_with_malformed_groups():
         "bucket_3": ["ADA/USD"],
         "bucket_4": ["SOL/USD", "XRP/USD"],
     }
+
+
+def test_ib_config_defaults_and_lists():
+    cfg = reload_config({})
+
+    assert cfg.IB_HOST == "127.0.0.1"
+    assert cfg.IB_PORT == 7497
+    assert cfg.IB_CLIENT_ID == 1
+    assert cfg.IB_ACCOUNT_ID == ""
+    assert cfg.IB_PAPER is True
+    assert cfg.IB_BASE_CURRENCY == "AUD"
+    assert cfg.IB_EXCHANGE == "SMART"
+    assert cfg.IB_PRIMARY_EXCHANGE == "ASX"
+    assert cfg.IB_ALLOWED_INSTRUMENT_TYPES == ["STK", "FX"]
+    assert cfg.IB_STOCK_COMMISSION_PER_SHARE == 0.005
+    assert cfg.IB_STOCK_MIN_COMMISSION == 1.0
+    assert cfg.IB_FX_COMMISSION_PCT == 0.0
+
+
+def test_ib_config_respects_overrides_and_uppercases_lists():
+    cfg = reload_config(
+        {
+            "IB_HOST": "ib-paper",
+            "IB_PORT": "4002",
+            "IB_CLIENT_ID": "7",
+            "IB_ACCOUNT_ID": "DU1234567",
+            "IB_PAPER": "false",
+            "IB_BASE_CURRENCY": "aud",
+            "IB_EXCHANGE": "SMART",
+            "IB_PRIMARY_EXCHANGE": "ASX",
+            "IB_ALLOWED_INSTRUMENT_TYPES": "stk,fx , fut ",
+            "IB_STOCK_COMMISSION_PER_SHARE": "0.003",
+            "IB_STOCK_MIN_COMMISSION": "1.35",
+            "IB_FX_COMMISSION_PCT": "0.00015",
+        }
+    )
+
+    assert cfg.IB_HOST == "ib-paper"
+    assert cfg.IB_PORT == 4002
+    assert cfg.IB_CLIENT_ID == 7
+    assert cfg.IB_ACCOUNT_ID == "DU1234567"
+    assert cfg.IB_PAPER is False
+    assert cfg.IB_BASE_CURRENCY == "AUD"
+    assert cfg.IB_EXCHANGE == "SMART"
+    assert cfg.IB_PRIMARY_EXCHANGE == "ASX"
+    assert cfg.IB_ALLOWED_INSTRUMENT_TYPES == ["STK", "FX", "FUT"]
+    assert cfg.IB_STOCK_COMMISSION_PER_SHARE == 0.003
+    assert cfg.IB_STOCK_MIN_COMMISSION == 1.35
+    assert cfg.IB_FX_COMMISSION_PCT == 0.00015

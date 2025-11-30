@@ -21,10 +21,10 @@
 - `requirements.txt` previously listed `ib_insync` and `mcp`; re-add `ib_insync` for the adapter, and consider gating MCP until needed.
 
 ## Work Plan
-1) **Dependencies & Config**
-   - [ ] Add `ib_insync` to dependencies and document install prerequisites (TWS/Gateway running, Java requirement, sockets open).
-   - [ ] Extend `config.py` and `.env` samples with IB fields: `IB_HOST`, `IB_PORT`, `IB_CLIENT_ID`, `IB_ACCOUNT_ID`, `IB_PAPER=true/false`, `IB_BASE_CURRENCY` (default AUD), `IB_EXCHANGE` defaulting to `SMART/ASX`, per-venue commission overrides, and allowed instrument types.
-   - [ ] Update `README.md` and `AGENTS.md` venue section to list IB, setup steps, and required environment variables.
+1) **Dependencies & Config** ✅
+   - [x] Add `ib_insync` to dependencies and document install prerequisites (TWS/Gateway running, Java requirement, sockets open).
+   - [x] Extend `config.py` and `.env` samples with IB fields: `IB_HOST`, `IB_PORT`, `IB_CLIENT_ID`, `IB_ACCOUNT_ID`, `IB_PAPER=true/false`, `IB_BASE_CURRENCY` (default AUD), `IB_EXCHANGE` defaulting to `SMART/ASX`, per-venue commission overrides, and allowed instrument types.
+   - [x] Update `README.md` and `AGENTS.md` venue section to list IB, setup steps, and required environment variables.
 
 2) **Symbol & Contract Normalization**
    - [ ] Define a small contract resolver utility that maps `SYMBOL/CCY` plus optional exchange/sectype into an `ib_insync` `Contract` (e.g., `Stock("BHP", "ASX", "AUD")`, `Forex("AUDUSD")`).

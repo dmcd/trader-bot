@@ -13,6 +13,7 @@ Follow these steps to get the bot up and running in minutes.
     *   **LLM**: Gemini 2.5 Flash API key (default) or OpenAI API key when using `LLM_PROVIDER=OPENAI`.
     *   **Exchange**:
         *   **Gemini Exchange Account**: API Key and Secret (Sandbox or Live).
+        *   **Interactive Brokers**: TWS or IB Gateway running with API access enabled, Java installed, and the socket host/port open (default `127.0.0.1:7497` for paper). Make sure the account id you plan to trade with is authorized for API connections.
 
 ### 2. Installation
 
@@ -47,6 +48,20 @@ GEMINI_EXCHANGE_API_KEY=your_gemini_exchange_key
 GEMINI_EXCHANGE_SECRET=your_gemini_exchange_secret
 GEMINI_SANDBOX_API_KEY=your_gemini_sandbox_key
 GEMINI_SANDBOX_SECRET=your_gemini_sandbox_secret
+
+# --- Exchange: Interactive Brokers ---
+IB_HOST=127.0.0.1
+IB_PORT=7497                  # 7497 (paper) / 7496 (live) unless you changed TWS/Gateway config
+IB_CLIENT_ID=1                # Unique per TWS/Gateway session
+IB_ACCOUNT_ID=your_ib_account # e.g., DU1234567
+IB_PAPER=true
+IB_BASE_CURRENCY=AUD
+IB_EXCHANGE=SMART             # Default routing exchange
+IB_PRIMARY_EXCHANGE=ASX       # Primary listing venue for ASX equities
+IB_ALLOWED_INSTRUMENT_TYPES=STK,FX
+IB_STOCK_COMMISSION_PER_SHARE=0.005
+IB_STOCK_MIN_COMMISSION=1.0
+IB_FX_COMMISSION_PCT=0.0
 
 # --- Risk Management (Adjust to your preference) ---
 MAX_DAILY_LOSS=500.0          # Stop trading if loss exceeds this amount

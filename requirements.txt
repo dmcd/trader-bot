@@ -5,6 +5,7 @@ google-generativeai
 openai
 python-dotenv
 ccxt
+ib_insync
 pytest
 pytest-cov
 plotly

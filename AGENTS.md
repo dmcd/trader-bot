@@ -60,3 +60,8 @@
 - **Secrets**: Store in `.env`. Never commit API keys.
 - **Tunables**: Review `config.py` for all adjustable parameters (caps, fees, cadence).
 - **Venues**: Verify `ACTIVE_EXCHANGE` and `TRADING_MODE` in `.env`. Paper and Live modes use different endpoints and limits.
+
+## Venues & Setup
+
+- **Gemini**: Default ccxt adapter. Requires `GEMINI_EXCHANGE_API_KEY`/`GEMINI_EXCHANGE_SECRET` (or sandbox keys) and `ACTIVE_EXCHANGE=GEMINI`.
+- **Interactive Brokers (IB)**: Runs against TWS or IB Gateway with API sockets enabled (Java needed). Typical socket `127.0.0.1:7497` for paper; ensure the account id is authorized. Key env vars: `ACTIVE_EXCHANGE=IB`, `IB_HOST`, `IB_PORT`, `IB_CLIENT_ID`, `IB_ACCOUNT_ID`, `IB_PAPER`, `IB_BASE_CURRENCY`, `IB_EXCHANGE`, `IB_PRIMARY_EXCHANGE`, `IB_ALLOWED_INSTRUMENT_TYPES`, `IB_STOCK_COMMISSION_PER_SHARE`, `IB_STOCK_MIN_COMMISSION`, `IB_FX_COMMISSION_PCT`.

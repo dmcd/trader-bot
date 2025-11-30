@@ -7,9 +7,14 @@ from trader_bot.config import (
     GEMINI_MAKER_FEE,
     GEMINI_OUTPUT_COST_PER_TOKEN,
     GEMINI_TAKER_FEE,
+    IB_BASE_CURRENCY,
+    IB_FX_COMMISSION_PCT,
+    IB_STOCK_COMMISSION_PER_SHARE,
+    IB_STOCK_MIN_COMMISSION,
     OPENAI_INPUT_COST_PER_TOKEN,
     OPENAI_OUTPUT_COST_PER_TOKEN,
 )
+from trader_bot.symbols import infer_instrument_type, normalize_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +66,30 @@ class CostTracker:
             fee = trade_value * fee_rate
             logger.debug(f"Gemini fee: ${fee:.4f} ({fee_rate*100}% of ${trade_value:.2f}) [{liq}]")
             return fee
-        
+        if self.exchange == 'IB':
+            symbol_norm = normalize_symbol(symbol) if symbol else symbol
+            instrument = infer_instrument_type(
+                *(symbol_norm.split("/", 1)),
+                allowed_instrument_types=None,
+                base_currency=IB_BASE_CURRENCY,
+            )
+            if instrument == "FX":
+                trade_value = abs(quantity) * price
+                fee = trade_value * IB_FX_COMMISSION_PCT
+                logger.debug(
+                    f"IB FX fee: ${fee:.4f} ({IB_FX_COMMISSION_PCT*100:.4f}% of ${trade_value:.2f})"
+                )
+                return fee
+            # Default to stock/ETF per-share commission with min
+            shares = abs(quantity)
+            fee = max(shares * IB_STOCK_COMMISSION_PER_SHARE, IB_STOCK_MIN_COMMISSION)
+            logger.debug(
+                f"IB stock fee: ${fee:.4f} (per-share ${IB_STOCK_COMMISSION_PER_SHARE:.4f}, min ${IB_STOCK_MIN_COMMISSION:.2f})"
+            )
+            return fee
 
-        
-        else:
-            logger.warning(f"Unknown exchange: {self.exchange}, assuming no fees")
-            return 0.0
+        logger.warning(f"Unknown exchange: {self.exchange}, assuming no fees")
+        return 0.0
     
     def calculate_llm_cost(self, input_tokens: int, output_tokens: int) -> float:
         """Calculate cost of LLM API call."""

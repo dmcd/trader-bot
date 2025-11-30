@@ -48,7 +48,7 @@
    - [x] Update `TradingContext` and LLM prompt scaffolding to describe IB venue, instrument universe (ASX/FX), and market hours so the LLM doesn’t request unsupported products.
 
 5) **Risk, Sizing, and Fees**
-   - [ ] Extend `CostTracker` to include IB commission model (per-share with min, FX spread buffer). Allow config overrides for taker/maker not used on IB.
+   - [x] Extend `CostTracker` to include IB commission model (per-share with min, FX spread buffer). Allow config overrides for taker/maker not used on IB.
    - [ ] Adjust `RiskManager` to accept base-currency conversions and recognize short exposure; ensure `MAX_ORDER_VALUE`, `MAX_TOTAL_EXPOSURE`, and `MIN_TRADE_SIZE` operate in `IB_BASE_CURRENCY`.
    - [ ] Add spread/liquidity heuristics tuned for equities/FX (e.g., min quote size in shares, tick-size aware price nudging). Revisit `MIN_TOP_OF_BOOK_NOTIONAL` defaults for AUD.
    - [ ] Update auto-flatten and plan-monitor exits to prefer marketable limit orders when IB disallows true market for certain contracts.

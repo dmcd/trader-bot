@@ -74,10 +74,12 @@
 
 8) **Dashboard & UX**
    - [ ] Surface IB account summary (cash balances, margin available) and commission estimates on the Streamlit dashboard.
+     - [ ] Add a service/DTO for account summary + commission estimates decoupled from `ib_insync` objects.
      - [ ] Expose account summary from IB adapter to the dashboard layer.
      - [ ] Render balances/margin and per-order commission estimates with AUD labels.
      - [ ] Add tests for dashboard data assembly (can be stubbed service).
    - [ ] Add venue badge and display base currency in PnL/equity cards. Clarify market hours status and recent connectivity/circuit state for IB.
+     - [ ] Add dashboard-friendly status payload (venue, base currency, market hours, last circuit state).
      - [ ] Show venue indicator and base currency in equity/PnL widgets.
      - [ ] Add market hours/open status and last connectivity/circuit state.
      - [ ] Add UI tests or snapshot coverage for the new elements.
@@ -85,16 +87,24 @@
 9) **Testing & Validation**
    - [ ] Unit tests: fake IB client covering symbol resolution, market data normalization, order placement mapping, trade sync paths, and cost tracking. Add risk tests for AUD sizing and short exposure.
      - [ ] Build a reusable fake IB client covering contracts, orders, trades, and historical data.
+     - [ ] Provide fixture factory/helpers to keep scenarios readable and re-usable across tests.
+     - [ ] Add test toggles for IB vs Gemini paths where logic diverges.
      - [ ] Add normalization tests for market data, trades, and OHLCV.
      - [ ] Add risk and cost tracker tests for AUD and short handling.
    - [ ] Integration/smoke: harness against IB paper account with recorded fixtures for market data, OHLCV, and order lifecycle; mark with `@pytest.mark.integration`.
      - [ ] Create fixture capture scripts and store sanitized fixtures for CI-friendly playback.
+     - [ ] Add playback/stub mode for integration tests so CI can run without live IB Gateway.
+     - [ ] Wire CI marker/flag to skip live IB tests unless credentials and Gateway are available.
      - [ ] Add smoke tests gated by env flag and mark as integration.
      - [ ] Document how to record/update fixtures when IB API changes.
    - [ ] Backfill docs on how to run IB tests (requires paper creds, Gateway running) and how to toggle to stub mode for CI.
      - [ ] Document setup for running unit vs integration IB tests locally.
+     - [ ] Add `.env.example` entries for IB test creds and fixture playback flags.
      - [ ] Add instructions for paper account credentials and TWS/Gateway prerequisites.
      - [ ] Explain CI stub mode and how to enable fixture playback.
 
 10) **Rollout & Safety**
    - [ ] Log telemetry fields for IB-specific diagnostics (contract id, exchange, commission source) to `telemetry.log` for early triage.
+     - [ ] Extend telemetry payloads to include IB contract id/exchange/commission source.
+     - [ ] Add tests/fixtures to assert telemetry entries for IB orders/trades.
+     - [ ] Document telemetry fields and sampling strategy for IB traffic.

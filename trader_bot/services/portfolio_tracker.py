@@ -267,7 +267,7 @@ class PortfolioTracker:
             except Exception:
                 db_stats = {}
         if not db_stats and self.session_id is not None:
-            db_stats = self.db.get_session_stats(self.session_id)
+            db_stats = self.db.get_session_stats(self.session_id, portfolio_id=self.portfolio_id)
         self.session_stats["total_llm_cost"] = db_stats.get("total_llm_cost", 0.0)
         self.session_stats["exposure_notional"] = db_stats.get("exposure_notional", self.session_stats.get("exposure_notional", 0.0) or 0.0)
         self._persist_stats_cache()

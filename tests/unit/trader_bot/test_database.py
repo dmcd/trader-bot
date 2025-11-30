@@ -682,6 +682,39 @@ def test_session_stats_cache_upsert_and_merge(db_session):
     assert cached["total_fees"] == pytest.approx(1.5)
 
 
+def test_session_stats_prefers_portfolio_cache(tmp_path):
+    db_path = tmp_path / "portfolio-stats.db"
+    db = TradingDatabase(str(db_path))
+    portfolio = db.get_or_create_portfolio("swing", base_currency="USD", bot_version="v1")
+    session_id = db.get_or_create_portfolio_session(
+        portfolio_id=portfolio["id"],
+        starting_balance=5000.0,
+        bot_version="v1",
+        base_currency="USD",
+    )
+    db.set_session_stats_cache(session_id, {"total_trades": 1, "gross_pnl": 10.0, "total_fees": 1.0})
+    db.set_portfolio_stats_cache(
+        portfolio["id"],
+        {
+            "total_trades": 7,
+            "gross_pnl": 120.0,
+            "total_fees": 5.0,
+            "total_llm_cost": 2.5,
+            "exposure_notional": 1500.0,
+        },
+    )
+
+    stats = db.get_session_stats(session_id)
+
+    assert stats["portfolio_id"] == portfolio["id"]
+    assert stats["total_trades"] == 7
+    assert stats["gross_pnl"] == pytest.approx(120.0)
+    assert stats["total_fees"] == pytest.approx(5.0)
+    assert stats["total_llm_cost"] == pytest.approx(2.5)
+    assert stats["exposure_notional"] == pytest.approx(1500.0)
+    db.close()
+
+
 def test_command_lifecycle_roundtrip(db_session):
     db, _ = db_session
     db.create_command("DO_THIS")

@@ -22,7 +22,7 @@ class FakeDB:
     def set_portfolio_stats_cache(self, portfolio_id, stats):
         self.cached_stats_portfolio = (portfolio_id, stats.copy())
 
-    def get_session_stats(self, session_id):
+    def get_session_stats(self, session_id, portfolio_id=None):
         return self.session_stats_row
 
     def get_portfolio_stats_cache(self, portfolio_id):

@@ -63,7 +63,7 @@ class TradingContext:
         max_orders = 5
         max_trades = 5
 
-        session = self.db.get_session_stats(self.session_id)
+        session = self.db.get_session_stats(self.session_id, portfolio_id=self.portfolio_id)
         recent_trades = list(reversed(self.db.get_recent_trades(self.session_id, limit=50, portfolio_id=self.portfolio_id)))  # chronological
 
         # Calculate session duration (hours, rounded) and win/loss counts
@@ -190,6 +190,7 @@ class TradingContext:
                 "win_rate_pct": round(win_rate, 1),
                 "wins": wins,
                 "losses": losses,
+                "exposure_notional": session.get("exposure_notional"),
             },
             "trend_pct": round(price_trend_pct, 2) if price_trend_pct is not None else None,
             "positions": positions_summary,

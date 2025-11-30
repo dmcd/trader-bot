@@ -301,7 +301,7 @@ async def test_reconcile_open_orders_removes_stale():
 
 def test_trading_context_filters_foreign_open_orders():
     class CtxDB(StubDB):
-        def get_session_stats(self, session_id):
+        def get_session_stats(self, session_id, portfolio_id=None):
             return {
                 "created_at": "2024-01-01T00:00:00",
                 "date": "2024-01-01",

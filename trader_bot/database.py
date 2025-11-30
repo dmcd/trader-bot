@@ -1129,17 +1129,32 @@ class TradingDatabase:
         row = cursor.fetchone()
         return row['equity'] if row else None
 
-    def get_session_stats(self, session_id: int) -> Dict[str, Any]:
-        """Get session statistics."""
+    def get_session_stats(self, session_id: int, portfolio_id: int | None = None) -> Dict[str, Any]:
+        """Get session statistics, preferring portfolio-scoped aggregates when present."""
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
-        session = dict(cursor.fetchone())
+        row = cursor.fetchone()
+        session = dict(row) if row else {}
+        if not session:
+            return {}
 
-        # Prefer cached aggregates when present
-        cache = self.get_session_stats_cache(session_id) or {}
-        for key in ["total_trades", "total_fees", "gross_pnl", "total_llm_cost"]:
-            if key in cache and cache[key] is not None:
-                session[key] = cache[key]
+        portfolio_ref = portfolio_id if portfolio_id is not None else session.get("portfolio_id")
+        portfolio_cache = {}
+        if portfolio_ref is not None:
+            try:
+                portfolio_cache = self.get_portfolio_stats_cache(portfolio_ref) or {}
+            except Exception as exc:
+                logger.debug(f"Could not load portfolio stats cache for session {session_id}: {exc}")
+        session_cache = self.get_session_stats_cache(session_id) or {}
+
+        def _apply_cached_field(key: str):
+            if key in portfolio_cache and portfolio_cache[key] is not None:
+                session[key] = portfolio_cache[key]
+            elif key in session_cache and session_cache[key] is not None:
+                session[key] = session_cache[key]
+
+        for key in ["total_trades", "total_fees", "gross_pnl", "total_llm_cost", "exposure_notional"]:
+            _apply_cached_field(key)
 
         # If gross_pnl is missing, rebuild fee-exclusive realized PnL from trades
         if session.get('gross_pnl') is None:

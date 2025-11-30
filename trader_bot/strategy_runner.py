@@ -807,7 +807,7 @@ class StrategyRunner:
             
             self._apply_exchange_trades_for_rebuild(trades)
 
-            db_stats = self.db.get_session_stats(self.session_id)
+            db_stats = self.db.get_session_stats(self.session_id, portfolio_id=self.portfolio_id)
             self.session_stats['total_llm_cost'] = db_stats.get('total_llm_cost', 0.0)
             self.portfolio_tracker.session_stats = self.session_stats
             try:
@@ -968,10 +968,10 @@ class StrategyRunner:
                 final_equity = await self.bot.get_equity_async()
                 
                 # Get session stats and rebuild to ensure consistency
-                session_stats = self.db.get_session_stats(self.session_id)
+                session_stats = self.db.get_session_stats(self.session_id, portfolio_id=self.portfolio_id)
                 try:
                     await self._rebuild_session_stats_from_trades(final_equity)
-                    session_stats = self.db.get_session_stats(self.session_id)
+                    session_stats = self.db.get_session_stats(self.session_id, portfolio_id=self.portfolio_id)
                 except Exception as e:
                     logger.debug(f"Could not rebuild stats on cleanup: {e}")
                 

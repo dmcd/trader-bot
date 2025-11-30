@@ -92,7 +92,7 @@ class FakeDB:
     def get_health_state(self):
         return []
 
-    def get_session_stats(self, _session_id):
+    def get_session_stats(self, _session_id, portfolio_id=None):
         return {}
 
 

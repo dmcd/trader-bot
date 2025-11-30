@@ -53,6 +53,43 @@ class ResyncService:
                 filtered.append(order)
         return filtered
 
+    def bootstrap_snapshots(self) -> dict[str, list]:
+        """
+        Load persisted positions and open orders for this portfolio without wiping snapshots.
+        Seeds the risk manager so exposure checks remain accurate across restarts.
+        """
+        if not self.session_id:
+            return {"positions": [], "open_orders": []}
+
+        try:
+            positions = self.db.get_positions(self.session_id, portfolio_id=self.portfolio_id) or []
+        except Exception as exc:
+            self.logger.debug(f"Could not load positions for bootstrap: {exc}")
+            positions = []
+
+        try:
+            open_orders = self.db.get_open_orders(self.session_id, portfolio_id=self.portfolio_id) or []
+        except Exception as exc:
+            self.logger.debug(f"Could not load open orders for bootstrap: {exc}")
+            open_orders = []
+
+        try:
+            positions_dict = {}
+            for pos in positions:
+                symbol = pos.get("symbol")
+                if not symbol:
+                    continue
+                mark = pos.get("current_price") or pos.get("avg_price") or 0.0
+                positions_dict[symbol] = {"quantity": pos.get("quantity", 0.0), "current_price": mark}
+            if hasattr(self.risk_manager, "update_positions"):
+                self.risk_manager.update_positions(positions_dict)
+            if hasattr(self.risk_manager, "update_pending_orders"):
+                self.risk_manager.update_pending_orders(open_orders, price_lookup=None)
+        except Exception as exc:  # pragma: no cover - defensive
+            self.logger.debug(f"Bootstrap risk update failed: {exc}")
+
+        return {"positions": positions, "open_orders": open_orders}
+
     async def reconcile_open_orders(self):
         """
         Refresh open order snapshot using live exchange data and drop any DB orders

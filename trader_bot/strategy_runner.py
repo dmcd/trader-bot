@@ -784,9 +784,16 @@ class StrategyRunner:
             self.db.prune_commands(COMMAND_RETENTION_DAYS)
         except Exception as e:
             logger.debug(f"Could not prune commands: {e}")
-        
+
         # Initialize trading context
         self.context = TradingContext(self.db, self.session_id, portfolio_id=self.portfolio_id)
+        # Load persisted snapshots for restart resilience before hitting the exchange
+        bootstrap_state = self.resync_service.bootstrap_snapshots()
+        if bootstrap_state["positions"] or bootstrap_state["open_orders"]:
+            logger.info(
+                f"Restored {len(bootstrap_state['positions'])} positions and "
+                f"{len(bootstrap_state['open_orders'])} open orders from portfolio snapshots"
+            )
         # Drop any stale open orders lingering from prior runs and sync with venue
         await self._reconcile_exchange_state()
 

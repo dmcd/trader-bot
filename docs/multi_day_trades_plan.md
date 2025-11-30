@@ -53,9 +53,9 @@ Notes on the current session model:
   - [x] `StrategyRunner` helper lookups (active/sync symbols, rebuild stats) scope DB reads by `portfolio_id`.
   - [x] `MarketDataService`/OHLCV capture uses `portfolio_id` for logging/pruning.
   - [x] `TradingContext` fetches trades/LLM traces/market data with `portfolio_id` scope.
-  - [ ] Adjust resync bootstrap to load prior positions/open orders for the portfolio without clearing across restarts.
-    - [ ] Load stored portfolio positions/open orders into risk manager at startup before exchange fetch.
-    - [ ] Add restart coverage tests for bootstrap loading without wiping DB snapshots.
+  - [x] Adjust resync bootstrap to load prior positions/open orders for the portfolio without clearing across restarts.
+    - [x] Load stored portfolio positions/open orders into risk manager at startup before exchange fetch.
+    - [x] Add restart coverage tests for bootstrap loading without wiping DB snapshots.
   - [ ] Remove session-centric flows (daily session creation, start_of_day reset, session_id logging) and replace with portfolio_id/run_id usage across services and loggers.
 
 - [ ] Accounting and risk

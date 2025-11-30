@@ -50,6 +50,18 @@ class StubBot:
         return self.orders
 
 
+class TrackingRisk:
+    def __init__(self):
+        self.positions = None
+        self.pending_orders = None
+
+    def update_positions(self, positions):
+        self.positions = positions
+
+    def update_pending_orders(self, orders, price_lookup=None):
+        self.pending_orders = orders
+
+
 def test_filter_our_orders_only_keeps_prefixed():
     resync = ResyncService(db=None, bot=None, risk_manager=None, holdings_updater=None, session_stats_applier=None, logger=None)
     ours = {"clientOrderId": f"{CLIENT_ORDER_PREFIX}123"}
@@ -82,6 +94,30 @@ async def test_reconcile_exchange_state_replaces_snapshots():
     assert db.replaced_positions == bot.positions
     assert db.replaced_orders == bot.orders
     assert db.health.get("restart_recovery") == "ok"
+
+
+def test_bootstrap_snapshots_restores_portfolio_state():
+    db = StubDB()
+    db.positions = [{"symbol": "ETH/USD", "quantity": 2.0, "avg_price": 1800.0}]
+    db.orders = [{"id": "o1", "symbol": "ETH/USD", "clientOrderId": f"{CLIENT_ORDER_PREFIX}1"}]
+    risk = TrackingRisk()
+    resync = ResyncService(
+        db=db,
+        bot=None,
+        risk_manager=risk,
+        holdings_updater=lambda *args, **kwargs: 0.0,
+        session_stats_applier=lambda *args, **kwargs: None,
+    )
+    resync.set_session(99, portfolio_id=7)
+
+    state = resync.bootstrap_snapshots()
+
+    assert state["positions"] == db.positions
+    assert state["open_orders"] == db.orders
+    assert risk.positions == {"ETH/USD": {"quantity": 2.0, "current_price": 1800.0}}
+    assert risk.pending_orders == db.orders
+    assert db.replaced_positions is None
+    assert db.replaced_orders is None
 
 
 @pytest.mark.asyncio

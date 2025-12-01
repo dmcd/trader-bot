@@ -90,7 +90,10 @@ class StubDB:
     def fetchone(self):
         if self.equity is None:
             return None
-        return {"equity": self.equity}
+        return {"equity": self.equity, "timestamp": "2024-01-01T00:00:00Z"}
+
+    def get_first_equity_snapshot_for_portfolio(self, portfolio_id):
+        return self.fetchone()
 
     def get_portfolio(self, portfolio_id):
         return self.portfolio
@@ -114,6 +117,7 @@ def test_metrics_drift_flags_threshold_and_logs():
     assert drift["reference_equity"] == 110.0
     assert drift["latest_equity"] == 120.0
     assert drift["exceeded"] is True
+    assert drift["baseline_timestamp"].startswith("2024-01-01")
     assert db.log_calls == 1
 
 

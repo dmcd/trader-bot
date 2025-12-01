@@ -18,15 +18,12 @@ class MetricsDrift:
             raise ValueError(f"Portfolio {self.portfolio_id} not found")
 
         stats = self.db.get_portfolio_stats(self.portfolio_id) or {}
-        cursor = self.db.conn.cursor()
-        first_row = cursor.execute(
-            "SELECT equity FROM equity_snapshots WHERE portfolio_id = ? ORDER BY timestamp ASC LIMIT 1",
-            (self.portfolio_id,),
-        ).fetchone()
-        if first_row is None:
+        baseline = self.db.get_first_equity_snapshot_for_portfolio(self.portfolio_id)
+        if baseline is None:
             raise ValueError("No equity snapshots available")
 
-        starting_balance = first_row["equity"] or 0.0
+        starting_balance = baseline.get("equity") or 0.0
+        baseline_ts = baseline.get("timestamp")
         net_pnl = stats.get("net_pnl") or 0.0
         reference = starting_balance + net_pnl
         latest_equity = self.db.get_latest_equity_for_portfolio(self.portfolio_id)
@@ -45,6 +42,7 @@ class MetricsDrift:
             "drift_pct": drift_pct,
             "exceeded": exceeded,
             "threshold_pct": threshold_pct,
+            "baseline_timestamp": baseline_ts,
         }
 
         try:

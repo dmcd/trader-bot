@@ -1290,13 +1290,6 @@ class StrategyRunner:
                         except Exception as e:
                             logger.debug(f"Could not capture OHLCV for {sym}: {e}")
 
-                    primary_symbol = symbols[0] if symbols else None
-                    if not primary_symbol:
-                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
-                        continue
-
-                    primary_data = market_data.get(primary_symbol)
-
                     # Refresh live positions each loop for accurate exposure snapshots
                     try:
                         live_positions = await self.bot.get_positions_async()
@@ -1389,9 +1382,6 @@ class StrategyRunner:
                         self.orchestrator.request_stop(self.shutdown_reason)
                         self.running = False
                         break
-
-                    # Slippage guard: if latest price moved >2% from decision price, skip execution
-                    decision_price = market_data.get(primary_symbol, {}).get('price')
 
                     # 2.5 Sync Trades from Exchange (for logging only)
                     try:

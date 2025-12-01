@@ -332,6 +332,46 @@ async def test_liquidity_filter_skips_when_none_pass(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_runner_handles_nonprimary_symbol_signal(monkeypatch):
+    runner = StrategyRunner(execute_orders=False)
+    runner.bot = FakeBot(price={"AAA/USD": 10.0, "BBB/USD": 20.0}, spread_pct=0.1)
+    runner.db = DummyDB()
+    runner.risk_manager = DummyRiskManager()
+    runner.portfolio_id = 1
+    runner._record_health_state = MagicMock()
+    runner.health_manager.record_health_state = runner._record_health_state
+    runner._get_active_symbols = lambda: ["AAA/USD", "BBB/USD"]
+    runner.health_manager.should_pause = MagicMock(return_value=False)
+    runner.health_manager.pause_remaining = MagicMock(return_value=0)
+    runner.health_manager.record_exchange_failure = MagicMock()
+    runner.orchestrator = DummyOrchestrator()
+    runner._capture_ohlcv = AsyncMock()
+    runner._liquidity_ok = lambda _md: True
+    captured_market = {}
+
+    async def fake_generate(market_data, *_args, **__):
+        captured_market.update(market_data)
+        runner.running = False
+        runner.orchestrator.running = False
+        return SimpleNamespace(action="HOLD", symbol="BBB/USD", quantity=0, reason="test")
+
+    runner.strategy = MagicMock()
+    runner.strategy.generate_signal = fake_generate
+    runner.cleanup = AsyncMock()
+
+    async def fast_sleep(_seconds):
+        runner.running = False
+        runner.orchestrator.running = False
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
+    await runner.run_loop(max_loops=1)
+
+    assert set(captured_market.keys()) == {"AAA/USD", "BBB/USD"}
+    assert runner._capture_ohlcv.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_cancel_action_refreshes_open_orders(monkeypatch):
     runner = StrategyRunner(execute_orders=False)
     runner.bot = FakeBot(price=101.0, spread_pct=0.5)

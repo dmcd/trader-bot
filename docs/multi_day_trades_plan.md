@@ -8,6 +8,15 @@ Notes on the current session model:
 
 ## Work Plan
 
+- [ ] Session ➜ Portfolio cleanup
+  - [ ] Rename `session_stats`/helpers to `portfolio_stats` across `StrategyRunner`, `PortfolioTracker`, `ResyncService`, `TradeActionHandler`, `TradingContext`, telemetry emitters, and tests; update log/telemetry strings to stop calling runs "sessions."
+  - [ ] Update LLM context and dashboard consumers to emit/read a `portfolio` block (not `session`), drop `start_new_session` wiring, and ensure baseline math no longer assumes day resets.
+  - [ ] Replace session-scoped config flags (`LLM_MAX_SESSION_COST`, `MARKET_DATA_RETENTION_MINUTES` comments, etc.) with portfolio-level names/env vars and update docs/consumers.
+  - [ ] Delete session-first DB APIs and shims (`get_or_create_session`, session_id params on CRUD/prune helpers, Deprecation warnings) in favor of portfolio/run-only methods; migrate all call sites and tests.
+  - [ ] Design and apply a migration that removes `sessions` table dependencies and `session_id` columns/indexes (or formalizes them as optional `run_id` metadata), including `session_portfolios` view teardown/backfill strategy for legacy data.
+  - [ ] Update docs (architecture, README/ops/AGENTS) to describe the portfolio + run_id lifecycle and remove remaining session terminology.
+  - [ ] Add regression coverage for portfolio-only flows (stats rebuilds, trade sync, plan monitors, market data retention, LLM traces) with no session_id fallback.
+
 - [x] Accounting and risk
   - [x] Make `PortfolioTracker` portfolio-scoped: load/apply trades by portfolio_id; persist stats cache keyed by portfolio.
     - [x] Add unit coverage for portfolio-scoped rebuild/apply flows (stats cache read/write, restart restore).

@@ -194,6 +194,41 @@ def test_latest_run_metadata_for_portfolio(db_session):
     assert latest["source"] == "llm_calls"
 
 
+def test_processed_trade_ids_scoped_by_portfolio(tmp_path):
+    db_path = tmp_path / "processed-scope.db"
+    db = TradingDatabase(str(db_path))
+    p1, _ = db.ensure_active_portfolio(name="scope-1", bot_version="v1")
+    p2, _ = db.ensure_active_portfolio(name="scope-2", bot_version="v1")
+
+    entry = {("t-shared", "cid-shared")}
+    db.record_processed_trade_ids_for_portfolio(p1, entry)
+    db.record_processed_trade_ids_for_portfolio(p2, entry)
+
+    # Duplicate trade id with new client id should be ignored for the same portfolio
+    db.record_processed_trade_ids_for_portfolio(p1, {("t-shared", "cid-new")})
+
+    entries_p1 = db.get_processed_trade_entries_for_portfolio(p1)
+    entries_p2 = db.get_processed_trade_entries_for_portfolio(p2)
+    assert ("t-shared", "cid-shared") in entries_p1
+    assert ("t-shared", "cid-new") not in entries_p1
+    assert ("t-shared", "cid-shared") in entries_p2
+    db.close()
+
+
+def test_processed_trade_ids_block_duplicate_client_orders(tmp_path):
+    db_path = tmp_path / "processed-client.db"
+    db = TradingDatabase(str(db_path))
+    pid, _ = db.ensure_active_portfolio(name="client-dedupe", bot_version="v1")
+
+    db.record_processed_trade_ids_for_portfolio(pid, {("t-one", "cid-1")})
+    db.record_processed_trade_ids_for_portfolio(pid, {("t-two", "cid-1")})
+
+    entries = db.get_processed_trade_entries_for_portfolio(pid)
+    assert ("t-one", "cid-1") in entries
+    assert ("t-two", "cid-1") not in entries
+    db.close()
+
+
 def test_portfolio_stats_cache_roundtrip(tmp_path):
     db_path = tmp_path / "portfolio-stats.db"
     db = TradingDatabase(str(db_path))

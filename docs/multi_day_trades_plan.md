@@ -41,7 +41,7 @@ Legacy session model (now removed):
     - [x] Add restart/day-rollover coverage for deduping + constraint handling.
 
 - [ ] Dashboard and telemetry
-  - [ ] surface open positions/plans regardless of run.
+  - [x] surface open positions/plans regardless of run.
   - [ ] Tag telemetry/log messages with `portfolio_id` and `run_id` for traceability.
 
 - [ ] Testing and rollout

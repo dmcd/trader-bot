@@ -122,6 +122,12 @@ class FakeDB:
     def get_trades_for_portfolio(self, _portfolio_id):
         return []
 
+    def get_open_trade_plans_for_portfolio(self, _portfolio_id):
+        return []
+
+    def get_positions_for_portfolio(self, _portfolio_id):
+        return []
+
 
 @pytest.fixture(scope="module")
 def dashboard_module(tmp_path_factory):
@@ -371,3 +377,38 @@ def test_load_history_and_prices_success(monkeypatch, dashboard_module):
     assert "trade_value" in df.columns
     prices = dashboard.get_latest_prices(1, ["BTC/USD"])
     assert prices["BTC/USD"] == 105.0
+
+
+def test_load_positions_and_trade_plans(monkeypatch, dashboard_module):
+    dashboard = dashboard_module
+    calls = {}
+
+    class StubDB:
+        def __init__(self):
+            calls["created"] = calls.get("created", 0) + 1
+
+        def close(self):
+            calls["closed"] = calls.get("closed", 0) + 1
+
+        def get_positions_for_portfolio(self, portfolio_id):
+            calls["positions_for"] = portfolio_id
+            return [{"symbol": "BTC/USD", "quantity": 1.0, "avg_price": 100.0, "exchange_timestamp": "2024-01-01T00:00:00Z"}]
+
+        def get_open_trade_plans_for_portfolio(self, portfolio_id):
+            calls["plans_for"] = portfolio_id
+            return [
+                {"id": 1, "symbol": "BTC/USD", "status": "open", "size": 0.5},
+                {"id": 2, "symbol": "ETH/USD", "status": "closed", "size": 1.0},
+            ]
+
+    monkeypatch.setattr(dashboard, "TradingDatabase", StubDB)
+    assert dashboard.load_open_positions(0) == []
+
+    positions = dashboard.load_open_positions(1)
+    plans = dashboard.load_trade_plans(1)
+
+    assert positions[0]["symbol"] == "BTC/USD"
+    assert all(plan["status"] == "open" for plan in plans)
+    assert calls["positions_for"] == 1
+    assert calls["plans_for"] == 1
+    assert calls["closed"] == 2

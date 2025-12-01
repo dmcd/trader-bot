@@ -418,6 +418,8 @@ def load_open_orders(portfolio_id):
         db.close()
 
 def load_trade_plans(portfolio_id):
+    if not portfolio_id:
+        return []
     db = TradingDatabase()
     try:
         plans = db.get_open_trade_plans_for_portfolio(portfolio_id)
@@ -441,6 +443,16 @@ def load_health_state():
     db = TradingDatabase()
     try:
         return db.get_health_state()
+    finally:
+        db.close()
+
+
+def load_open_positions(portfolio_id):
+    if not portfolio_id:
+        return []
+    db = TradingDatabase()
+    try:
+        return db.get_positions_for_portfolio(portfolio_id)
     finally:
         db.close()
 
@@ -685,7 +697,7 @@ with tab_live:
             st.info("No trade history for this version yet.")
 
     with col2:
-        if portfolio_stats and portfolio_id:
+        if portfolio_id:
             st.subheader("📌 Open Orders")
             open_orders = load_open_orders(portfolio_id)
             if open_orders:
@@ -879,6 +891,58 @@ with tab_history:
                         st.dataframe(pd.DataFrame(eod_snapshot["plans"]), hide_index=True, use_container_width=True)
                     else:
                         st.info("No open plans in snapshot.")
+            positions_snapshot = load_open_positions(selected_portfolio_id)
+            open_plans = load_trade_plans(selected_portfolio_id)
+            st.markdown("### 📂 Open Positions and Plans")
+            pos_col, plan_col = st.columns(2)
+            with pos_col:
+                st.write("Open Positions (latest)")
+                if positions_snapshot:
+                    pos_df = pd.DataFrame(positions_snapshot)
+                    pos_cols = [c for c in ["symbol", "quantity", "avg_price", "exchange_timestamp", "created_at"] if c in pos_df.columns]
+                    if not pos_cols:
+                        pos_cols = pos_df.columns.tolist()
+                    column_config = {}
+                    if "quantity" in pos_cols:
+                        column_config["quantity"] = st.column_config.NumberColumn("Qty", format="%.4f")
+                    if "avg_price" in pos_cols:
+                        column_config["avg_price"] = st.column_config.NumberColumn("Avg Price", format="$%.2f")
+                    if "exchange_timestamp" in pos_cols:
+                        column_config["exchange_timestamp"] = st.column_config.DatetimeColumn("Exchange Time", format="YYYY-MM-DD HH:mm:ss")
+                    if "created_at" in pos_cols:
+                        column_config["created_at"] = st.column_config.DatetimeColumn("Captured", format="YYYY-MM-DD HH:mm:ss")
+                    st.dataframe(
+                        pos_df[pos_cols],
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config=column_config,
+                    )
+                else:
+                    st.info("No open positions for this portfolio.")
+            with plan_col:
+                st.write("Open Trade Plans")
+                if open_plans:
+                    plan_df = pd.DataFrame(open_plans)
+                    plan_cols = [c for c in ["id", "symbol", "side", "size", "stop_price", "target_price", "opened_at", "status"] if c in plan_df.columns]
+                    if not plan_cols:
+                        plan_cols = plan_df.columns.tolist()
+                    column_config = {}
+                    if "size" in plan_cols:
+                        column_config["size"] = st.column_config.NumberColumn("Size", format="%.4f")
+                    if "stop_price" in plan_cols:
+                        column_config["stop_price"] = st.column_config.NumberColumn("Stop", format="$%.2f")
+                    if "target_price" in plan_cols:
+                        column_config["target_price"] = st.column_config.NumberColumn("Target", format="$%.2f")
+                    if "opened_at" in plan_cols:
+                        column_config["opened_at"] = st.column_config.DatetimeColumn("Opened", format="YYYY-MM-DD HH:mm:ss")
+                    st.dataframe(
+                        plan_df[plan_cols],
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config=column_config,
+                    )
+                else:
+                    st.info("No open trade plans for this portfolio.")
 
 # Auto-refresh by sleeping then rerunning the app
 time.sleep(DASHBOARD_REFRESH_SECONDS)

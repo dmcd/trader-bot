@@ -24,6 +24,7 @@ def _clean_timeframes(raw: List[str]) -> List[str]:
 
     - Trims whitespace
     - Maps common aliases (1hr -> 1h, 1day -> 1d, 6hr -> 6h)
+    - Accepts bare numeric inputs representing minutes (1 -> 1m, 60 -> 1h)
     - Drops unsupported entries (e.g., 4h on Gemini)
     """
     alias_map = {
@@ -31,6 +32,8 @@ def _clean_timeframes(raw: List[str]) -> List[str]:
         "1hour": "1h",
         "1day": "1d",
         "1d": "1d",
+        "d": "1d",
+        "day": "1d",
         "6hr": "6h",
         "6hour": "6h",
         "30min": "30m",
@@ -41,6 +44,13 @@ def _clean_timeframes(raw: List[str]) -> List[str]:
         "5m": "5m",
         "1min": "1m",
         "1m": "1m",
+        "30": "30m",
+        "15": "15m",
+        "5": "5m",
+        "1": "1m",
+        "60": "1h",
+        "360": "6h",
+        "1440": "1d",
         "4hr": "6h",
         "4hour": "6h",
         "4h": "6h",

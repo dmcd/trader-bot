@@ -99,6 +99,7 @@ def test_tool_request_disambiguates_union_types():
     [
         (["1m", "1m", "5m", "4h", " 1d "], ["1m", "5m", "6h", "1d"]),
         (["1hr", "1hour", "30min", "bad", ""], ["1h", "30m"]),
+        (["1", "15", "60", "D"], ["1m", "15m", "1h", "1d"]),
         (["   ", None, ""], []),
     ],
 )

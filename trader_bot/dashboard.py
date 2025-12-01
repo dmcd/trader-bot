@@ -472,6 +472,13 @@ st.markdown("""
         .block-container {
             padding-top: 2rem;
         }
+        [data-testid="stMetricValue"] {
+            font-size: 1.5rem;
+        }
+        [data-testid="stMetricLabel"],
+        [data-testid="stMetricDelta"] {
+            font-size: 0.9rem;
+        }
     </style>
 """, unsafe_allow_html=True)
 

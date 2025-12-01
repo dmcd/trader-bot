@@ -34,7 +34,10 @@ Notes on the current session model:
     - [x] Add tests for `ensure_active_portfolio` and portfolio-only stats retrieval.
 - [ ] **Runner/services wiring: remove session plumbing**
   - [ ] Drop `StrategyRunner.session_id/session` fields; thread `portfolio_id`+`run_id` into ResyncService, PlanMonitor, TradeActionHandler, MarketDataService, TradingContext, and telemetry without requiring `set_session`.
+    - In progress: runtime code now provisions `(portfolio_id, run_id)` via `ensure_active_portfolio`; services and strategy use portfolio-first DB helpers and stop emitting `session_id`. Telemetry records `portfolio_id`/`run_id`. TradingContext rebuilt to read portfolio stats/market data.
+    - Remaining: tests/fixtures/integration stubs still set `session_id` and expect session-based DB calls; update them to create/get portfolios, use portfolio helpers, and drop `set_session` assertions. Locate lingering `session_id` references in tests (see `rg` results) and adjust mocks accordingly.
   - [ ] Remove session-specific baselines (starting_balance, session_started) from runner lifecycle and resync; rely on portfolio stats cache and equity snapshots instead.
+    - In progress: runner now tracks `starting_equity` (float) and logs portfolio equity snapshots; session metadata removed from telemetry. Sanity checks still assume session baseline in tests; update validations to use `starting_equity`/portfolio stats.
 - [ ] **Context and risk**
   - [ ] Rework `TradingContext` summaries to use portfolio lifetime (portfolio.created_at or first equity snapshot) and portfolio stats cache; replace `_net_quantity_for_session` with portfolio-level baseline handling for sandbox airdrops.
   - [ ] Replace `MetricsDrift` with a portfolio-scoped equity drift check (uses portfolio stats cache + latest equity snapshot) and retire session_id logging.
@@ -83,3 +86,10 @@ Notes on the current session model:
   - [ ] Update `README`/`architecture.md` to describe the new portfolio/daily model and operational scripts.
   - [ ] Document operator flows: starting a new portfolio, rolling daily baselines, and troubleshooting mismatched day PnL vs equity.
   - [ ] Update risk documentation (AGENTS, architecture, research notes) to reflect portfolio-level risk and removal of daily-loss gates.
+
+## Current state (handoff notes)
+
+- Runtime services (runner, strategy, trading_context, resync, plan monitor, trade action handler, market data service, portfolio tracker) have been converted to portfolio-first and no longer thread `session_id`; telemetry emits `portfolio_id`/`run_id`.
+- Strategy LLM prompt/trace logging now uses portfolio DAO helpers; TradingContext builds summaries off portfolio stats/market data.
+- Tests/fixtures are still session-centric and will fail until rewritten to provision portfolios and call portfolio-first DB helpers; `rg 'session_id' tests` shows hot spots (strategy runner tests, trade_sync integration, trading_context tests, resync/plan monitor/trade_action_handler unit tests, database fixture helpers).
+- Next step: sweep tests to remove `set_session` expectations, swap session-scoped helpers for portfolio variants, and update assertions that read session stats/equity snapshots to portfolio cache equivalents. Run `pytest` afterward and commit the code refactor + test updates.

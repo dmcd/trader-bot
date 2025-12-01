@@ -70,7 +70,7 @@ def test_log_and_fetch_entities(db_session):
     assert positions["BTC/USD"] == pytest.approx(0.1)
 
 
-def test_session_base_currency_round_trip(tmp_path):
+def test_portfolio_base_currency_round_trip(tmp_path):
     db_path = tmp_path / "base_ccy.db"
     db = TradingDatabase(str(db_path))
     portfolio_id, _ = db.ensure_active_portfolio(name="aud-portfolio", base_currency="aud", bot_version="aud")
@@ -79,15 +79,32 @@ def test_session_base_currency_round_trip(tmp_path):
     db.close()
 
 
-def test_base_currency_column_present(tmp_path):
+def test_sessions_table_removed_and_session_ids_dropped(tmp_path):
     db_path = tmp_path / "fresh.db"
     db = TradingDatabase(str(db_path))
-    cols = {row["name"] for row in db.conn.execute("PRAGMA table_info(sessions)")}
-    assert "base_currency" in cols
+    tables = {row["name"] for row in db.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "sessions" not in tables
 
-    portfolio_id, _ = db.ensure_active_portfolio(name="new", bot_version="new")
-    portfolio = db.get_portfolio(portfolio_id)
-    assert portfolio["base_currency"] is None
+    portfolio_cols = {row["name"] for row in db.conn.execute("PRAGMA table_info(portfolios)")}
+    assert "base_currency" in portfolio_cols
+    db.ensure_trade_plans_table()
+
+    tables_with_portfolio_scope = [
+        "trades",
+        "processed_trades",
+        "llm_calls",
+        "llm_traces",
+        "market_data",
+        "ohlcv_bars",
+        "equity_snapshots",
+        "indicators",
+        "positions",
+        "open_orders",
+        "trade_plans",
+    ]
+    for table in tables_with_portfolio_scope:
+        cols = {row["name"] for row in db.conn.execute(f"PRAGMA table_info({table})")}
+        assert "session_id" not in cols
     db.close()
 
 
@@ -240,7 +257,7 @@ def test_trades_can_be_fetched_by_portfolio(tmp_path):
 
 
 
-def test_portfolio_first_helpers_do_not_require_session(tmp_path):
+def test_portfolio_first_helpers_do_not_require_session_rows(tmp_path):
     db_path = tmp_path / "portfolio-first.db"
     db = TradingDatabase(str(db_path))
     portfolio = db.get_or_create_portfolio("pf", base_currency="usd", bot_version="v1")
@@ -547,7 +564,7 @@ def test_get_open_orders_handles_empty_table(db_session):
     assert db.get_open_orders_for_portfolio(portfolio_id) == []
 
 
-def test_replace_positions_removes_legacy_session_rows(tmp_path):
+def test_replace_positions_writes_portfolio_rows(tmp_path):
     db_path = tmp_path / "positions-clean.db"
     db = TradingDatabase(str(db_path))
     portfolio = db.get_or_create_portfolio("swing", base_currency="USD", bot_version="v1")
@@ -560,7 +577,7 @@ def test_replace_positions_removes_legacy_session_rows(tmp_path):
     db.close()
 
 
-def test_replace_open_orders_removes_legacy_session_rows(tmp_path):
+def test_replace_open_orders_writes_portfolio_rows(tmp_path):
     db_path = tmp_path / "orders-clean.db"
     db = TradingDatabase(str(db_path))
     portfolio = db.get_or_create_portfolio("swing", base_currency="USD", bot_version="v1")
@@ -654,7 +671,7 @@ def test_recent_llm_stats_counts_flags(db_session):
     assert stats["clamped"] == 1
 
 
-def test_session_stats_aggregates_without_cache(db_session):
+def test_portfolio_stats_aggregates_without_cache(db_session):
     db, portfolio_id = db_session
     db.log_trade_for_portfolio(portfolio_id, "BTC/USD", "BUY", 0.1, 20000.0, fee=1.0, realized_pnl=2.5)
     db.log_trade_for_portfolio(portfolio_id, "BTC/USD", "SELL", 0.1, 21000.0, fee=1.5, realized_pnl=3.5)
@@ -668,7 +685,7 @@ def test_session_stats_aggregates_without_cache(db_session):
     assert stats["total_llm_cost"] == pytest.approx(0.2)
 
 
-def test_session_stats_prefers_portfolio_cache(tmp_path):
+def test_portfolio_stats_prefers_cache(tmp_path):
     db_path = tmp_path / "portfolio-stats.db"
     db = TradingDatabase(str(db_path))
     portfolio = db.get_or_create_portfolio("swing", base_currency="USD", bot_version="v1")

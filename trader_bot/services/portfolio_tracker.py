@@ -100,7 +100,7 @@ class PortfolioTracker:
             self.holdings[symbol] = {"qty": new_qty, "avg_cost": avg_cost if new_qty > 0 else 0.0}
 
     def load_holdings_from_db(self) -> None:
-        """Rebuild holdings from historical trades for this session."""
+        """Rebuild holdings from historical trades for this portfolio."""
         trades = self.db.get_trades_for_portfolio(self.portfolio_id)
         self.holdings = {}
         for trade in trades:

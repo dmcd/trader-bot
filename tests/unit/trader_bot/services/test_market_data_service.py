@@ -75,7 +75,7 @@ async def test_capture_ohlcv_invokes_prune_with_limit():
             self.logged = []
             self.pruned = []
 
-        def log_ohlcv_batch_for_portfolio(self, portfolio_id, symbol, timeframe, bars, session_id=None):
+        def log_ohlcv_batch_for_portfolio(self, portfolio_id, symbol, timeframe, bars):
             self.logged.append((portfolio_id, symbol, timeframe, len(bars)))
 
         def prune_ohlcv_for_portfolio(self, portfolio_id, symbol, timeframe, retain):

@@ -82,7 +82,7 @@ def setup_logging():
     telemetry_logger = logging.getLogger('telemetry')
     telemetry_logger.setLevel(logging.INFO)
     telemetry_logger.propagate = False
-    # Reset telemetry log each startup to keep sessions isolated
+    # Reset telemetry log each startup to keep runs isolated
     telemetry_log_filename = "telemetry_test.log" if test_mode else "telemetry.log"
     telemetry_handler = logging.FileHandler(os.path.join(log_dir, telemetry_log_filename), mode='w')
     telemetry_handler.setLevel(logging.INFO)

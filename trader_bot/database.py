@@ -28,6 +28,219 @@ class TradingDatabase:
         column_name = column_def.split()[0]
         if not self._column_exists(cursor, table, column_name):
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+
+    def _drop_column(self, cursor: sqlite3.Cursor, table: str, column: str, create_sql: str):
+        """
+        Remove a column by rebuilding the table with the provided schema and copying data.
+        Used for legacy session_id cleanup without data loss.
+        """
+        if not self._column_exists(cursor, table, column):
+            return
+        legacy_table = f"{table}_legacy_{uuid.uuid4().hex[:8]}"
+        try:
+            cursor.execute("PRAGMA foreign_keys=OFF")
+            cursor.execute(f"ALTER TABLE {table} RENAME TO {legacy_table}")
+            cursor.execute(create_sql)
+            cursor.execute(f"PRAGMA table_info({legacy_table})")
+            columns = [row["name"] for row in cursor.fetchall() if row["name"] != column]
+            if not columns:
+                cursor.execute(f"DROP TABLE {legacy_table}")
+                return
+            column_list = ", ".join(columns)
+            cursor.execute(f"INSERT INTO {table} ({column_list}) SELECT {column_list} FROM {legacy_table}")
+            cursor.execute(f"DROP TABLE {legacy_table}")
+        except Exception as exc:
+            logger.debug(f"Could not drop column {column} from {table}: {exc}")
+        finally:
+            cursor.execute("PRAGMA foreign_keys=ON")
+
+    def _drop_session_artifacts(self, cursor: sqlite3.Cursor):
+        """Remove legacy sessions table, view, indexes, and session_id columns."""
+        try:
+            cursor.execute("DROP VIEW IF EXISTS session_portfolios")
+        except Exception as exc:
+            logger.debug(f"Could not drop session_portfolios view: {exc}")
+        for idx in [
+            "idx_sessions_bot_version",
+            "idx_sessions_portfolio",
+            "idx_ohlcv_session_symbol_tf_ts",
+        ]:
+            try:
+                cursor.execute(f"DROP INDEX IF EXISTS {idx}")
+            except Exception as exc:
+                logger.debug(f"Could not drop index {idx}: {exc}")
+        try:
+            cursor.execute("DROP TABLE IF EXISTS sessions")
+        except Exception as exc:
+            logger.debug(f"Could not drop sessions table: {exc}")
+
+        table_defs: dict[str, str] = {
+            "trades": """
+                CREATE TABLE trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    portfolio_id INTEGER NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    price REAL NOT NULL,
+                    fee REAL DEFAULT 0.0,
+                    liquidity TEXT DEFAULT 'unknown',
+                    realized_pnl REAL DEFAULT 0.0,
+                    reason TEXT,
+                    trade_id TEXT,
+                    UNIQUE(trade_id),
+                    FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+                )
+            """,
+            "processed_trades": """
+                CREATE TABLE processed_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    portfolio_id INTEGER NOT NULL,
+                    trade_id TEXT NOT NULL,
+                    client_order_id TEXT,
+                    recorded_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(portfolio_id, trade_id),
+                    FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+                )
+            """,
+            "llm_calls": """
+                CREATE TABLE llm_calls (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    portfolio_id INTEGER NOT NULL,
+                    run_id TEXT,
+                    timestamp TEXT NOT NULL,
+                    input_tokens INTEGER DEFAULT 0,
+                    output_tokens INTEGER DEFAULT 0,
+                    total_tokens INTEGER DEFAULT 0,
+                    cost REAL DEFAULT 0.0,
+                    decision TEXT,
+                    FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+                )
+            """,
+            "llm_traces": """
+                CREATE TABLE llm_traces (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    portfolio_id INTEGER NOT NULL,
+                    run_id TEXT,
+                    timestamp TEXT NOT NULL,
+                    prompt TEXT,
+                    response TEXT,
+                    decision_json TEXT,
+                    market_context TEXT,
+                    execution_result TEXT,
+                    FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+                )
+            """,
+            "market_data": """
+                CREATE TABLE market_data (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    portfolio_id INTEGER NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    price REAL,
+                    bid REAL,
+                    ask REAL,
+                    volume REAL,
+                    spread_pct REAL,
+                    bid_size REAL,
+                    ask_size REAL,
+                    ob_imbalance REAL,
+                    FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+                )
+            """,
+            "ohlcv_bars": """
+                CREATE TABLE ohlcv_bars (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    portfolio_id INTEGER NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    open REAL,
+                    high REAL,
+                    low REAL,
+                    close REAL,
+                    volume REAL,
+                    FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+                )
+            """,
+            "equity_snapshots": """
+                CREATE TABLE equity_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    portfolio_id INTEGER NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    equity REAL,
+                    FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+                )
+            """,
+            "indicators": """
+                CREATE TABLE indicators (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    portfolio_id INTEGER NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    rsi REAL,
+                    macd REAL,
+                    macd_signal REAL,
+                    bb_upper REAL,
+                    bb_lower REAL,
+                    FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+                )
+            """,
+            "positions": """
+                CREATE TABLE positions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    portfolio_id INTEGER NOT NULL,
+                    symbol TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    avg_price REAL,
+                    exchange_timestamp TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+                )
+            """,
+            "open_orders": """
+                CREATE TABLE open_orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    portfolio_id INTEGER NOT NULL,
+                    order_id TEXT,
+                    symbol TEXT NOT NULL,
+                    side TEXT,
+                    price REAL,
+                    amount REAL,
+                    remaining REAL,
+                    status TEXT,
+                    exchange_timestamp TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+                )
+            """,
+            "trade_plans": """
+                CREATE TABLE trade_plans (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    portfolio_id INTEGER NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    entry_price REAL NOT NULL,
+                    stop_price REAL,
+                    target_price REAL,
+                    size REAL NOT NULL,
+                    version INTEGER DEFAULT 1,
+                    status TEXT DEFAULT 'open',
+                    opened_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    closed_at TEXT,
+                    reason TEXT,
+                    entry_order_id TEXT,
+                    entry_client_order_id TEXT,
+                    FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+                )
+            """,
+        }
+        for table, create_sql in table_defs.items():
+            try:
+                self._drop_column(cursor, table, "session_id", create_sql)
+            except Exception as exc:
+                logger.debug(f"Could not drop session_id from {table}: {exc}")
     
     def initialize_database(self):
         """Create database and tables if they don't exist."""
@@ -35,6 +248,7 @@ class TradingDatabase:
         self.conn.row_factory = sqlite3.Row  # Return rows as dictionaries
         
         cursor = self.conn.cursor()
+        self._drop_session_artifacts(cursor)
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS portfolios (
@@ -44,25 +258,6 @@ class TradingDatabase:
                 bot_version TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(name)
-            )
-        """)
-        
-        # Sessions table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL,
-                bot_version TEXT,
-                portfolio_id INTEGER,
-                starting_balance REAL,
-                ending_balance REAL,
-                base_currency TEXT,
-                total_trades INTEGER DEFAULT 0,
-                total_fees REAL DEFAULT 0.0,
-                total_llm_cost REAL DEFAULT 0.0,
-                net_pnl REAL DEFAULT 0.0,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
 
@@ -109,7 +304,6 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER,
                 portfolio_id INTEGER NOT NULL,
                 timestamp TEXT NOT NULL,
                 symbol TEXT NOT NULL,
@@ -129,7 +323,6 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS processed_trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER,
                 portfolio_id INTEGER NOT NULL,
                 trade_id TEXT NOT NULL,
                 client_order_id TEXT,
@@ -143,7 +336,6 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS llm_calls (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER,
                 portfolio_id INTEGER NOT NULL,
                 run_id TEXT,
                 timestamp TEXT NOT NULL,
@@ -160,7 +352,6 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS llm_traces (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER,
                 portfolio_id INTEGER NOT NULL,
                 run_id TEXT,
                 timestamp TEXT NOT NULL,
@@ -177,7 +368,6 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS market_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER,
                 portfolio_id INTEGER NOT NULL,
                 timestamp TEXT NOT NULL,
                 symbol TEXT NOT NULL,
@@ -197,7 +387,6 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS ohlcv_bars (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER,
                 portfolio_id INTEGER NOT NULL,
                 timestamp TEXT NOT NULL,
                 symbol TEXT NOT NULL,
@@ -210,16 +399,10 @@ class TradingDatabase:
                 FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
-        try:
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_session_symbol_tf_ts ON ohlcv_bars (session_id, symbol, timeframe, timestamp DESC)")
-        except Exception as e:
-            logger.debug(f"Could not create ohlcv index: {e}")
-
         # Equity snapshots table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS equity_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER,
                 portfolio_id INTEGER NOT NULL,
                 timestamp TEXT NOT NULL,
                 equity REAL,
@@ -231,7 +414,6 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS indicators (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER,
                 portfolio_id INTEGER NOT NULL,
                 timestamp TEXT NOT NULL,
                 symbol TEXT NOT NULL,
@@ -248,7 +430,6 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS positions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER,
                 portfolio_id INTEGER NOT NULL,
                 symbol TEXT NOT NULL,
                 quantity REAL NOT NULL,
@@ -263,7 +444,6 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS open_orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER,
                 portfolio_id INTEGER NOT NULL,
                 order_id TEXT,
                 symbol TEXT NOT NULL,
@@ -349,32 +529,6 @@ class TradingDatabase:
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
-
-        # Allow multiple sessions per version; keep a non-unique index for lookups
-        try:
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_bot_version ON sessions(bot_version)")
-        except Exception as e:
-            logger.warning(f"Could not create non-unique index on bot_version: {e}")
-        try:
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_portfolio ON sessions(portfolio_id)")
-        except Exception as exc:
-            logger.debug(f"Could not create index on sessions.portfolio_id: {exc}")
-
-        # Backfill new columns for existing deployments
-        try:
-            self._ensure_column(cursor, "sessions", "portfolio_id INTEGER")
-        except Exception as exc:
-            logger.debug(f"Could not add portfolio_id to sessions: {exc}")
-        try:
-            cursor.execute(
-                """
-                CREATE VIEW IF NOT EXISTS session_portfolios AS
-                SELECT id AS session_id, portfolio_id, bot_version, date, base_currency
-                FROM sessions
-                """
-            )
-        except Exception as exc:
-            logger.debug(f"Could not create session_portfolios view: {exc}")
 
         self.conn.commit()
         logger.info(f"Database initialized at {self.db_path}")
@@ -535,7 +689,7 @@ class TradingDatabase:
         run_id: Optional[str] = None,
     ) -> tuple[int, str]:
         """
-        Ensure a portfolio exists without creating a session and return (portfolio_id, run_id).
+        Ensure a portfolio exists and return (portfolio_id, run_id).
         A new run_id is generated when one is not provided for telemetry/ops scoping.
         """
         portfolio_name = name or os.getenv("PORTFOLIO_NAME") or (bot_version or "portfolio").lower()
@@ -585,10 +739,7 @@ class TradingDatabase:
             """
         )
         versions = [row["bot_version"] for row in cursor.fetchall()]
-        if versions:
-            return versions
-        cursor.execute("SELECT DISTINCT bot_version FROM sessions WHERE bot_version IS NOT NULL ORDER BY created_at DESC")
-        return [row["bot_version"] for row in cursor.fetchall()]
+        return versions
 
     def get_portfolio_stats_cache(self, portfolio_id: int) -> Optional[Dict[str, Any]]:
         """Return persisted portfolio stats aggregates if present."""
@@ -638,14 +789,14 @@ class TradingDatabase:
         """Internal helper to persist processed trade ids."""
         if not entries:
             return
-        payload = [(None, portfolio_id, trade_id, client_oid) for trade_id, client_oid in entries if trade_id]
+        payload = [(portfolio_id, trade_id, client_oid) for trade_id, client_oid in entries if trade_id]
         if not payload:
             return
         cursor = self.conn.cursor()
         cursor.executemany(
             """
-            INSERT OR IGNORE INTO processed_trades (session_id, portfolio_id, trade_id, client_order_id)
-            VALUES (?, ?, ?, ?)
+            INSERT OR IGNORE INTO processed_trades (portfolio_id, trade_id, client_order_id)
+            VALUES (?, ?, ?)
             """,
             payload,
         )
@@ -688,10 +839,10 @@ class TradingDatabase:
 
         cursor.execute(
             """
-            INSERT INTO trades (session_id, portfolio_id, timestamp, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO trades (portfolio_id, timestamp, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-            (None, portfolio_id, ts, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id),
+            (portfolio_id, ts, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id),
         )
 
         self.conn.commit()
@@ -764,16 +915,14 @@ class TradingDatabase:
         total_tokens = input_tokens + output_tokens
         cursor.execute(
             """
-            INSERT INTO llm_calls (session_id, portfolio_id, run_id, timestamp, input_tokens, output_tokens, total_tokens, cost, decision)
+            INSERT INTO llm_calls (portfolio_id, run_id, timestamp, input_tokens, output_tokens, total_tokens, cost, decision)
             VALUES (
-                ?,
                 ?,
                 ?,
                 ?, ?, ?, ?, ?, ?
             )
         """,
             (
-                None,
                 portfolio_id,
                 run_id,
                 datetime.now().isoformat(),
@@ -824,15 +973,14 @@ class TradingDatabase:
             market_context_str = str(market_context)
         cursor.execute(
             """
-            INSERT INTO llm_traces (session_id, portfolio_id, run_id, timestamp, prompt, response, decision_json, market_context)
+            INSERT INTO llm_traces (portfolio_id, run_id, timestamp, prompt, response, decision_json, market_context)
             VALUES (
-                ?,
                 ?,
                 ?,
                 ?, ?, ?, ?, ?
             )
         """,
-            (None, portfolio_id, run_id, datetime.now().isoformat(), prompt, response, decision_json, market_context_str),
+            (portfolio_id, run_id, datetime.now().isoformat(), prompt, response, decision_json, market_context_str),
         )
         self.conn.commit()
         return cursor.lastrowid
@@ -979,10 +1127,10 @@ class TradingDatabase:
         cursor = self.conn.cursor()
         cursor.execute(
             """
-            INSERT INTO market_data (session_id, portfolio_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO market_data (portfolio_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-            (None, portfolio_id, datetime.now().isoformat(), symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance),
+            (portfolio_id, datetime.now().isoformat(), symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance),
         )
         self.conn.commit()
 
@@ -999,7 +1147,7 @@ class TradingDatabase:
         ask_size: float | int | None = None,
         ob_imbalance: float | int | None = None,
     ):
-        """Log market data snapshot for a portfolio (session optional)."""
+        """Log market data snapshot for a portfolio."""
         self._log_market_data(
             portfolio_id=portfolio_id,
             symbol=symbol,
@@ -1109,10 +1257,10 @@ class TradingDatabase:
         ts_str = ts.isoformat()
         cursor.execute(
             """
-            INSERT INTO equity_snapshots (session_id, portfolio_id, timestamp, equity)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO equity_snapshots (portfolio_id, timestamp, equity)
+            VALUES (?, ?, ?)
             """,
-            (None, portfolio_id, ts_str, equity),
+            (portfolio_id, ts_str, equity),
         )
         self.conn.commit()
         try:
@@ -1132,7 +1280,7 @@ class TradingDatabase:
         timestamp: datetime | str | None = None,
         timezone_name: str | None = None,
     ):
-        """Log equity snapshot for a portfolio without requiring a session_id."""
+        """Log equity snapshot for a portfolio."""
         self._log_equity_snapshot(
             portfolio_id=portfolio_id,
             equity=equity,
@@ -1157,7 +1305,6 @@ class TradingDatabase:
                 else:
                     ts_iso = str(ts)
                 records.append((
-                    None,
                     portfolio_id,
                     ts_iso,
                     symbol,
@@ -1173,8 +1320,8 @@ class TradingDatabase:
         if not records:
             return
         cursor.executemany("""
-            INSERT INTO ohlcv_bars (session_id, portfolio_id, timestamp, symbol, timeframe, open, high, low, close, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO ohlcv_bars (portfolio_id, timestamp, symbol, timeframe, open, high, low, close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, records)
         self.conn.commit()
 
@@ -1314,10 +1461,9 @@ class TradingDatabase:
         )
         for pos in positions:
             cursor.execute("""
-                INSERT INTO positions (session_id, portfolio_id, symbol, quantity, avg_price, exchange_timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO positions (portfolio_id, symbol, quantity, avg_price, exchange_timestamp)
+                VALUES (?, ?, ?, ?, ?)
             """, (
-                None,
                 portfolio_id,
                 pos.get('symbol'),
                 pos.get('quantity', 0),
@@ -1348,10 +1494,9 @@ class TradingDatabase:
         )
         for order in orders:
             cursor.execute("""
-                INSERT INTO open_orders (session_id, portfolio_id, order_id, symbol, side, price, amount, remaining, status, exchange_timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO open_orders (portfolio_id, order_id, symbol, side, price, amount, remaining, status, exchange_timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                None,
                 portfolio_id,
                 order.get('order_id'),
                 order.get('symbol'),
@@ -1459,7 +1604,7 @@ class TradingDatabase:
         cancelled_count = cursor.rowcount
         self.conn.commit()
         if cancelled_count > 0:
-            logger.info(f"Cancelled {cancelled_count} old pending command(s) from previous session")
+            logger.info(f"Cancelled {cancelled_count} old pending command(s) from previous run")
 
     def prune_commands(self, retention_days: int):
         """Remove executed/cancelled commands older than the retention window."""
@@ -1514,7 +1659,6 @@ class TradingDatabase:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS trade_plans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER,
                 portfolio_id INTEGER NOT NULL,
                 symbol TEXT NOT NULL,
                 side TEXT NOT NULL,
@@ -1529,7 +1673,6 @@ class TradingDatabase:
                 reason TEXT,
                 entry_order_id TEXT,
                 entry_client_order_id TEXT,
-                FOREIGN KEY (session_id) REFERENCES sessions(id),
                 FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
             )
         """)
@@ -1545,9 +1688,9 @@ class TradingDatabase:
         self.ensure_trade_plans_table()
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO trade_plans (session_id, portfolio_id, symbol, side, entry_price, stop_price, target_price, size, reason, entry_order_id, entry_client_order_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (None, portfolio_id, symbol, side, entry_price, stop_price, target_price, size, reason, entry_order_id, entry_client_order_id))
+            INSERT INTO trade_plans (portfolio_id, symbol, side, entry_price, stop_price, target_price, size, reason, entry_order_id, entry_client_order_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (portfolio_id, symbol, side, entry_price, stop_price, target_price, size, reason, entry_order_id, entry_client_order_id))
         self.conn.commit()
         return cursor.lastrowid
 

@@ -1,10 +1,9 @@
 # Multi-day Positional Trades Plan
 
-Notes on the current session model:
-- A new `sessions` row is created on each runner start with `date` (day-only) and `bot_version`; all state (trades, market data, positions, open orders, plans, indicators, OHLCV, equity snapshots) is keyed by `session_id`.
-- Risk is anchored to `start_of_day_equity` stored in `risk_state`/`session_stats_cache`, assuming a single-day session; daily loss checks reset only when a new session baseline is written.
-- Resync, portfolio tracking, and plan monitoring all scope to the active `session_id`, so restarting or rolling to a new calendar day drops visibility into prior-day positions/plans unless they are re-synced and reinserted for the new session.
-- Dashboard lookups (history, open orders/plans, stats) are session-scoped and select the most recent session for the current `BOT_VERSION`.
+Legacy session model (now removed):
+- Prior versions created a `sessions` row on each runner start with `date`/`bot_version` and keyed all state off `session_id`.
+- Risk and dashboards were scoped to the active session, so restarting or rolling days dropped visibility unless data was re-synced into a new session row.
+- Portfolio/run scoping replaces session_id and should be the only path forward.
 
 ## Work Plan
 
@@ -14,7 +13,7 @@ Notes on the current session model:
   - [x] Replace session-scoped config flags (`LLM_MAX_SESSION_COST`, `MARKET_DATA_RETENTION_MINUTES` comments, etc.) with portfolio-level names/env vars and update docs/consumers.
   - [x] Update docs (architecture, README/ops/AGENTS) to describe the portfolio + run_id lifecycle and remove remaining session terminology.
   - [x] Delete session-first DB APIs and shims (`get_or_create_session`, session_id params on CRUD/prune helpers, Deprecation warnings) in favor of portfolio/run-only methods; migrate all call sites and tests.
-  - [ ] Design and apply a migration that removes `sessions` table dependencies and `session_id` columns/indexes (or formalizes them as optional `run_id` metadata), including `session_portfolios` view teardown/backfill strategy for legacy data.
+  - [x] Design and apply a migration that removes `sessions` table dependencies and `session_id` columns/indexes (or formalizes them as optional `run_id` metadata), including `session_portfolios` view teardown/backfill strategy for legacy data.
   - [ ] Add regression coverage for portfolio-only flows (stats rebuilds, trade sync, plan monitors, market data retention, LLM traces) with no session_id fallback.
 
 - [x] Accounting and risk

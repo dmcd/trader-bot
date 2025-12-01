@@ -204,7 +204,7 @@ class SyncStubDB:
     def log_trade_for_portfolio(self, *args, **kwargs):
         self.logged.append((args, kwargs))
 
-    def record_processed_trade_ids_for_portfolio(self, portfolio_id, processed, session_id=None):
+    def record_processed_trade_ids_for_portfolio(self, portfolio_id, processed):
         self.recorded = processed
 
 
@@ -279,7 +279,7 @@ async def test_sync_trades_paginates_and_skips_duplicates():
         return []
 
     db = SyncStubDB()
-    db.record_processed_trade_ids = lambda session_id, processed, portfolio_id=None: setattr(db, "recorded", processed) or (_ for _ in ()).throw(RuntimeError("persist failed"))
+    db.record_processed_trade_ids_for_portfolio = lambda portfolio_id, processed: setattr(db, "recorded", processed) or (_ for _ in ()).throw(RuntimeError("persist failed"))
     bot = SyncStubBot(paged_trades)
     resync = ResyncService(
         db=db,

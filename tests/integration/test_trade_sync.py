@@ -46,7 +46,7 @@ class StubDB:
     def get_latest_trade_timestamp_for_portfolio(self, portfolio_id):
         return None
 
-    def log_trade_for_portfolio(self, portfolio_id, symbol, action, quantity, price, fee, reason, liquidity="unknown", realized_pnl=0.0, trade_id=None, timestamp=None, session_id=None):
+    def log_trade_for_portfolio(self, portfolio_id, symbol, action, quantity, price, fee, reason, liquidity="unknown", realized_pnl=0.0, trade_id=None, timestamp=None):
         self.logged_trades.append(
             {
                 "portfolio_id": portfolio_id,
@@ -69,7 +69,7 @@ class StubDB:
     def get_processed_trade_ids_for_portfolio(self, portfolio_id):
         return set()
 
-    def record_processed_trade_ids_for_portfolio(self, portfolio_id, processed, session_id=None):
+    def record_processed_trade_ids_for_portfolio(self, portfolio_id, processed):
         self.recorded = processed
 
 

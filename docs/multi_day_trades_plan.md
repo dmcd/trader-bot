@@ -14,6 +14,12 @@ Notes on the current session model:
   - [x] Replace session-scoped config flags (`LLM_MAX_SESSION_COST`, `MARKET_DATA_RETENTION_MINUTES` comments, etc.) with portfolio-level names/env vars and update docs/consumers.
   - [x] Update docs (architecture, README/ops/AGENTS) to describe the portfolio + run_id lifecycle and remove remaining session terminology.
   - [ ] Delete session-first DB APIs and shims (`get_or_create_session`, session_id params on CRUD/prune helpers, Deprecation warnings) in favor of portfolio/run-only methods; migrate all call sites and tests.
+    - [ ] Remove or alias `get_or_create_session`/`get_or_create_portfolio_session` to portfolio-first helpers; update all callers to `ensure_active_portfolio` or explicit portfolio creation.
+    - [ ] Drop `session_id` parameters from CRUD/prune helpers (trades, market data, ohlcv, positions, open_orders, llm_calls/traces, equity snapshots, processed_trades, trade_plans) and migrate call sites to portfolio-only signatures.
+    - [ ] Delete session-scoped getters (`get_trades_for_session`, `get_open_orders`, `get_positions`, `get_recent_market_data`, etc.) and replace tests/callers with portfolio equivalents.
+    - [ ] Remove `_warn_session_shim` usage and DeprecationWarnings; simplify code paths now that portfolio is required.
+    - [ ] Update `session_portfolios` view usage and backfill helpers; deprecate session indexes and references in favor of portfolio/run_id lookups.
+    - [ ] Add portfolio-only regression tests for each DB surface (trades, processed_trades, market_data/ohlcv, positions, open_orders, trade_plans, llm_calls/traces, equity snapshots) to ensure no `session_id` dependency remains.
   - [ ] Design and apply a migration that removes `sessions` table dependencies and `session_id` columns/indexes (or formalizes them as optional `run_id` metadata), including `session_portfolios` view teardown/backfill strategy for legacy data.
   - [ ] Add regression coverage for portfolio-only flows (stats rebuilds, trade sync, plan monitors, market data retention, LLM traces) with no session_id fallback.
 

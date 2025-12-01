@@ -361,7 +361,8 @@ class TradingDatabase:
             return datetime.now(timezone.utc)
         if isinstance(ts, str):
             try:
-                ts = datetime.fromisoformat(ts)
+                normalized = ts.replace("Z", "+00:00") if ts.endswith("Z") else ts
+                ts = datetime.fromisoformat(normalized)
             except ValueError:
                 return datetime.now(timezone.utc)
         if ts.tzinfo is None:

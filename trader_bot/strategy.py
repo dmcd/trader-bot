@@ -53,6 +53,7 @@ from trader_bot.config import (
     LLM_TRACE_RETENTION_DAYS,
 )
 from trader_bot.llm_tools import TOOL_PARAM_MODELS, ToolName, ToolRequest, ToolResponse
+from trader_bot.symbols import normalize_symbol
 
 logger = logging.getLogger(__name__)
 telemetry_logger = logging.getLogger('telemetry')
@@ -380,7 +381,8 @@ class LLMStrategy(BaseStrategy):
             return None
 
         # Assuming single symbol focus for now as per original code
-        symbol = list(market_data.keys())[0]
+        available_symbols = list(market_data.keys())
+        symbol = available_symbols[0]
         data = market_data[symbol]
 
         # Clock for cooldowns and LLM throttling
@@ -585,6 +587,21 @@ class LLMStrategy(BaseStrategy):
                 if quantity is None:
                     quantity = 0
                 reason = decision.get('reason')
+                decision_symbol = decision.get('symbol')
+                if decision_symbol:
+                    try:
+                        target = normalize_symbol(decision_symbol)
+                        for sym in available_symbols:
+                            try:
+                                if normalize_symbol(sym) == target:
+                                    symbol = sym
+                                    data = market_data.get(symbol, data)
+                                    break
+                            except ValueError:
+                                continue
+                    except ValueError:
+                        # Keep default symbol if normalization fails
+                        pass
                 order_id = decision.get('order_id')
                 stop_price = decision.get('stop_price')
                 target_price = decision.get('target_price')

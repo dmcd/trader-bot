@@ -60,7 +60,7 @@ def setup_logging():
 
     # Create root logger
     logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG) # Capture everything at root
+    logger.setLevel(logging.INFO) # Use DEBUG if needed
     
     # Clear existing handlers to avoid duplicates if called multiple times
     if logger.hasHandlers():

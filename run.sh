@@ -6,7 +6,7 @@ kill_trader_processes() {
         echo "Stopping existing Trader Bot processes..."
         pkill -f "trader_bot.strategy_runner" 2>/dev/null
         pkill -f "streamlit.*trader_bot/dashboard.py" 2>/dev/null
-        sleep 1  # Give processes time to shut down gracefully
+        sleep 5  # Give processes time to shut down gracefully
     fi
 }
 

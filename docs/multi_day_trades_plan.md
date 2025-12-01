@@ -24,7 +24,7 @@ Legacy session model (now removed):
     - [x] Expose snapshot data to dashboard/context consumers for visibility (optional toggle).
   - [x] Remove day end flattening of open positions/plans.
 
-- [ ] Trading and monitoring flows
+- [x] Trading and monitoring flows
   - [x] Update `PlanMonitor`/`TradeActionHandler`/`ResyncService` to use `portfolio_id` and preserve open plans/positions across date rollovers.
     - [x] Require portfolio_id to be set for plan monitoring/action/resync paths and thread it from runner/services on restart.
     - [x] Preserve open plans/positions/open orders across rollovers by seeding from DB snapshots instead of day-specific clears.

@@ -88,6 +88,7 @@ IB_FX_COMMISSION_PCT = float(os.getenv('IB_FX_COMMISSION_PCT', '0.0'))
 PORTFOLIO_NAME = os.getenv('PORTFOLIO_NAME', 'default')
 _default_portfolio_ccy = IB_BASE_CURRENCY if ACTIVE_EXCHANGE == 'IB' else 'USD'
 PORTFOLIO_BASE_CURRENCY = (os.getenv('PORTFOLIO_BASE_CURRENCY') or _default_portfolio_ccy).upper()
+PORTFOLIO_DAY_TIMEZONE = os.getenv('PORTFOLIO_DAY_TIMEZONE', 'Australia/Sydney')
 
 # LLM tool/data fetch limits
 TOOL_MAX_BARS = int(os.getenv('TOOL_MAX_BARS', '2000'))  # cap per-timeframe bars returned to the LLM

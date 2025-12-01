@@ -7,14 +7,17 @@ from datetime import datetime, date, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from zoneinfo import ZoneInfo
 
+from trader_bot.config import PORTFOLIO_DAY_TIMEZONE
+
 logger = logging.getLogger(__name__)
 
 class TradingDatabase:
     """Manages SQLite database for persistent trading data."""
     
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None, portfolio_day_timezone: Optional[str] = None):
         # Allow tests or env overrides to point at an isolated database
         self.db_path = db_path or os.getenv("TRADING_DB_PATH", "trading.db")
+        self.portfolio_day_timezone = portfolio_day_timezone or PORTFOLIO_DAY_TIMEZONE or "UTC"
         self.conn = None
         self.initialize_database()
 
@@ -338,6 +341,31 @@ class TradingDatabase:
             ts = ts.replace(tzinfo=timezone.utc)
         return ts
 
+    def _resolve_timezone(self, timezone_name: str | None) -> tuple[Any, str]:
+        """Resolve timezone for portfolio day reporting with fallbacks and alias support."""
+        aliases = {
+            "AEST": "Australia/Sydney",
+            "AEDT": "Australia/Sydney",
+            "UTC": "UTC",
+        }
+        preferred = [
+            timezone_name,
+            self.portfolio_day_timezone,
+            "UTC",
+        ]
+        for candidate in preferred:
+            if not candidate:
+                continue
+            normalized = aliases.get(candidate.upper(), candidate)
+            try:
+                tzinfo = ZoneInfo(normalized)
+                label = getattr(tzinfo, "key", normalized)
+                return tzinfo, label
+            except Exception:
+                logger.debug(f"Unknown timezone '{candidate}' when deriving portfolio_days; trying fallback.")
+                continue
+        return timezone.utc, "UTC"
+
     def update_portfolio_day_from_snapshot(
         self,
         portfolio_id: Optional[int],
@@ -354,13 +382,7 @@ class TradingDatabase:
             return
 
         ts = self._normalize_timestamp(as_of)
-        tz_label = timezone_name or "UTC"
-        try:
-            tzinfo = ZoneInfo(tz_label)
-        except Exception:
-            logger.debug(f"Unknown timezone '{tz_label}', falling back to UTC for portfolio_days")
-            tzinfo = timezone.utc
-            tz_label = "UTC"
+        tzinfo, tz_label = self._resolve_timezone(timezone_name)
         day = ts.astimezone(tzinfo).date()
 
         try:

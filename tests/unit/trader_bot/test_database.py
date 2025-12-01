@@ -531,6 +531,42 @@ def test_portfolio_day_updates_from_equity_snapshots(tmp_path):
     assert rows[1]["end_equity"] == pytest.approx(1050.0)
 
 
+def test_portfolio_day_defaults_to_configured_timezone(tmp_path):
+    db_path = tmp_path / "portfolio-day-tz.db"
+    db = TradingDatabase(str(db_path), portfolio_day_timezone="Australia/Sydney")
+    portfolio = db.get_or_create_portfolio(name="tz-portfolio", base_currency="AUD", bot_version="v1")
+
+    first_ts = datetime(2024, 1, 1, 13, 0, tzinfo=timezone.utc)  # Jan 2 local (AEDT)
+    db.log_equity_snapshot_for_portfolio(portfolio["id"], equity=2000.0, timestamp=first_ts)
+    second_ts = datetime(2024, 1, 2, 14, 0, tzinfo=timezone.utc)  # Jan 3 local (AEDT)
+    db.log_equity_snapshot_for_portfolio(
+        portfolio["id"],
+        equity=2100.0,
+        timestamp=second_ts,
+        timezone_name="AEST",  # alias should resolve to Australia/Sydney
+    )
+
+    rows = db.conn.execute(
+        """
+        SELECT date, timezone, start_equity, end_equity
+        FROM portfolio_days
+        WHERE portfolio_id = ?
+        ORDER BY date ASC
+        """,
+        (portfolio["id"],),
+    ).fetchall()
+
+    assert len(rows) == 2
+    assert rows[0]["date"] == "2024-01-02"
+    assert rows[0]["timezone"] == "Australia/Sydney"
+    assert rows[0]["start_equity"] == pytest.approx(2000.0)
+    assert rows[0]["end_equity"] == pytest.approx(2000.0)
+    assert rows[1]["date"] == "2024-01-03"
+    assert rows[1]["timezone"] == "Australia/Sydney"
+    assert rows[1]["start_equity"] == pytest.approx(2100.0)
+    assert rows[1]["end_equity"] == pytest.approx(2100.0)
+
+
 def test_get_open_orders_handles_empty_table(db_session):
     db, portfolio_id = db_session
     assert db.get_open_orders_for_portfolio(portfolio_id) == []

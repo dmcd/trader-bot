@@ -16,7 +16,7 @@ Legacy session model (now removed):
     - [x] Ensure `portfolio_days` rows derive deltas from mark-to-market snapshots only (reporting, not gating risk).
     - [x] Make stats consumers (db/dashboard/context) read from portfolio stats cache and surface exposure_notional totals.
   - [x] Update `RiskManager` to enforce portfolio-wide caps (order value, exposure, position count) and drop daily-loss gating; honor configurable base currency.
-  - [ ] Add configurable timezone handling for portfolio-day reporting (AEST default) when generating `portfolio_days` rows.
+  - [x] Add configurable timezone handling for portfolio-day reporting (AEST default) when generating `portfolio_days` rows.
   - [ ] Add end-of-day snapshot writer that records equity + open positions/plans without flattening.
 
 - [ ] Trading and monitoring flows

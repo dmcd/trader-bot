@@ -150,6 +150,7 @@ class FakeIB:
         open_orders=None,
         trades=None,
         historical_data=None,
+        md_requires_delayed: bool = False,
     ):
         self.connected = connected
         self.fail_connect = fail_connect
@@ -160,6 +161,7 @@ class FakeIB:
         self.disconnect_async_calls = 0
         self.account_values_calls = 0
         self.req_mkt_data_calls = []
+        self.req_market_data_type_calls = []
         self.place_order_calls = []
         self.account_values = account_values or []
         self.market_data = market_data or {}
@@ -169,6 +171,8 @@ class FakeIB:
         self.trades_list = trades or []
         self.historical_data = historical_data or {}
         self.hist_calls = []
+        self.market_data_type = 1
+        self.md_requires_delayed = md_requires_delayed
         if not async_disconnect:
             # Shadow the coroutine so getattr returns None
             self.disconnectAsync = None
@@ -217,6 +221,10 @@ class FakeIB:
     async def reqMktDataAsync(self, contract, *args, **kwargs):
         key = self._contract_key(contract)
         self.req_mkt_data_calls.append(key)
+        if self.md_requires_delayed and self.market_data_type not in (3, 4):
+            err = PermissionError("Requested market data is not subscribed.")
+            err.code = 354
+            raise err
         return self.market_data.get(key)
 
     async def placeOrderAsync(self, contract, order):
@@ -249,6 +257,10 @@ class FakeIB:
     async def disconnectAsync(self):
         self.disconnect_async_calls += 1
         self.connected = False
+
+    def reqMarketDataType(self, data_type: int):
+        self.req_market_data_type_calls.append(data_type)
+        self.market_data_type = data_type
 
     @classmethod
     def from_fixture(cls, bundle: dict[str, Any]):

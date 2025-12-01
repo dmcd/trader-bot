@@ -225,6 +225,25 @@ async def test_get_market_data_maps_top_of_book_fields():
 
 
 @pytest.mark.asyncio
+async def test_get_market_data_retries_with_delayed_on_permission_error():
+    fake_ib = FakeIB(
+        connected=True,
+        md_requires_delayed=True,
+        market_data={
+            "BHPAUD": FakeTicker(price=101.0, bid=100.5, ask=101.5),
+        },
+    )
+    trader = IBTrader(ib_client=fake_ib)
+    trader.connected = True
+
+    md = await trader.get_market_data_async("BHP/AUD")
+
+    assert md["price"] == pytest.approx(101.0)
+    assert fake_ib.req_market_data_type_calls == [3]
+    assert fake_ib.req_mkt_data_calls == ["BHPAUD", "BHPAUD"]
+
+
+@pytest.mark.asyncio
 async def test_get_market_data_falls_back_to_mid_when_no_last():
     fake_ib = FakeIB(
         connected=True,

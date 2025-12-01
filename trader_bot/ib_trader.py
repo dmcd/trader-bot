@@ -102,6 +102,7 @@ class IBTrader(BaseTrader):
         self._last_ping_mono: float | None = None
         self._monotonic = monotonic or time.monotonic
         self._fx_quote_cache: Dict[str, Tuple[float, float]] = {}
+        self._market_data_type: int = 1
 
     async def connect_async(self) -> None:
         """
@@ -1057,12 +1058,36 @@ class IBTrader(BaseTrader):
         """
         req_fn = getattr(self.ib, "reqMktDataAsync", None)
         if req_fn:
-            return await asyncio.wait_for(
-                req_fn(contract, "", False, False),
-                timeout=self.connect_timeout,
-            )
+            try:
+                return await asyncio.wait_for(
+                    req_fn(contract, "", False, False),
+                    timeout=self.connect_timeout,
+                )
+            except Exception as exc:
+                if self._should_retry_with_delayed(exc):
+                    self._set_market_data_type(3)
+                    try:
+                        return await asyncio.wait_for(
+                            req_fn(contract, "", False, False),
+                            timeout=self.connect_timeout,
+                        )
+                    except Exception as retry_exc:
+                        logger.warning(f"Retrying IB market data with delayed type failed: {retry_exc}")
+                raise
 
-        ticker = self.ib.reqMktData(contract, "", False, False)
+        try:
+            ticker = self.ib.reqMktData(contract, "", False, False)
+        except Exception as exc:
+            if self._should_retry_with_delayed(exc):
+                self._set_market_data_type(3)
+                try:
+                    ticker = self.ib.reqMktData(contract, "", False, False)
+                except Exception as retry_exc:
+                    logger.warning(f"Retrying IB market data with delayed type failed: {retry_exc}")
+                    raise
+            else:
+                raise
+
         if ticker is None:
             return None
 
@@ -1124,3 +1149,27 @@ class IBTrader(BaseTrader):
         if raw in {"api pending", "pendingcancel", "pendingsubmit"}:
             return "pending"
         return raw or "unknown"
+
+    def _set_market_data_type(self, data_type: int) -> None:
+        """
+        Request a specific IB market data type (1=live, 3=delayed, 4=delayed frozen).
+        """
+        setter = getattr(self.ib, "reqMarketDataType", None)
+        if not setter:
+            return
+        try:
+            setter(data_type)
+            self._market_data_type = data_type
+        except Exception as exc:
+            logger.warning(f"Failed to set IB market data type to {data_type}: {exc}")
+
+    @staticmethod
+    def _should_retry_with_delayed(exc: Exception) -> bool:
+        code = getattr(exc, "code", None) or getattr(exc, "errorCode", None)
+        if code in {354, 10167}:
+            return True
+
+        msg = str(exc).lower()
+        if "market data" in msg and ("not subscribed" in msg or "no market data permissions" in msg):
+            return True
+        return False

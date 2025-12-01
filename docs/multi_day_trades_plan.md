@@ -29,6 +29,10 @@ Legacy session model (now removed):
     - [x] Preserve open plans/positions/open orders across rollovers by seeding from DB snapshots instead of day-specific clears.
     - [x] Add restart coverage for plan monitor/action/resync flows to prove plans/positions persist across days.
   - [ ] Implement overnight widening of stops/targets and auto-rearm of plan monitors on restart (configurable policy).
+    - [ ] Add config flags + policy fields for overnight widening and auto-rearm (percent/absolute deltas, max widen, enable toggles).
+    - [ ] Persist per-plan overnight state (last widened timestamp/version, widened prices) to avoid re-widening and support restart restores.
+    - [ ] Apply widening + auto-rearm in plan monitoring/resync/runner startup so monitors resume with widened stops/targets after rollovers.
+    - [ ] Add unit coverage for overnight widen + restart flows, including opt-out and single-application guards.
   - [ ] Add portfolio aggregates (PnL, exposure, open positions, costs) to `TradingContext`.
   - [ ] Dedupe processed trades across days/runs using exchange trade/order ids; add DB uniqueness guard on (portfolio_id, trade_id/client_order_id).
 

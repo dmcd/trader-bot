@@ -103,15 +103,28 @@ class RiskManager:
         self.correlation_buckets = CORRELATION_BUCKETS
         self.bucket_max_positions = BUCKET_MAX_POSITIONS
         self.ignore_baseline_positions = ignore_baseline_positions
-        # Baseline positions seen at session start (used to ignore sandbox airdrops)
+        # Baseline positions seen at startup (used to ignore sandbox airdrops)
         self.position_baseline: dict[str, float] = {}
         self.base_currency = base_currency.upper() if base_currency else None
         self._converter = QuoteToBaseConverter(self.base_currency, fx_rate_provider)
         self.portfolio_id = portfolio_id
+        self.baseline_equity: float | None = None
+        self.baseline_timestamp: str | None = None
 
     def seed_start_of_day(self, start_equity: float):
         """Backward-compatible alias for seeding current equity on startup."""
         self.update_equity(start_equity)
+
+    def set_baseline(self, equity: float | None, timestamp: str | None = None):
+        """
+        Store portfolio-level baseline metadata for telemetry/context.
+        This is optional and does not gate risk checks.
+        """
+        try:
+            self.baseline_equity = float(equity) if equity is not None else None
+        except (TypeError, ValueError):
+            self.baseline_equity = None
+        self.baseline_timestamp = timestamp
 
     def update_equity(self, current_equity: float):
         """Track latest portfolio equity for telemetry."""

@@ -39,6 +39,16 @@ def test_invalid_price_or_quantity_rejected(risk_manager):
     assert risk_manager.check_trade_allowed("BHP", "BUY", 1, 0.0).allowed is False
 
 
+def test_set_baseline_stores_metadata(risk_manager):
+    assert risk_manager.baseline_equity is None
+    assert risk_manager.baseline_timestamp is None
+
+    risk_manager.set_baseline(123.4, timestamp="2024-01-01T00:00:00Z")
+
+    assert risk_manager.baseline_equity == pytest.approx(123.4)
+    assert risk_manager.baseline_timestamp == "2024-01-01T00:00:00Z"
+
+
 def test_order_value_cap(risk_manager):
     over_size_qty = (rm_module.MAX_ORDER_VALUE / 10.0) + 1
     result = risk_manager.check_trade_allowed("BHP", "BUY", over_size_qty, price=10.0)

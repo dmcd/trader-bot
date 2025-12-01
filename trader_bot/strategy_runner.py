@@ -779,6 +779,7 @@ class StrategyRunner:
         
         # Seed trackers for this portfolio (no session wiring)
         self.starting_equity = self._seed_equity_baseline(initial_equity)
+        self.risk_manager.set_baseline(self.starting_equity, timestamp=self._equity_baseline_ts)
         self.portfolio_tracker.set_portfolio(self.portfolio_id)
         self.resync_service.set_portfolio(self.portfolio_id)
 

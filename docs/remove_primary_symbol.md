@@ -23,4 +23,5 @@
 - [x] Update bot action logging to include symbol and latest price in HOLD/other decision lines for clarity; adjust telemetry assertions if needed (add log-format tests).
   - Decision logs now append symbol and latest price (when available) for HOLD/BUY/SELL actions; telemetry records include price.
   - Added log-format coverage: `tests/integration/test_strategy_runner_control_paths.py::test_runner_handles_nonprimary_symbol_signal`.
-- [ ] End-to-end test pass (`python -m pytest`) and cleanup (docs/config notes if any new tunables are introduced).
+- [x] End-to-end test pass (`python -m pytest`) and cleanup (docs/config notes if any new tunables are introduced).
+  - Full suite: `python -m pytest`.

@@ -996,25 +996,51 @@ class LLMStrategy(BaseStrategy):
             market_summary = "Tool responses will be the source of truth; inline market snapshot omitted to save tokens."
         
         symbol = available_symbols[0]
-        context_summary = ""
-        regime_flags = {}
-
+        context_lines: list[str] = []
+        regime_flags_map: dict[str, dict] = {}
         memory_block = ""
-        if symbol and trading_context:
+
+        if trading_context and hasattr(trading_context, "get_memory_snapshot"):
             try:
-                context_summary = trading_context.get_context_summary(symbol, open_orders=open_orders)
+                mem = trading_context.get_memory_snapshot()
+                if mem:
+                    memory_block = f"MEMORY (recent plans/decisions):\n{mem}\n\n"
+            except Exception as e:
+                logger.warning(f"Error getting memory snapshot: {e}")
+
+        if trading_context:
+            for sym in available_symbols:
+                try:
+                    ctx = trading_context.get_context_summary(sym, open_orders=open_orders)
+                    if ctx:
+                        context_lines.append(f"{sym}: {ctx}")
+                except Exception as e:
+                    logger.warning(f"Error getting context for {sym}: {e}")
+
+        for sym in available_symbols:
+            try:
                 recent_bars = {
-                    tf: self.db.get_recent_ohlcv_for_portfolio(self.portfolio_id, symbol, tf, limit=50)
+                    tf: self.db.get_recent_ohlcv_for_portfolio(self.portfolio_id, sym, tf, limit=50)
                     for tf in ['1m', '5m', '1h', '1d']
                     if hasattr(self.db, "get_recent_ohlcv")
                 }
-                regime_flags = self._compute_regime_flags(symbol, market_data.get(symbol, {}), recent_bars)
-                if hasattr(trading_context, "get_memory_snapshot"):
-                    mem = trading_context.get_memory_snapshot()
-                    if mem:
-                        memory_block = f"MEMORY (recent plans/decisions):\n{mem}\n\n"
+                regime_flags_map[sym] = self._compute_regime_flags(sym, market_data.get(sym, {}), recent_bars)
             except Exception as e:
-                logger.warning(f"Error getting context/regime: {e}")
+                logger.warning(f"Error getting regime flags for {sym}: {e}")
+                regime_flags_map[sym] = {}
+
+        context_block = ""
+        if context_lines:
+            context_block = "CONTEXT PER SYMBOL:\n" + "\n".join(f"  - {line}" for line in context_lines) + "\n\n"
+
+        regime_flags_str = (
+            "; ".join(
+                f"{sym}: " + (", ".join(f"{k}={v}" for k, v in flags.items()) if flags else "none")
+                for sym, flags in regime_flags_map.items()
+            )
+            if regime_flags_map
+            else "none"
+        )
         
         is_crypto = ACTIVE_EXCHANGE == 'GEMINI' and any('/' in symbol for symbol in available_symbols)
 
@@ -1104,8 +1130,8 @@ class LLMStrategy(BaseStrategy):
                 if is_crypto
                 else "For stock trading, quantities must be WHOLE NUMBERS (integers)."
             ),
-            context_block=f"{context_summary}\n\n" if context_summary else "",
-            regime_flags=(", ".join(f"{k}={v}" for k, v in regime_flags.items()) if regime_flags else "none"),
+            context_block=context_block,
+            regime_flags=regime_flags_str,
             prompt_context_block=prompt_context_block,
             rules_block=f"{rules_block}\n" if rules_block else "",
             mode_note=mode_note,
@@ -1138,8 +1164,8 @@ class LLMStrategy(BaseStrategy):
                     if is_crypto
                     else "For stock trading, quantities must be WHOLE NUMBERS (integers)."
                 ),
-                context_block=f"{context_summary}\n\n" if context_summary else "",
-                regime_flags=(", ".join(f"{k}={v}" for k, v in regime_flags.items()) if regime_flags else "none"),
+                context_block=context_block,
+                regime_flags=regime_flags_str,
                 prompt_context_block="",
                 rules_block="",
                 mode_note="",
@@ -1277,7 +1303,7 @@ class LLMStrategy(BaseStrategy):
                 market_context = {
                     "market_data": market_data,
                     "prompt_context": prompt_context,
-                    "context_summary": context_summary,
+                    "context_summary": context_block,
                     "open_orders": open_orders,
                     "tool_requests": [tr.model_dump() for tr in tool_requests],
                     "tool_responses": [tr.model_dump() for tr in tool_responses],

@@ -14,7 +14,9 @@
 - [x] Capture and persist OHLCV for every active symbol each loop, with retention and spacing respected (test multi-symbol OHLCV capture).
   - OHLCV capture now runs for each active (fresh, liquid) symbol every loop, reusing the service spacing/retention guards.
   - Added per-symbol spacing test: `tests/unit/trader_bot/services/test_market_data_service.py::test_capture_ohlcv_spacing_is_per_symbol`.
-- [ ] Build context summaries and regime flags per symbol for the LLM prompt; ensure the prompt enumerates per-symbol flags and recent bars without exceeding token budgets (add prompt-construction tests).
+- [x] Build context summaries and regime flags per symbol for the LLM prompt; ensure the prompt enumerates per-symbol flags and recent bars without exceeding token budgets (add prompt-construction tests).
+  - The LLM prompt now lists per-symbol context summaries and regime flags (trend/vol/liquidity) instead of focusing only on the first symbol.
+  - Added prompt coverage for multi-symbol context/flags: `tests/unit/trader_bot/test_strategy.py::test_prompt_includes_per_symbol_context_and_regime`.
 - [ ] Refactor strategy orchestration/execution to handle per-symbol decisions (including tool planning/execution) without relying on a primary symbol; ensure execution uses symbol-scoped market data and price lookups (add integration-style tests or fakes).
 - [ ] Update bot action logging to include symbol and latest price in HOLD/other decision lines for clarity; adjust telemetry assertions if needed (add log-format tests).
 - [ ] End-to-end test pass (`python -m pytest`) and cleanup (docs/config notes if any new tunables are introduced).

@@ -718,6 +718,43 @@ async def test_prompt_includes_llm_burn_note(strategy_env, set_loop_time):
 
 
 @pytest.mark.asyncio
+async def test_prompt_includes_per_symbol_context_and_regime(strategy_env):
+    strategy = strategy_env.strategy
+    strategy._invoke_llm = AsyncMock(return_value=_LLMResponse('{"action":"HOLD","symbol":"AAA/USD","reason":"noop"}'))
+    strategy._compute_regime_flags = lambda sym, *_args, **_kwargs: {"trend": f"trend-{sym}"}
+    strategy.db.get_recent_ohlcv_for_portfolio.side_effect = (
+        lambda _pid, _sym, _tf, limit=50: [{"close": 100, "volume": 1.0}] * 6
+    )
+    trading_context = SimpleNamespace(
+        get_context_summary=lambda sym, open_orders=None: f"context-{sym}",
+        get_memory_snapshot=lambda: "memory-note",
+    )
+
+    decision_json, _ = await strategy._get_llm_decision(
+        {"AAA/USD": {"price": 10}, "BBB/USD": {"price": 20}},
+        current_equity=1000.0,
+        prompt_context=None,
+        trading_context=trading_context,
+        open_orders=[],
+        headroom=0.0,
+        pending_buy_exposure=0.0,
+        can_trade=True,
+        spacing_flag="",
+        priority_flag="false",
+        plan_counts={},
+        burn_stats=None,
+    )
+
+    prompt = strategy._invoke_llm.call_args.args[0]
+    assert "context-AAA/USD" in prompt
+    assert "context-BBB/USD" in prompt
+    assert "AAA/USD: trend=trend-AAA/USD" in prompt
+    assert "BBB/USD: trend=trend-BBB/USD" in prompt
+    parsed = json.loads(decision_json)
+    assert parsed["action"] == "HOLD"
+
+
+@pytest.mark.asyncio
 async def test_llm_cost_guard_blocks_when_cap_hit(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)

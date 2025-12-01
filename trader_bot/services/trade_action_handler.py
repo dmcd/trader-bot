@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
@@ -61,12 +62,18 @@ class TradeActionHandler:
         """Trim quantity so the notional sits under the order cap minus buffer."""
         adjusted_qty, overage = self.risk_manager.apply_order_value_buffer(quantity, price, symbol=symbol)
         if adjusted_qty < quantity:
-            original_value = quantity * price
-            adjusted_value = adjusted_qty * price
-            self.actions_logger.info(
-                f"✂️ Trimmed order from ${original_value:.2f} to ${adjusted_value:.2f} "
-                f"to stay under risk cap"
-            )
+            try:
+                if price is None or math.isnan(float(price)) or math.isinf(float(price)):
+                    self.actions_logger.info("✂️ Trimmed order to fit risk cap (price unavailable)")
+                else:
+                    original_value = quantity * price
+                    adjusted_value = adjusted_qty * price
+                    self.actions_logger.info(
+                        f"✂️ Trimmed order from ${original_value:.2f} to ${adjusted_value:.2f} "
+                        f"to stay under risk cap"
+                    )
+            except Exception:
+                self.actions_logger.info("✂️ Trimmed order to fit risk cap")
         return adjusted_qty
 
     def passes_rr_filter(self, action: str, price: float, stop_price: float, target_price: float, min_rr: float) -> bool:

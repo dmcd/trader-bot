@@ -237,15 +237,26 @@ class IBTrader(BaseTrader):
         if ticker is None:
             return None
 
-        bid = getattr(ticker, "bid", None)
-        ask = getattr(ticker, "ask", None)
-        bid_size = getattr(ticker, "bidSize", None)
-        ask_size = getattr(ticker, "askSize", None)
-        last = getattr(ticker, "last", None)
-        close = getattr(ticker, "close", None)
-        volume = getattr(ticker, "volume", None)
+        def _clean_number(val):
+            try:
+                if val is None:
+                    return None
+                num = float(val)
+                if math.isnan(num) or math.isinf(num):
+                    return None
+                return num
+            except Exception:
+                return None
+
+        bid = _clean_number(getattr(ticker, "bid", None))
+        ask = _clean_number(getattr(ticker, "ask", None))
+        bid_size = _clean_number(getattr(ticker, "bidSize", None))
+        ask_size = _clean_number(getattr(ticker, "askSize", None))
+        last = _clean_number(getattr(ticker, "last", None))
+        close = _clean_number(getattr(ticker, "close", None))
+        volume = _clean_number(getattr(ticker, "volume", None))
         if volume is None:
-            volume = getattr(ticker, "lastSize", None)
+            volume = _clean_number(getattr(ticker, "lastSize", None))
 
         price = last if last is not None and last > 0 else None
         if price is None:
@@ -253,6 +264,7 @@ class IBTrader(BaseTrader):
             if callable(price_fn):
                 try:
                     candidate = price_fn()
+                    candidate = _clean_number(candidate)
                     if candidate is not None and candidate > 0:
                         price = candidate
                 except Exception:

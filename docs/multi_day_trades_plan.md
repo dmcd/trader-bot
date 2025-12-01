@@ -27,11 +27,7 @@ Legacy session model (now removed):
 
 - [ ] Dashboard and telemetry
   - [ ] Add portfolio selector and optional day filter to `dashboard.py`; surface open positions/plans regardless of run.
-  - [ ] Show cumulative portfolio metrics and per-bot-version slices; optionally show portfolio-day rollups when available.
   - [ ] Tag telemetry/log messages with `portfolio_id` and `run_id` for traceability.
-
-- [ ] Migrations and tooling
-  - [ ] Write a bootstrap/migration script that creates the new schema and seeds an initial portfolio (fresh DB path).
 
 - [ ] Testing and rollout
   - [ ] Add regression coverage for portfolio-only flows (stats rebuilds, trade sync, plan monitors, market data retention, LLM traces) with no session_id fallback.

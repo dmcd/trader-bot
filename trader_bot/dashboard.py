@@ -464,13 +464,6 @@ base_currency_label = venue_status.get("base_currency") or "USD"
 col_header, col_status = st.columns([3, 1])
 with col_header:
     st.title("🤖 Dennis-Day Trading Bot")
-    if portfolio_stats:
-        if portfolio_stats.get("portfolio_name"):
-            st.caption(f"Portfolio: {portfolio_stats['portfolio_name']} (id {portfolio_id})")
-        if portfolio_stats.get("run_id"):
-            last_seen = portfolio_stats.get("run_updated_at")
-            suffix = f" · last seen {last_seen}" if last_seen else ""
-            st.caption(f"Run ID: {portfolio_stats['run_id']}{suffix}")
 with col_status:
     st.markdown(f"<div style='padding-top: 20px;'>{format_venue_badge(venue_status.get('venue'), base_currency_label)}</div>", unsafe_allow_html=True)
 

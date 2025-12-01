@@ -1,4 +1,5 @@
 import logging
+import math
 from dataclasses import dataclass
 
 from trader_bot.config import (
@@ -35,22 +36,30 @@ class QuoteToBaseConverter:
 
         Returns (converted_notional, fx_rate_used or None).
         """
-        if notional_quote is None:
+        try:
+            notional_val = float(notional_quote)
+        except (TypeError, ValueError):
+            return 0.0, None
+        if math.isnan(notional_val) or math.isinf(notional_val):
             return 0.0, None
         if self.base_currency is None:
-            return notional_quote, 1.0
+            return notional_val, 1.0
 
         base, quote = self._split_symbol(symbol)
         if quote is None or quote == self.base_currency:
-            return notional_quote, 1.0
+            return notional_val, 1.0
 
         rate = self._lookup_fx_rate(quote, symbol=symbol, price=price)
-        if rate is None and base == self.base_currency and price:
-            rate = 1 / price if price not in (0, None) else None
+        if rate is None and base == self.base_currency and price not in (0, None):
+            try:
+                if not math.isnan(price) and not math.isinf(price):
+                    rate = 1 / price
+            except Exception:
+                rate = None
 
         if rate is None:
-            return notional_quote, None
-        return notional_quote * rate, rate
+            return notional_val, None
+        return notional_val * rate, rate
 
     def _lookup_fx_rate(self, currency: str, symbol: str | None = None, price: float | None = None) -> float | None:
         if currency is None or currency == self.base_currency:
@@ -210,6 +219,14 @@ class RiskManager:
 
     def apply_order_value_buffer(self, quantity: float, price: float, symbol: str | None = None):
         """Trim quantity so notional stays under the order cap minus buffer."""
+        def _invalid_number(val: float | int | None) -> bool:
+            try:
+                return val is None or math.isnan(float(val)) or math.isinf(float(val))
+            except Exception:
+                return True
+
+        if _invalid_number(price) or _invalid_number(quantity):
+            return 0.0, 0.0
         if price <= 0 or quantity <= 0:
             return quantity, 0.0
 
@@ -228,6 +245,14 @@ class RiskManager:
 
     def check_trade_allowed(self, symbol, action, quantity, price) -> RiskCheckResult:
         """Checks if a trade is allowed based on risk limits."""
+        def _invalid_number(val: float | int | None) -> bool:
+            try:
+                return val is None or math.isnan(float(val)) or math.isinf(float(val))
+            except Exception:
+                return True
+
+        if _invalid_number(price) or _invalid_number(quantity):
+            return RiskCheckResult(False, "Invalid price or quantity")
         if price <= 0 or quantity <= 0:
             return RiskCheckResult(False, "Invalid price or quantity")
         

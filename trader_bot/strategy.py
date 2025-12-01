@@ -202,7 +202,27 @@ class LLMStrategy(BaseStrategy):
         try:
             if not recent_data or len(recent_data) < 20:
                 return False
-            indicators = self.ta.calculate_indicators(recent_data)
+
+            # Normalize recent data to a list of dicts with 'price' so TA calculator doesn't KeyError.
+            normalized_prices = []
+            if isinstance(recent_data[0], (list, tuple)):
+                # Assume OHLCV rows [ts, o, h, l, c, v] in chronological order; reverse to most-recent-first.
+                for row in reversed(recent_data):
+                    if len(row) >= 5 and row[4] is not None:
+                        normalized_prices.append({"price": row[4]})
+            else:
+                for row in recent_data:
+                    if isinstance(row, (int, float)):
+                        price = row
+                    else:
+                        price = row.get("price") or row.get("close") or row.get("c")
+                    if price is not None:
+                        normalized_prices.append({"price": price})
+
+            if len(normalized_prices) < 20:
+                return False
+
+            indicators = self.ta.calculate_indicators(normalized_prices)
             if not indicators:
                 return False
             bb_width = indicators.get('bb_width', 0)

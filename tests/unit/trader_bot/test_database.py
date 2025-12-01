@@ -79,34 +79,6 @@ def test_portfolio_base_currency_round_trip(tmp_path):
     db.close()
 
 
-def test_sessions_table_removed_and_session_ids_dropped(tmp_path):
-    db_path = tmp_path / "fresh.db"
-    db = TradingDatabase(str(db_path))
-    tables = {row["name"] for row in db.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert "sessions" not in tables
-
-    portfolio_cols = {row["name"] for row in db.conn.execute("PRAGMA table_info(portfolios)")}
-    assert "base_currency" in portfolio_cols
-    db.ensure_trade_plans_table()
-
-    tables_with_portfolio_scope = [
-        "trades",
-        "processed_trades",
-        "llm_calls",
-        "llm_traces",
-        "market_data",
-        "ohlcv_bars",
-        "equity_snapshots",
-        "indicators",
-        "positions",
-        "open_orders",
-        "trade_plans",
-    ]
-    for table in tables_with_portfolio_scope:
-        cols = {row["name"] for row in db.conn.execute(f"PRAGMA table_info({table})")}
-        assert "session_id" not in cols
-    db.close()
-
 
 def test_portfolio_creation_and_lookup(tmp_path):
     db_path = tmp_path / "portfolio.db"

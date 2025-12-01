@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -785,12 +786,11 @@ class StrategyRunner:
                 tradable.append(sym)
                 continue
 
-            if instrument_type == "STK" and (
-                (IB_PRIMARY_EXCHANGE or "").upper() == "ASX" or quote.upper() == IB_BASE_CURRENCY.upper()
-            ):
+            if instrument_type == "STK" and quote.upper() == IB_BASE_CURRENCY.upper():
                 blocked.append(sym)
-            else:
-                tradable.append(sym)
+                continue
+
+            tradable.append(sym)
 
         return tradable, blocked
 
@@ -1076,11 +1076,15 @@ class StrategyRunner:
         """
         if self._stop_event.is_set():
             return False
-        try:
-            await asyncio.wait_for(self._stop_event.wait(), timeout=seconds)
-            return False
-        except asyncio.TimeoutError:
-            return True
+        sleep_task = asyncio.create_task(asyncio.sleep(seconds))
+        stop_task = asyncio.create_task(self._stop_event.wait())
+        done, pending = await asyncio.wait({sleep_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        for task in pending:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        return sleep_task in done and not sleep_task.cancelled()
 
     async def _close_all_positions_safely(self):
         """Attempt to flatten all positions using market-ish orders."""

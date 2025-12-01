@@ -229,6 +229,23 @@ class TradingContext:
                 )
 
         venue_base_currency = portfolio_meta.get("base_currency") or (IB_BASE_CURRENCY if ACTIVE_EXCHANGE == "IB" else "USD")
+        latest_eod = None
+        try:
+            eod_snapshot = self.db.get_latest_end_of_day_snapshot_for_portfolio(self.portfolio_id)
+            if eod_snapshot:
+                positions = eod_snapshot.get("positions") or []
+                plans = eod_snapshot.get("plans") or []
+                latest_eod = {
+                    "date": eod_snapshot.get("date"),
+                    "timezone": eod_snapshot.get("timezone"),
+                    "captured_at": eod_snapshot.get("captured_at"),
+                    "equity": eod_snapshot.get("equity"),
+                    "positions": len(positions),
+                    "plans": len(plans),
+                    "run_id": eod_snapshot.get("run_id"),
+                }
+        except Exception as exc:
+            logger.debug(f"Could not load latest EOD snapshot: {exc}")
         summary = {
             "portfolio": {
                 "portfolio_id": self.portfolio_id,
@@ -257,6 +274,7 @@ class TradingContext:
                 "market_hours_note": "ASX ~10:00-16:00 AEST; FX ~24/5" if ACTIVE_EXCHANGE == "IB" else "24/7 crypto",
             },
             "run": {"id": self.run_id},
+            "latest_eod_snapshot": latest_eod,
         }
 
         try:

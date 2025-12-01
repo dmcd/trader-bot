@@ -17,11 +17,11 @@ Legacy session model (now removed):
     - [x] Make stats consumers (db/dashboard/context) read from portfolio stats cache and surface exposure_notional totals.
   - [x] Update `RiskManager` to enforce portfolio-wide caps (order value, exposure, position count) and drop daily-loss gating; honor configurable base currency.
   - [x] Add configurable timezone handling for portfolio-day reporting (AEST default) when generating `portfolio_days` rows.
-  - [ ] Add end-of-day snapshot writer that records equity + open positions/plans without flattening.
+  - [x] Add end-of-day snapshot writer that records equity + open positions/plans without flattening.
     - [x] Define schema/storage for EOD snapshots (equity, open positions, open plans, timestamp, timezone).
     - [x] Add DB helpers to write/read latest EOD snapshot per portfolio (use portfolio-day timezone).
     - [x] Hook strategy runner to emit EOD snapshot on shutdown/rollover; include tests for restart restore.
-    - [ ] Expose snapshot data to dashboard/context consumers for visibility (optional toggle).
+    - [x] Expose snapshot data to dashboard/context consumers for visibility (optional toggle).
 
 - [ ] Trading and monitoring flows
   - [ ] Update `PlanMonitor`/`TradeActionHandler`/`ResyncService` to use `portfolio_id` and preserve open plans/positions across date rollovers.

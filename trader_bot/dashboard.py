@@ -373,6 +373,35 @@ def load_portfolio_stats(portfolio_id):
         st.error(f"Error loading portfolio stats: {e}")
         return None, None
 
+def load_latest_end_of_day_snapshot(portfolio_id, user_timezone):
+    """Fetch the latest end-of-day snapshot for a portfolio and format timestamps."""
+    if not portfolio_id:
+        return None
+    db = TradingDatabase()
+    try:
+        snapshot = db.get_latest_end_of_day_snapshot_for_portfolio(portfolio_id)
+        if not snapshot:
+            return None
+        captured_at = snapshot.get("captured_at")
+        captured_local = None
+        if captured_at:
+            try:
+                ts = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+                captured_local = ts.astimezone(user_timezone).strftime("%Y-%m-%d %H:%M:%S %Z")
+            except Exception:
+                captured_local = captured_at
+        return {
+            "date": snapshot.get("date"),
+            "timezone": snapshot.get("timezone"),
+            "captured_at": captured_local or snapshot.get("captured_at"),
+            "equity": snapshot.get("equity"),
+            "positions": snapshot.get("positions") or [],
+            "plans": snapshot.get("plans") or [],
+            "run_id": snapshot.get("run_id"),
+        }
+    finally:
+        db.close()
+
 def load_llm_stats(portfolio_id):
     db = TradingDatabase()
     try:
@@ -812,6 +841,7 @@ with tab_history:
             selected = st.selectbox("Select portfolio", options=options, index=0, format_func=lambda opt: opt[1] if isinstance(opt, tuple) else str(opt))
             selected_portfolio_id = selected[0] if isinstance(selected, tuple) else selected
             hist_df = load_history(selected_portfolio_id, user_timezone)
+            eod_snapshot = load_latest_end_of_day_snapshot(selected_portfolio_id, user_timezone)
             if hist_df.empty:
                 st.info("No trades logged for this portfolio.")
             else:
@@ -830,6 +860,25 @@ with tab_history:
                     width="stretch",
                     height=600
                 )
+            if eod_snapshot:
+                st.markdown("### 💤 Latest End-of-Day Snapshot")
+                cols = st.columns(3)
+                cols[0].metric("Date", f"{eod_snapshot.get('date')} ({eod_snapshot.get('timezone')})")
+                cols[1].metric("Equity", format_currency_value(eod_snapshot.get("equity") or 0.0, base_currency_label))
+                cols[2].metric("Positions / Plans", f"{len(eod_snapshot.get('positions', []))} / {len(eod_snapshot.get('plans', []))}")
+                if eod_snapshot.get("captured_at"):
+                    st.caption(f"Captured at: {eod_snapshot['captured_at']}")
+                if st.toggle("Show snapshot positions and plans", value=False, key=f"eod_details_{selected_portfolio_id}"):
+                    if eod_snapshot.get("positions"):
+                        st.write("Snapshot Positions")
+                        st.dataframe(pd.DataFrame(eod_snapshot["positions"]), hide_index=True, use_container_width=True)
+                    else:
+                        st.info("No positions in snapshot.")
+                    if eod_snapshot.get("plans"):
+                        st.write("Snapshot Plans")
+                        st.dataframe(pd.DataFrame(eod_snapshot["plans"]), hide_index=True, use_container_width=True)
+                    else:
+                        st.info("No open plans in snapshot.")
 
 # Auto-refresh by sleeping then rerunning the app
 time.sleep(DASHBOARD_REFRESH_SECONDS)

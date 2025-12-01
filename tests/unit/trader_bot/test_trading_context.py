@@ -179,6 +179,26 @@ class TestTradingContext(unittest.TestCase):
         result = ctx.get_memory_snapshot(max_bytes=50)
         self.assertEqual(result, "")
 
+    def test_context_summary_includes_latest_eod_snapshot(self):
+        positions = [{"symbol": "BTC/USD", "quantity": 1.0}]
+        plans = [{"id": 1, "symbol": "BTC/USD"}]
+        self.db.log_end_of_day_snapshot_for_portfolio(
+            self.portfolio_id,
+            equity=1500.0,
+            positions=positions,
+            plans=plans,
+            timestamp="2024-01-02T00:00:00Z",
+            timezone_name="Australia/Sydney",
+            run_id="run-eod",
+        )
+        summary = json.loads(self.context.get_context_summary("BTC/USD"))
+        snapshot = summary.get("latest_eod_snapshot")
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(snapshot["date"], "2024-01-02")
+        self.assertEqual(snapshot["positions"], 1)
+        self.assertEqual(snapshot["plans"], 1)
+        self.assertEqual(snapshot["run_id"], "run-eod")
+
     def test_recent_performance_defaults_and_profit_calculation(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "empty.db")

@@ -1267,6 +1267,22 @@ class StrategyRunner:
                     symbols = [sym for sym in symbols if sym in fresh_market]
                     market_data = {sym: market_data[sym] for sym in symbols if sym in fresh_market}
 
+                    liquid_symbols = []
+                    illiquid_symbols = []
+                    for sym in symbols:
+                        md = market_data.get(sym) or {}
+                        if self._liquidity_ok(md):
+                            liquid_symbols.append(sym)
+                        else:
+                            illiquid_symbols.append(sym)
+                    if illiquid_symbols:
+                        bot_actions_logger.info(f"💧 Skipping illiquid symbols: {', '.join(sorted(illiquid_symbols))}")
+                    if not liquid_symbols:
+                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        continue
+                    symbols = liquid_symbols
+                    market_data = {sym: market_data[sym] for sym in symbols}
+
                     primary_symbol = symbols[0] if symbols else None
                     if not primary_symbol:
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
@@ -1279,11 +1295,6 @@ class StrategyRunner:
                         await self._capture_ohlcv(primary_symbol)
                     except Exception as e:
                         logger.debug(f"Could not capture OHLCV: {e}")
-
-                    # Microstructure filter: skip trading when spread/liquidity are poor (primary symbol)
-                    if primary_data and not self._liquidity_ok(primary_data):
-                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
-                        continue
 
                     # Refresh live positions each loop for accurate exposure snapshots
                     try:

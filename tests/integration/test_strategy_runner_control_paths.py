@@ -85,6 +85,9 @@ class DummyDB:
     def prune_market_data(self, *_args, **_kwargs):
         return None
 
+    def prune_market_data_for_portfolio(self, *_args, **_kwargs):
+        return None
+
     def get_recent_market_data_for_portfolio(self, *_args, **_kwargs):
         return []
 
@@ -255,6 +258,77 @@ async def test_market_health_gating_records_stale(monkeypatch):
     await runner.run_loop(max_loops=1)
 
     runner._record_health_state.assert_any_call("market_data", "stale", {"age": 999, "symbol": "BTC/USD"})
+
+
+@pytest.mark.asyncio
+async def test_liquidity_filter_prunes_symbols(monkeypatch):
+    runner = StrategyRunner(execute_orders=False)
+    runner.bot = FakeBot(price={"AAA/USD": 10.0, "BBB/USD": 20.0}, spread_pct=0.1)
+    runner.db = DummyDB()
+    runner.risk_manager = DummyRiskManager()
+    runner.portfolio_id = 1
+    runner._record_health_state = MagicMock()
+    runner.health_manager.record_health_state = runner._record_health_state
+    runner._capture_ohlcv = AsyncMock()
+    runner._get_active_symbols = lambda: ["AAA/USD", "BBB/USD"]
+    runner.health_manager.should_pause = MagicMock(return_value=False)
+    runner.health_manager.pause_remaining = MagicMock(return_value=0)
+    runner.health_manager.record_exchange_failure = MagicMock()
+    runner.orchestrator = DummyOrchestrator()
+    runner._liquidity_ok = lambda md: md.get("symbol") == "BBB/USD"
+    seen_market = {}
+
+    async def fake_generate(market_data, *_, **__):
+        seen_market.update(market_data)
+        runner.running = False
+        runner.orchestrator.running = False
+        return None
+
+    runner.strategy = MagicMock()
+    runner.strategy.generate_signal = fake_generate
+    runner.cleanup = AsyncMock()
+
+    async def fast_sleep(_seconds):
+        runner.running = False
+        runner.orchestrator.running = False
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
+    await runner.run_loop(max_loops=1)
+
+    assert "AAA/USD" not in seen_market
+    assert "BBB/USD" in seen_market
+
+
+@pytest.mark.asyncio
+async def test_liquidity_filter_skips_when_none_pass(monkeypatch):
+    runner = StrategyRunner(execute_orders=False)
+    runner.bot = FakeBot(price=101.0, spread_pct=0.1)
+    runner.db = DummyDB()
+    runner.risk_manager = DummyRiskManager()
+    runner.portfolio_id = 1
+    runner._record_health_state = MagicMock()
+    runner.health_manager.record_health_state = runner._record_health_state
+    runner._capture_ohlcv = AsyncMock()
+    runner._get_active_symbols = lambda: ["BTC/USD"]
+    runner.health_manager.should_pause = MagicMock(return_value=False)
+    runner.health_manager.pause_remaining = MagicMock(return_value=0)
+    runner.health_manager.record_exchange_failure = MagicMock()
+    runner.orchestrator = DummyOrchestrator()
+    runner._liquidity_ok = lambda _md: False
+    runner.strategy = MagicMock()
+    runner.strategy.generate_signal = AsyncMock()
+    runner.cleanup = AsyncMock()
+
+    async def fast_sleep(_seconds):
+        runner.running = False
+        runner.orchestrator.running = False
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
+    await runner.run_loop(max_loops=1)
+
+    runner.strategy.generate_signal.assert_not_awaited()
 
 
 @pytest.mark.asyncio

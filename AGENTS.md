@@ -42,6 +42,7 @@
 - **Logging**: Use `logger` from `logger_config.py`. Avoid `print`.
 - **Naming**: Descriptive `snake_case` for variables/functions, `CapWords` for classes.
 - **Config**: Align new configuration flags with existing patterns in `config.py`.
+- **Portfolio-first**: Prefer portfolio/run identifiers over session ids; session shims are deprecated.
 
 ## Testing Guidelines
 

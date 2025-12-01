@@ -52,7 +52,7 @@ GEMINI_SANDBOX_SECRET=your_gemini_sandbox_secret
 # --- Exchange: Interactive Brokers ---
 IB_HOST=127.0.0.1
 IB_PORT=7497                  # 7497 (paper) / 7496 (live) unless you changed TWS/Gateway config
-IB_CLIENT_ID=1                # Unique per TWS/Gateway session
+IB_CLIENT_ID=1                # Unique per TWS/Gateway API client
 IB_ACCOUNT_ID=your_ib_account # e.g., DU1234567
 IB_PAPER=true
 IB_BASE_CURRENCY=AUD

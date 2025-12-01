@@ -5,10 +5,11 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Any
 
 import google.generativeai as genai
+from zoneinfo import ZoneInfo
 
 from trader_bot.config import (
     ACTIVE_EXCHANGE,
@@ -69,6 +70,7 @@ from trader_bot.config import (
     IB_EQUITY_MIN_TOP_OF_BOOK_NOTIONAL,
     IB_FX_MAX_SPREAD_PCT,
     IB_FX_MIN_TOP_OF_BOOK_NOTIONAL,
+    IB_PRIMARY_EXCHANGE,
 )
 from trader_bot.cost_tracker import CostTracker
 from trader_bot.data_fetch_coordinator import DataFetchCoordinator
@@ -746,6 +748,51 @@ class StrategyRunner:
             if val is not None:
                 telemetry_record[target] = val
 
+    def _asx_cash_session_open(self, now: datetime | None = None) -> bool:
+        """
+        Return True when the ASX cash session is open (10:00-16:10 Australia/Sydney).
+        """
+        ts = now or datetime.now(timezone.utc)
+        local = ts.astimezone(ZoneInfo("Australia/Sydney"))
+        return local.weekday() < 5 and dt_time(10, 0) <= local.time() <= dt_time(16, 10)
+
+    def _filter_market_hours(self, symbols: list[str]) -> tuple[list[str], list[str]]:
+        """
+        Remove symbols that should not be traded because the venue session is closed.
+        Returns (tradable_symbols, blocked_symbols).
+        """
+        if self.exchange_name != "IB" or not symbols:
+            return symbols, []
+
+        # Only enforce ASX hours for equities; leave FX untouched (~24/5)
+        if self._asx_cash_session_open():
+            return symbols, []
+
+        tradable: list[str] = []
+        blocked: list[str] = []
+        for sym in symbols:
+            try:
+                normalized = normalize_symbol(sym)
+                base, quote = normalized.split("/", 1)
+                instrument_type = infer_instrument_type(
+                    base,
+                    quote,
+                    allowed_instrument_types=IB_ALLOWED_INSTRUMENT_TYPES,
+                    base_currency=IB_BASE_CURRENCY,
+                )
+            except Exception:
+                tradable.append(sym)
+                continue
+
+            if instrument_type == "STK" and (
+                (IB_PRIMARY_EXCHANGE or "").upper() == "ASX" or quote.upper() == IB_BASE_CURRENCY.upper()
+            ):
+                blocked.append(sym)
+            else:
+                tradable.append(sym)
+
+        return tradable, blocked
+
     def _microstructure_thresholds(self, market_data_point: dict | None) -> tuple[float, float, float | None]:
         md = market_data_point or {}
         instrument_type = md.get("instrument_type")
@@ -1281,6 +1328,14 @@ class StrategyRunner:
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
                     symbols = liquid_symbols
+                    market_data = {sym: market_data[sym] for sym in symbols}
+
+                    symbols, closed_markets = self._filter_market_hours(symbols)
+                    if closed_markets:
+                        bot_actions_logger.info(f"⏸️ Skipping closed session symbols: {', '.join(sorted(closed_markets))}")
+                    if not symbols:
+                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        continue
                     market_data = {sym: market_data[sym] for sym in symbols}
 
                     # Capture multi-timeframe OHLCV for each active symbol

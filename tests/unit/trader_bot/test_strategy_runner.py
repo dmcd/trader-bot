@@ -185,6 +185,30 @@ def test_order_value_buffer_logs_and_clamps(caplog):
     assert any("Trimmed order" in msg for msg in caplog.messages)
 
 
+def test_filter_market_hours_blocks_asx_equities(monkeypatch):
+    monkeypatch.setenv("ACTIVE_EXCHANGE", "IB")
+    runner = StrategyRunner(execute_orders=False)
+    runner.exchange_name = "IB"
+    runner._asx_cash_session_open = lambda _now=None: False
+
+    tradable, blocked = runner._filter_market_hours(["BHP/AUD", "AUD/USD"])
+
+    assert "BHP/AUD" in blocked
+    assert "AUD/USD" in tradable
+
+
+def test_filter_market_hours_allows_when_session_open(monkeypatch):
+    monkeypatch.setenv("ACTIVE_EXCHANGE", "IB")
+    runner = StrategyRunner(execute_orders=False)
+    runner.exchange_name = "IB"
+    runner._asx_cash_session_open = lambda _now=None: True
+
+    tradable, blocked = runner._filter_market_hours(["BHP/AUD"])
+
+    assert tradable == ["BHP/AUD"]
+    assert blocked == []
+
+
 # --- Reconciliation helpers ---
 
 

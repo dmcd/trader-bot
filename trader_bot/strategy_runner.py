@@ -501,6 +501,39 @@ class StrategyRunner:
         self.portfolio_stats = self.portfolio_tracker.portfolio_stats
         return stats
 
+    async def _write_end_of_day_snapshot(self, equity: float):
+        """Capture equity, positions, and open plans for restart continuity."""
+        if not self.portfolio_id:
+            return
+        positions: list[dict] = []
+        try:
+            positions = await self.bot.get_positions_async()
+            self.db.replace_positions_for_portfolio(self.portfolio_id, positions or [])
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.debug(f"Could not fetch live positions for EOD snapshot: {exc}")
+            try:
+                positions = self.db.get_positions_for_portfolio(self.portfolio_id) or []
+            except Exception:
+                positions = []
+
+        try:
+            open_plans = self.db.get_open_trade_plans_for_portfolio(self.portfolio_id) or []
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.debug(f"Could not load open plans for EOD snapshot: {exc}")
+            open_plans = []
+
+        tz_name = getattr(self.db, "portfolio_day_timezone", None)
+        timestamp = datetime.now(timezone.utc)
+        self.db.log_end_of_day_snapshot_for_portfolio(
+            self.portfolio_id,
+            equity=equity,
+            positions=positions,
+            plans=open_plans,
+            timestamp=timestamp,
+            timezone_name=tz_name,
+            run_id=self.run_id,
+        )
+
     def _apply_volatility_sizing(self, quantity: float, regime_flags: dict) -> float:
         """Scale quantity based on volatility regime."""
         if not regime_flags or quantity <= 0:
@@ -1014,6 +1047,10 @@ class StrategyRunner:
                     self.db.log_equity_snapshot_for_portfolio(self.portfolio_id, final_equity)
                 except Exception as exc:
                     logger.debug(f"Could not persist final equity snapshot: {exc}")
+                try:
+                    await self._write_end_of_day_snapshot(final_equity)
+                except Exception as exc:
+                    logger.debug(f"Could not persist end-of-day snapshot: {exc}")
                 
                 # Log summary to bot.log
                 bot_actions_logger.info("=" * 50)

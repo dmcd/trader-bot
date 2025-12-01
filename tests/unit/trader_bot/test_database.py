@@ -567,6 +567,48 @@ def test_portfolio_day_defaults_to_configured_timezone(tmp_path):
     assert rows[1]["end_equity"] == pytest.approx(2100.0)
 
 
+def test_end_of_day_snapshot_roundtrip(tmp_path):
+    db_path = tmp_path / "eod.db"
+    db = TradingDatabase(str(db_path), portfolio_day_timezone="Australia/Sydney")
+    portfolio = db.get_or_create_portfolio(name="swing", base_currency="AUD", bot_version="v1")
+    positions = [{"symbol": "BTC/USD", "quantity": 1.0}]
+    plans = [{"id": 1, "symbol": "BTC/USD", "status": "open"}]
+
+    ts = datetime(2024, 1, 1, 13, 0, tzinfo=timezone.utc)  # Jan 2 local
+    db.log_end_of_day_snapshot_for_portfolio(
+        portfolio["id"],
+        equity=1200.0,
+        positions=positions,
+        plans=plans,
+        timestamp=ts,
+        run_id="run-1",
+    )
+    # Second write should upsert the same row
+    db.log_end_of_day_snapshot_for_portfolio(
+        portfolio["id"],
+        equity=1250.0,
+        positions=positions,
+        plans=plans,
+        timestamp=ts,
+        timezone_name="AEST",
+    )
+
+    latest = db.get_latest_end_of_day_snapshot_for_portfolio(portfolio["id"])
+    assert latest["date"] == "2024-01-02"
+    assert latest["timezone"] == "Australia/Sydney"
+    assert latest["equity"] == pytest.approx(1250.0)
+    assert latest["positions"][0]["symbol"] == "BTC/USD"
+    assert latest["plans"][0]["status"] == "open"
+
+    by_date = db.get_end_of_day_snapshot_for_date(
+        portfolio["id"],
+        day="2024-01-02",
+        timezone_name="Australia/Sydney",
+    )
+    assert by_date["equity"] == pytest.approx(1250.0)
+    db.close()
+
+
 def test_get_open_orders_handles_empty_table(db_session):
     db, portfolio_id = db_session
     assert db.get_open_orders_for_portfolio(portfolio_id) == []

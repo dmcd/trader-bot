@@ -1269,6 +1269,35 @@ async def test_flatten_helper_requests_marketable_orders():
 
 
 @pytest.mark.asyncio
+async def test_write_end_of_day_snapshot_uses_live_positions_and_plans():
+    runner = StrategyRunner.__new__(StrategyRunner)
+    runner.portfolio_id = 1
+    runner.run_id = "run-test"
+    live_positions = [{"symbol": "ETH/USD", "quantity": 2}]
+    open_plans = [{"id": 1, "status": "open", "symbol": "ETH/USD"}]
+    runner.bot = AsyncMock()
+    runner.bot.get_positions_async = AsyncMock(return_value=live_positions)
+    runner.db = MagicMock()
+    runner.db.portfolio_day_timezone = "Australia/Sydney"
+    runner.db.replace_positions_for_portfolio = MagicMock()
+    runner.db.get_positions_for_portfolio = MagicMock(return_value=[])
+    runner.db.get_open_trade_plans_for_portfolio = MagicMock(return_value=open_plans)
+    runner.db.log_end_of_day_snapshot_for_portfolio = MagicMock()
+
+    await runner._write_end_of_day_snapshot(1500.0)
+
+    runner.bot.get_positions_async.assert_awaited_once()
+    runner.db.replace_positions_for_portfolio.assert_called_once_with(1, live_positions)
+    runner.db.get_open_trade_plans_for_portfolio.assert_called_once_with(1)
+    args, kwargs = runner.db.log_end_of_day_snapshot_for_portfolio.call_args
+    assert args[0] == 1
+    assert kwargs["equity"] == 1500.0
+    assert kwargs["positions"] == live_positions
+    assert kwargs["plans"] == open_plans
+    assert kwargs["run_id"] == "run-test"
+
+
+@pytest.mark.asyncio
 async def test_runner_blocks_sell_on_stacking():
     sig = make_strategy_signal(action="SELL", quantity=0.1, symbol="BTC/USD")
     runner = _build_runner(sig, execute_orders=True)

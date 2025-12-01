@@ -71,6 +71,30 @@ class TradingDatabase:
             logger.debug(f"Could not create portfolio_days index: {exc}")
 
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS end_of_day_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                portfolio_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                timezone TEXT NOT NULL,
+                captured_at TEXT NOT NULL,
+                equity REAL,
+                positions_json TEXT,
+                plans_json TEXT,
+                run_id TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(portfolio_id, date, timezone),
+                FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+            )
+        """)
+        try:
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_eod_snapshots_portfolio_date ON end_of_day_snapshots (portfolio_id, date DESC)"
+            )
+        except Exception as exc:
+            logger.debug(f"Could not create end_of_day_snapshots index: {exc}")
+
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS portfolio_stats_cache (
                 portfolio_id INTEGER PRIMARY KEY,
                 total_trades INTEGER DEFAULT 0,
@@ -365,6 +389,16 @@ class TradingDatabase:
                 logger.debug(f"Unknown timezone '{candidate}' when deriving portfolio_days; trying fallback.")
                 continue
         return timezone.utc, "UTC"
+
+    @staticmethod
+    def _safe_json_loads(payload: str | None) -> list[Any] | dict[str, Any] | None:
+        """Parse JSON payloads defensively."""
+        if not payload:
+            return [] if payload == "" else None
+        try:
+            return json.loads(payload)
+        except Exception:
+            return None
 
     def update_portfolio_day_from_snapshot(
         self,
@@ -1065,6 +1099,100 @@ class TradingDatabase:
             timestamp=timestamp,
             timezone_name=timezone_name,
         )
+
+    def log_end_of_day_snapshot_for_portfolio(
+        self,
+        portfolio_id: int,
+        equity: float,
+        positions: list[dict[str, Any]] | None,
+        plans: list[dict[str, Any]] | None,
+        timestamp: datetime | str | None = None,
+        timezone_name: str | None = None,
+        run_id: str | None = None,
+    ):
+        """Persist end-of-day snapshot for portfolio reporting without flattening positions/plans."""
+        if portfolio_id is None:
+            return
+        ts = self._normalize_timestamp(timestamp)
+        tzinfo, tz_label = self._resolve_timezone(timezone_name)
+        day = ts.astimezone(tzinfo).date().isoformat()
+        captured_at = ts.isoformat()
+        try:
+            positions_json = json.dumps(positions or [], default=str)
+        except Exception:
+            positions_json = "[]"
+        try:
+            plans_json = json.dumps(plans or [], default=str)
+        except Exception:
+            plans_json = "[]"
+
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO end_of_day_snapshots (portfolio_id, date, timezone, captured_at, equity, positions_json, plans_json, run_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(portfolio_id, date, timezone) DO UPDATE SET
+                captured_at=excluded.captured_at,
+                equity=excluded.equity,
+                positions_json=excluded.positions_json,
+                plans_json=excluded.plans_json,
+                run_id=COALESCE(excluded.run_id, end_of_day_snapshots.run_id),
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (portfolio_id, day, tz_label, captured_at, equity, positions_json, plans_json, run_id),
+        )
+        self.conn.commit()
+
+    def get_latest_end_of_day_snapshot_for_portfolio(self, portfolio_id: int) -> Optional[Dict[str, Any]]:
+        """Return the most recent end-of-day snapshot for a portfolio."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT portfolio_id, date, timezone, captured_at, equity, positions_json, plans_json, run_id
+            FROM end_of_day_snapshots
+            WHERE portfolio_id = ?
+            ORDER BY captured_at DESC
+            LIMIT 1
+            """,
+            (portfolio_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["positions"] = self._safe_json_loads(result.pop("positions_json", None))
+        result["plans"] = self._safe_json_loads(result.pop("plans_json", None))
+        return result
+
+    def get_end_of_day_snapshot_for_date(
+        self,
+        portfolio_id: int,
+        day: date | str,
+        timezone_name: str | None = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Return end-of-day snapshot for a specific local day."""
+        if isinstance(day, date):
+            day_str = day.isoformat()
+        else:
+            day_str = str(day)
+        _, tz_label = self._resolve_timezone(timezone_name)
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT portfolio_id, date, timezone, captured_at, equity, positions_json, plans_json, run_id
+            FROM end_of_day_snapshots
+            WHERE portfolio_id = ? AND date = ? AND timezone = ?
+            LIMIT 1
+            """,
+            (portfolio_id, day_str, tz_label),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["positions"] = self._safe_json_loads(result.pop("positions_json", None))
+        result["plans"] = self._safe_json_loads(result.pop("plans_json", None))
+        return result
 
     def log_ohlcv_batch_for_portfolio(self, portfolio_id: int, symbol: str, timeframe: str, bars: List[Dict[str, Any]]):
         """Persist a batch of OHLCV bars for a symbol/timeframe."""

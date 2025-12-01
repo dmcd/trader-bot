@@ -152,3 +152,27 @@ def test_update_exposure_notional_persists_cache():
     assert tracker.portfolio_stats["exposure_notional"] == pytest.approx(125.5)
     assert db.cached_stats_portfolio[0] == 11
     assert db.cached_stats_portfolio[1]["exposure_notional"] == pytest.approx(125.5)
+
+
+def test_stats_cache_respects_portfolio_scope_switch():
+    class CacheDB:
+        def __init__(self):
+            self.calls = []
+
+        def set_portfolio_stats_cache(self, portfolio_id, stats):
+            self.calls.append((portfolio_id, stats.copy()))
+
+    db = CacheDB()
+    tracker = PortfolioTracker(db, logger=logging.getLogger("test"))
+
+    # No portfolio set -> cache write skipped
+    tracker.update_exposure_notional(50.0)
+    assert db.calls == []
+
+    tracker.set_portfolio(321)
+    tracker.update_exposure_notional(50.0)
+    tracker.update_exposure_notional(50.0)  # same value -> no-op
+    tracker.update_exposure_notional(75.0)
+
+    assert db.calls[0][0] == 321
+    assert db.calls[-1][1]["exposure_notional"] == pytest.approx(75.0)

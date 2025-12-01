@@ -455,3 +455,17 @@ async def test_sync_trades_requires_portfolio():
             plan_reason_lookup=lambda *_: None,
             get_symbols=lambda: set(),
         )
+
+
+@pytest.mark.asyncio
+async def test_reconcile_open_orders_requires_portfolio_scope():
+    resync = ResyncService(
+        db=StubDB(),
+        bot=StubBot(),
+        risk_manager=SimpleNamespace(update_positions=lambda *_: None, update_pending_orders=lambda *_: None),
+        holdings_updater=lambda *args, **kwargs: 0.0,
+        portfolio_stats_applier=lambda *args, **kwargs: None,
+    )
+
+    with pytest.raises(ValueError):
+        await resync.reconcile_open_orders()

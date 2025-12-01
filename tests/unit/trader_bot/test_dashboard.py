@@ -371,3 +371,39 @@ def test_load_history_and_prices_success(monkeypatch, dashboard_module):
     assert "trade_value" in df.columns
     prices = dashboard.get_latest_prices(1, ["BTC/USD"])
     assert prices["BTC/USD"] == 105.0
+
+
+def test_load_history_converts_to_user_timezone(monkeypatch, dashboard_module):
+    dashboard = dashboard_module
+
+    class StubDB:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+        def get_trades_for_portfolio(self, _portfolio_id):
+            return [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "symbol": "BTC/USD",
+                    "action": "BUY",
+                    "price": 100.0,
+                    "quantity": 1.0,
+                    "fee": 0.0,
+                    "liquidity": "maker",
+                    "realized_pnl": 0.0,
+                    "reason": "swing",
+                }
+            ]
+
+    tz = ZoneInfo("Australia/Sydney")
+    monkeypatch.setattr(dashboard, "TradingDatabase", StubDB)
+
+    df = dashboard.load_history(5, tz)
+
+    assert not df.empty
+    ts = df["timestamp"].iloc[0]
+    assert ts.tzinfo == tz
+    assert ts.hour == 11  # midnight UTC -> 11am Sydney during DST

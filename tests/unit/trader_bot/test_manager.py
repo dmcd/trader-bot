@@ -49,6 +49,14 @@ def test_set_baseline_stores_metadata(risk_manager):
     assert risk_manager.baseline_timestamp == "2024-01-01T00:00:00Z"
 
 
+def test_set_portfolio_updates_scope(risk_manager):
+    risk_manager.set_portfolio(44)
+    assert risk_manager.portfolio_id == 44
+
+    risk_manager.set_portfolio(None)
+    assert risk_manager.portfolio_id is None
+
+
 def test_order_value_cap(risk_manager):
     over_size_qty = (rm_module.MAX_ORDER_VALUE / 10.0) + 1
     result = risk_manager.check_trade_allowed("BHP", "BUY", over_size_qty, price=10.0)

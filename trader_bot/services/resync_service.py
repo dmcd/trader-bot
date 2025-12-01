@@ -48,6 +48,16 @@ class ResyncService:
             raise ValueError("portfolio_id is required for resync operations")
         return self.portfolio_id
 
+    @staticmethod
+    def _trade_key(trade_id: str | None) -> str | None:
+        """Build processed-trade key for trade ids."""
+        return f"tid:{trade_id}" if trade_id else None
+
+    @staticmethod
+    def _client_key(client_oid: str | None) -> str | None:
+        """Build processed-trade key for client order ids."""
+        return f"cid:{client_oid}" if client_oid else None
+
     def filter_our_orders(self, orders: list) -> list:
         """Only keep open orders with our client id prefix."""
         filtered = []
@@ -200,7 +210,7 @@ class ResyncService:
 
     async def sync_trades_from_exchange(
         self,
-        processed_trade_ids: set[tuple[str, str | None]],
+        processed_trade_ids: set[str],
         order_reasons: dict,
         plan_reason_lookup: Callable[[int, str, str], Optional[str]],
         get_symbols: Callable[[], set],
@@ -208,11 +218,17 @@ class ResyncService:
         """Sync recent trades from exchange to DB."""
         portfolio_id = self._require_portfolio()
 
-        new_processed: set[tuple[str, str | None]] = set()
+        new_processed: set[tuple[str | None, str | None]] = set()
         if not processed_trade_ids:
             try:
-                persisted_ids = self.db.get_processed_trade_ids_for_portfolio(portfolio_id)
-                processed_trade_ids.update(persisted_ids or set())
+                persisted_pairs = self.db.get_processed_trade_entries_for_portfolio(portfolio_id)
+                for trade_id, client_oid in persisted_pairs or set():
+                    trade_key = self._trade_key(trade_id)
+                    client_key = self._client_key(client_oid)
+                    if trade_key:
+                        processed_trade_ids.add(trade_key)
+                    if client_key:
+                        processed_trade_ids.add(client_key)
             except Exception as exc:
                 self.logger.debug(f"Could not load processed trade ids: {exc}")
 
@@ -253,7 +269,9 @@ class ResyncService:
                     for trade in trades:
                         client_oid = trade.get("_client_oid") or get_client_order_id(trade)
                         trade_id = str(trade["id"])
-                        if trade_id in processed_trade_ids:
+                        trade_key = self._trade_key(trade_id)
+                        client_key = self._client_key(client_oid)
+                        if (trade_key and trade_key in processed_trade_ids) or (client_key and client_key in processed_trade_ids):
                             continue
 
                         existing = self.db.conn.execute(
@@ -261,7 +279,10 @@ class ResyncService:
                             (trade_id, portfolio_id),
                         ).fetchone()
                         if existing:
-                            processed_trade_ids.add(trade_id)
+                            if trade_key:
+                                processed_trade_ids.add(trade_key)
+                            if client_key:
+                                processed_trade_ids.add(client_key)
                             new_processed.add((trade_id, client_oid))
                             continue
 
@@ -269,7 +290,10 @@ class ResyncService:
                         if ts_ms:
                             trade_dt = datetime.fromtimestamp(ts_ms / 1000, timezone.utc)
                             if trade_dt < cutoff_dt:
-                                processed_trade_ids.add(trade_id)
+                                if trade_key:
+                                    processed_trade_ids.add(trade_key)
+                                if client_key:
+                                    processed_trade_ids.add(client_key)
                                 new_processed.add((trade_id, client_oid))
                                 continue
 
@@ -296,7 +320,10 @@ class ResyncService:
                             plan_reason = None
                         reason = order_reasons.get(str(order_id)) or plan_reason
                         if not reason:
-                            processed_trade_ids.add(trade_id)
+                            if trade_key:
+                                processed_trade_ids.add(trade_key)
+                            if client_key:
+                                processed_trade_ids.add(client_key)
                             new_processed.add((trade_id, client_oid))
                             continue
 
@@ -317,7 +344,10 @@ class ResyncService:
                         )
                         if self.portfolio_stats_applier is not None:
                             self.portfolio_stats_applier(order_id, fee, realized_pnl)
-                        processed_trade_ids.add(trade_id)
+                        if trade_key:
+                            processed_trade_ids.add(trade_key)
+                        if client_key:
+                            processed_trade_ids.add(client_key)
                         new_processed.add((trade_id, client_oid))
                         self.logger.info(f"✅ Synced trade: {side} {quantity} {symbol} @ ${price:,.2f} (Fee: ${fee:.4f})")
 

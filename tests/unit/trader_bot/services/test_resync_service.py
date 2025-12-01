@@ -280,7 +280,7 @@ class SyncStubDB:
         self.recorded = None
         self.conn = SimpleNamespace(execute=lambda *args, **kwargs: SimpleNamespace(fetchone=lambda: None))
 
-    def get_processed_trade_ids_for_portfolio(self, portfolio_id):
+    def get_processed_trade_entries_for_portfolio(self, portfolio_id):
         return set()
 
     def get_latest_trade_timestamp_for_portfolio(self, portfolio_id):
@@ -328,7 +328,7 @@ async def test_sync_trades_processes_and_records_ids():
     )
     resync.set_portfolio(1)
 
-    processed_ids: set[tuple[str, str | None]] = set()
+    processed_ids: set[str] = set()
     await resync.sync_trades_from_exchange(
         processed_trade_ids=processed_ids,
         order_reasons={"o1": "entry"},
@@ -338,7 +338,8 @@ async def test_sync_trades_processes_and_records_ids():
 
     assert db.logged
     assert db.recorded == {("t1", trades[0]["clientOrderId"])}
-    assert "t1" in processed_ids
+    assert ResyncService._trade_key("t1") in processed_ids
+    assert ResyncService._client_key(trades[0]["clientOrderId"]) in processed_ids
 
 
 @pytest.mark.asyncio
@@ -375,7 +376,7 @@ async def test_sync_trades_paginates_and_skips_duplicates():
     )
     resync.set_portfolio(2)
 
-    processed_ids: set[tuple[str, str | None]] = set()
+    processed_ids: set[str] = set()
     await resync.sync_trades_from_exchange(
         processed_trade_ids=processed_ids,
         order_reasons={"o2": "exit"},
@@ -386,9 +387,54 @@ async def test_sync_trades_paginates_and_skips_duplicates():
     # logged once despite duplicates, pagination handled, processed set recorded
     assert db.logged
     assert len(db.logged) == 1
-    assert "dup" in processed_ids
+    assert ResyncService._trade_key("dup") in processed_ids
+    assert ResyncService._client_key(f"{CLIENT_ORDER_PREFIX}-999") in processed_ids
     assert db.recorded == {("dup", f"{CLIENT_ORDER_PREFIX}-999")}
 
+
+@pytest.mark.asyncio
+async def test_sync_trades_skips_persisted_entries_without_logging():
+    trade_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
+    persisted_trade = ("old-trade", f"{CLIENT_ORDER_PREFIX}-persisted")
+
+    trades = [
+        {
+            "id": persisted_trade[0],
+            "order": "ord-old",
+            "side": "buy",
+            "price": 50.0,
+            "amount": 0.5,
+            "fee": {"cost": 0.0},
+            "timestamp": trade_ts,
+            "clientOrderId": persisted_trade[1],
+        }
+    ]
+
+    db = SyncStubDB()
+    db.get_processed_trade_entries_for_portfolio = lambda *_: {persisted_trade}
+    bot = SyncStubBot(lambda call: trades if call == 1 else [])
+    resync = ResyncService(
+        db=db,
+        bot=bot,
+        risk_manager=SimpleNamespace(),
+        holdings_updater=lambda *args, **kwargs: 0.0,
+        portfolio_stats_applier=lambda *args, **kwargs: None,
+    )
+    resync.set_portfolio(3)
+
+    processed_ids: set[str] = set()
+    await resync.sync_trades_from_exchange(
+        processed_trade_ids=processed_ids,
+        order_reasons={"ord-old": "entry"},
+        plan_reason_lookup=lambda *_: "entry",
+        get_symbols=lambda: {"BTC/USD"},
+    )
+
+    # Already persisted; no logging and no re-persist call
+    assert db.logged == []
+    assert db.recorded is None
+    assert ResyncService._trade_key(persisted_trade[0]) in processed_ids
+    assert ResyncService._client_key(persisted_trade[1]) in processed_ids
 
 @pytest.mark.asyncio
 async def test_sync_trades_requires_portfolio():

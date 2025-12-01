@@ -4,7 +4,7 @@ import os
 import json
 import uuid
 from datetime import datetime, date, timedelta, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Iterable
 from zoneinfo import ZoneInfo
 
 from trader_bot.config import PORTFOLIO_DAY_TIMEZONE
@@ -269,6 +269,7 @@ class TradingDatabase:
         index_specs = [
             ("trades", "idx_trades_portfolio_symbol_ts", "portfolio_id, symbol, timestamp DESC"),
             ("processed_trades", "idx_processed_trades_portfolio_trade", "portfolio_id, trade_id"),
+            ("processed_trades", "idx_processed_trades_portfolio_client", "portfolio_id, client_order_id"),
             ("market_data", "idx_market_data_portfolio_symbol_ts", "portfolio_id, symbol, timestamp DESC"),
             ("ohlcv_bars", "idx_ohlcv_portfolio_symbol_tf_ts", "portfolio_id, symbol, timeframe, timestamp DESC"),
             ("equity_snapshots", "idx_equity_portfolio_ts", "portfolio_id, timestamp DESC"),
@@ -278,11 +279,13 @@ class TradingDatabase:
             ("llm_calls", "idx_llm_calls_portfolio_ts", "portfolio_id, timestamp DESC"),
             ("llm_traces", "idx_llm_traces_portfolio_ts", "portfolio_id, timestamp DESC"),
         ]
+        unique_indexes = {"idx_processed_trades_portfolio_trade", "idx_processed_trades_portfolio_client"}
         for table_name, index_name, columns in index_specs:
             if not self._column_exists(cursor, table_name, "portfolio_id"):
                 continue
             try:
-                cursor.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({columns})")
+                kind = "UNIQUE INDEX" if index_name in unique_indexes else "INDEX"
+                cursor.execute(f"CREATE {kind} IF NOT EXISTS {index_name} ON {table_name} ({columns})")
             except Exception as e:
                 logger.debug(f"Could not create index {index_name}: {e}")
 
@@ -597,7 +600,7 @@ class TradingDatabase:
         )
         self.conn.commit()
 
-    def _insert_processed_trade_ids(self, entries: List[tuple[str, Optional[str]]], portfolio_id: int):
+    def _insert_processed_trade_ids(self, entries: Iterable[tuple[str, Optional[str]]], portfolio_id: int):
         """Internal helper to persist processed trade ids."""
         if not entries:
             return
@@ -616,11 +619,16 @@ class TradingDatabase:
 
     def get_processed_trade_ids_for_portfolio(self, portfolio_id: int) -> set[str]:
         """Return trade_ids already seen for this portfolio."""
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT trade_id FROM processed_trades WHERE portfolio_id = ?", (portfolio_id,))
-        return {row["trade_id"] for row in cursor.fetchall() if row["trade_id"]}
+        entries = self.get_processed_trade_entries_for_portfolio(portfolio_id)
+        return {trade_id for trade_id, _ in entries if trade_id}
 
-    def record_processed_trade_ids_for_portfolio(self, portfolio_id: int, entries: List[tuple[str, Optional[str]]]):
+    def get_processed_trade_entries_for_portfolio(self, portfolio_id: int) -> set[tuple[str | None, str | None]]:
+        """Return (trade_id, client_order_id) pairs already recorded for this portfolio."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT trade_id, client_order_id FROM processed_trades WHERE portfolio_id = ?", (portfolio_id,))
+        return {(row["trade_id"], row["client_order_id"]) for row in cursor.fetchall()}
+
+    def record_processed_trade_ids_for_portfolio(self, portfolio_id: int, entries: Iterable[tuple[str, Optional[str]]]):
         """Persist processed trade ids for a portfolio."""
         self._insert_processed_trade_ids(entries, portfolio_id)
     
@@ -642,7 +650,7 @@ class TradingDatabase:
         cursor = self.conn.cursor()
 
         if trade_id:
-            cursor.execute("SELECT id FROM trades WHERE trade_id = ?", (trade_id,))
+            cursor.execute("SELECT id FROM trades WHERE trade_id = ? AND portfolio_id = ?", (trade_id, portfolio_id))
             if cursor.fetchone():
                 logger.debug(f"Skipping duplicate trade {trade_id}")
                 return

@@ -35,10 +35,10 @@ Legacy session model (now removed):
     - [x] Apply widening + auto-rearm in plan monitoring/resync/runner startup so monitors resume with widened stops/targets after rollovers.
     - [x] Add unit coverage for overnight widen + restart flows, including opt-out and single-application guards.
   - [x] Add portfolio aggregates (PnL, exposure, open positions, costs) to `TradingContext`.
-  - [ ] Dedupe processed trades across days/runs using exchange trade/order ids; add DB uniqueness guard on (portfolio_id, trade_id/client_order_id).
-    - [ ] Add DB uniqueness constraints/indexes on processed trades (portfolio_id, trade_id) and (portfolio_id, client_order_id) to block duplicates.
-    - [ ] Ensure resync/runner dedupes via exchange trade/order ids across days/runs without session scoping (persist + hydrate).
-    - [ ] Add restart/day-rollover coverage for deduping + constraint handling.
+  - [x] Dedupe processed trades across days/runs using exchange trade/order ids; add DB uniqueness guard on (portfolio_id, trade_id/client_order_id).
+    - [x] Add DB uniqueness constraints/indexes on processed trades (portfolio_id, trade_id) and (portfolio_id, client_order_id) to block duplicates.
+    - [x] Ensure resync/runner dedupes via exchange trade/order ids across days/runs without session scoping (persist + hydrate).
+    - [x] Add restart/day-rollover coverage for deduping + constraint handling.
 
 - [ ] Dashboard and telemetry
   - [ ] surface open positions/plans regardless of run.

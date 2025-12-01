@@ -67,10 +67,14 @@ class StubDB:
         return self.plan_reason
 
     def get_processed_trade_ids_for_portfolio(self, portfolio_id):
-        return set()
+        return {trade_id for trade_id, _ in getattr(self, "recorded_entries", set())}
+
+    def get_processed_trade_entries_for_portfolio(self, portfolio_id):
+        return getattr(self, "recorded_entries", set())
 
     def record_processed_trade_ids_for_portfolio(self, portfolio_id, processed):
         self.recorded = processed
+        self.recorded_entries = set(processed)
 
 
 class StubBot:
@@ -171,7 +175,7 @@ async def test_sync_trades_skips_unattributed_trades():
 
     assert runner.db.logged_trades == []
     # Ensure we don't loop forever on the same trade id
-    assert "t-unknown" in runner.processed_trade_ids
+    assert f"tid:t-unknown" in runner.processed_trade_ids
 
 
 @pytest.mark.asyncio

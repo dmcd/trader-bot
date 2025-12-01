@@ -45,7 +45,7 @@ Notes on the current session model:
   - [x] Remove session-specific baselines (starting_balance, session_started) from runner lifecycle and resync; rely on portfolio stats cache and equity snapshots instead.
     - Runner seeds baselines from the earliest portfolio equity snapshot, logs a new snapshot on startup, and sanity checks/tests now use the portfolio-level baseline instead of session metadata.
 - [ ] **Context and risk**
-  - [ ] Rework `TradingContext` summaries to use portfolio lifetime (portfolio.created_at or first equity snapshot) and portfolio stats cache; replace `_net_quantity_for_session` with portfolio-level baseline handling for sandbox airdrops.
+  - [x] Rework `TradingContext` summaries to use portfolio lifetime (portfolio.created_at or first equity snapshot) and portfolio stats cache; replace `_net_quantity_for_session` with portfolio-level baseline handling for sandbox airdrops.
   - [ ] Replace `MetricsDrift` with a portfolio-scoped equity drift check (uses portfolio stats cache + latest equity snapshot) and retire session_id logging.
   - [ ] Update RiskManager baseline/telemetry hooks to use portfolio metadata and remove any session_id fields.
 - [ ] **Dashboard/telemetry**

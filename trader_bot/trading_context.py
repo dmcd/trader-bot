@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from trader_bot.config import ACTIVE_EXCHANGE, CLIENT_ORDER_PREFIX, IB_BASE_CURRENCY
@@ -37,6 +37,41 @@ class TradingContext:
             self.position_baseline[sym] = qty or 0.0
 
     @staticmethod
+    def _parse_iso(ts_str: str) -> datetime | None:
+        """Parse ISO timestamps while tolerating Z suffix."""
+        if not ts_str:
+            return None
+        try:
+            ts = datetime.fromisoformat(ts_str)
+        except ValueError:
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            except Exception:
+                return None
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts
+
+    def _get_portfolio_baseline(self) -> tuple[float | None, str | None]:
+        """Return earliest equity snapshot (value, timestamp) for portfolio lifetime context."""
+        baseline_equity = None
+        baseline_ts = None
+        try:
+            snapshot = self.db.get_first_equity_snapshot_for_portfolio(self.portfolio_id)
+            if snapshot:
+                baseline_equity = snapshot.get("equity")
+                baseline_ts = snapshot.get("timestamp")
+        except Exception as exc:
+            logger.debug(f"Could not load portfolio baseline snapshot: {exc}")
+        if baseline_ts is None:
+            try:
+                portfolio_meta = self.db.get_portfolio(self.portfolio_id) or {}
+                baseline_ts = portfolio_meta.get("created_at")
+            except Exception as exc:
+                logger.debug(f"Could not load portfolio metadata for baseline: {exc}")
+        return baseline_equity, baseline_ts
+
+    @staticmethod
     def _net_quantity_with_baseline(quantity: float, baseline_qty: float) -> float:
         """
         Remove baseline inventory so exposure reflects only positions opened/closed
@@ -65,6 +100,7 @@ class TradingContext:
 
         portfolio_stats = self.db.get_portfolio_stats(self.portfolio_id) if self.portfolio_id is not None else {}
         portfolio_meta = self.db.get_portfolio(self.portfolio_id) if self.portfolio_id is not None else {}
+        baseline_equity, baseline_ts = self._get_portfolio_baseline()
         recent_trades = list(
             reversed(self.db.get_recent_trades_for_portfolio(self.portfolio_id, limit=50))
         ) if self.portfolio_id is not None else []
@@ -72,12 +108,10 @@ class TradingContext:
         # Calculate portfolio duration (hours, rounded) and win/loss counts
         duration_hours = 0.0
         created_at = portfolio_meta.get("created_at")
-        if created_at:
-            try:
-                created_dt = datetime.fromisoformat(created_at)
-                duration_hours = (datetime.now() - created_dt).total_seconds() / 3600
-            except Exception:
-                duration_hours = 0.0
+        start_ts = baseline_ts or created_at
+        start_dt = self._parse_iso(start_ts) if start_ts else None
+        if start_dt:
+            duration_hours = (datetime.now(timezone.utc) - start_dt).total_seconds() / 3600
 
         wins = losses = 0
         open_position = None
@@ -199,8 +233,9 @@ class TradingContext:
             "session": {
                 "portfolio_id": self.portfolio_id,
                 "created_at": created_at,
+                "baseline_timestamp": baseline_ts,
                 "hours": round(duration_hours, 1),
-                "starting_balance": None,
+                "starting_balance": baseline_equity,
                 "net_pnl": portfolio_stats.get('net_pnl'),
                 "fees": portfolio_stats.get('total_fees'),
                 "llm_cost": portfolio_stats.get('total_llm_cost'),

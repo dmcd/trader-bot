@@ -124,6 +124,13 @@ class TestTradingContext(unittest.TestCase):
         self.assertEqual(len(summary["open_orders"]), 5)
         self.assertEqual(len(summary["recent_trades"]), 5)
 
+    def test_context_summary_uses_equity_baseline(self):
+        self.db.log_equity_snapshot_for_portfolio(self.portfolio_id, 1234.5, timestamp="2024-01-01T00:00:00Z")
+        summary = json.loads(self.context.get_context_summary("BTC/USD"))
+        session = summary["session"]
+        self.assertEqual(session["starting_balance"], 1234.5)
+        self.assertIsNotNone(session["baseline_timestamp"])
+
     def test_memory_snapshot_trims_large_payloads(self):
         for i in range(3):
             self.db.create_trade_plan_for_portfolio(

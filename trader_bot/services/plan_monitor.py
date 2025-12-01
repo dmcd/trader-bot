@@ -27,7 +27,7 @@ class PlanMonitor:
         risk_manager,
         prefer_maker: Callable[[str], bool],
         holdings_updater: Callable[[str, str, float, float, float], float],
-        session_stats_applier: Callable[[str | None, float, float], None],
+        portfolio_stats_applier: Callable[[str | None, float, float], None],
         max_total_exposure: float = MAX_TOTAL_EXPOSURE,
         portfolio_id: int | None = None,
     ):
@@ -37,7 +37,7 @@ class PlanMonitor:
         self.risk_manager = risk_manager
         self.prefer_maker = prefer_maker
         self.holdings_updater = holdings_updater
-        self.session_stats_applier = session_stats_applier
+        self.portfolio_stats_applier = portfolio_stats_applier
         self.max_total_exposure = max_total_exposure
         self.portfolio_id = portfolio_id
 
@@ -50,7 +50,7 @@ class PlanMonitor:
         risk_manager=None,
         prefer_maker: Callable[[str], bool] | None = None,
         holdings_updater: Callable[[str, str, float, float, float], float] | None = None,
-        session_stats_applier: Callable[[str | None, float, float], None] | None = None,
+        portfolio_stats_applier: Callable[[str | None, float, float], None] | None = None,
         portfolio_id: int | None = None,
     ) -> None:
         """Allow tests/runners to swap dependencies without rebuilding the service."""
@@ -66,8 +66,8 @@ class PlanMonitor:
             self.prefer_maker = prefer_maker
         if holdings_updater is not None:
             self.holdings_updater = holdings_updater
-        if session_stats_applier is not None:
-            self.session_stats_applier = session_stats_applier
+        if portfolio_stats_applier is not None:
+            self.portfolio_stats_applier = portfolio_stats_applier
         if portfolio_id is not None:
             self.portfolio_id = portfolio_id
 
@@ -235,7 +235,7 @@ class PlanMonitor:
                             liquidity=order_result.get("liquidity") if order_result else "taker",
                             realized_pnl=realized,
                         )
-                        self.session_stats_applier(
+                        self.portfolio_stats_applier(
                             order_result.get("order_id") if order_result else None,
                             fee,
                             realized,

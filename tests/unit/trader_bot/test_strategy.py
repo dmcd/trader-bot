@@ -32,7 +32,7 @@ def _reset_prompt_cache():
 async def _run_generate(strategy, market_data=None, equity=1000, exposure=0, context=None, stats=None):
     """Helper to call generate_signal with defaults."""
     payload = market_data or {"BTC/USD": {"price": 100}}
-    return await strategy.generate_signal(payload, equity, exposure, context, session_stats=stats or {"gross_pnl": 0, "total_fees": 0})
+    return await strategy.generate_signal(payload, equity, exposure, context, portfolio_stats=stats or {"gross_pnl": 0, "total_fees": 0})
 
 
 def test_fees_too_high(strategy_env):
@@ -723,10 +723,10 @@ async def test_llm_cost_guard_blocks_when_cap_hit(strategy_env, set_loop_time):
     set_loop_time(1000)
     strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
-    session_stats = {"total_llm_cost": 999.0}
+    portfolio_stats = {"total_llm_cost": 999.0}
 
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
-        signal = await _run_generate(strategy, stats=session_stats)
+        signal = await _run_generate(strategy, stats=portfolio_stats)
 
     assert signal is not None
     assert signal.action == "HOLD"

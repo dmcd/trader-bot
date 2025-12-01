@@ -13,7 +13,7 @@ class PortfolioTracker:
         self.portfolio_id = portfolio_id
         self.logger = logger or logging.getLogger(__name__)
         self.holdings: dict[str, dict[str, float]] = {}
-        self.session_stats = {
+        self.portfolio_stats = {
             "total_trades": 0,
             "gross_pnl": 0.0,
             "total_fees": 0.0,
@@ -26,7 +26,7 @@ class PortfolioTracker:
         self.portfolio_id = portfolio_id
 
     def load_cached_stats(self) -> tuple[dict, bool]:
-        """Hydrate session stats from portfolio/session caches for restart resilience."""
+        """Hydrate portfolio stats from caches for restart resilience."""
         stats = {}
         if self.portfolio_id is not None and hasattr(self.db, "get_portfolio_stats_cache"):
             try:
@@ -37,7 +37,7 @@ class PortfolioTracker:
 
         cache_hit = bool(stats)
         if stats:
-            self.session_stats.update(
+            self.portfolio_stats.update(
                 {
                     "total_trades": stats.get("total_trades", 0) or 0,
                     "gross_pnl": stats.get("gross_pnl", 0.0) or 0.0,
@@ -46,14 +46,14 @@ class PortfolioTracker:
                     "exposure_notional": stats.get("exposure_notional", 0.0) or 0.0,
                 }
             )
-        return self.session_stats, cache_hit
+        return self.portfolio_stats, cache_hit
 
     def reset_holdings(self) -> None:
         self.holdings.clear()
 
     def reset_stats(self) -> None:
-        self.session_stats.clear()
-        self.session_stats.update(
+        self.portfolio_stats.clear()
+        self.portfolio_stats.update(
             {
                 "total_trades": 0,
                 "gross_pnl": 0.0,
@@ -117,12 +117,12 @@ class PortfolioTracker:
             exposure_value = float(exposure_notional or 0.0)
         except (TypeError, ValueError):
             return
-        if abs(self.session_stats.get("exposure_notional", 0.0) - exposure_value) < 1e-9:
+        if abs(self.portfolio_stats.get("exposure_notional", 0.0) - exposure_value) < 1e-9:
             return
-        self.session_stats["exposure_notional"] = exposure_value
+        self.portfolio_stats["exposure_notional"] = exposure_value
         self._persist_stats_cache()
 
-    def apply_fill_to_session_stats(
+    def apply_fill_to_portfolio_stats(
         self,
         order_id: Optional[str],
         actual_fee: float,
@@ -130,10 +130,10 @@ class PortfolioTracker:
         estimated_fee_map: Optional[dict[str, float]] = None,
     ) -> None:
         """
-        Reconcile session stats with an executed trade.
+        Reconcile portfolio stats with an executed trade.
         If we estimated a fee earlier, we still book the actual fee but drop the estimate marker.
         """
-        if not self.session_stats:
+        if not self.portfolio_stats:
             self.reset_stats()
 
         if order_id:
@@ -141,9 +141,9 @@ class PortfolioTracker:
             if estimated_fee_map is not None and order_key in estimated_fee_map:
                 estimated_fee_map.pop(order_key, None)
         fee_delta = actual_fee
-        self.session_stats["total_trades"] += 1
-        self.session_stats["total_fees"] += fee_delta
-        self.session_stats["gross_pnl"] += realized_pnl
+        self.portfolio_stats["total_trades"] += 1
+        self.portfolio_stats["total_fees"] += fee_delta
+        self.portfolio_stats["gross_pnl"] += realized_pnl
         self._persist_stats_cache()
 
     @staticmethod
@@ -197,7 +197,7 @@ class PortfolioTracker:
 
     def apply_exchange_trades_for_rebuild(self, trades: list) -> dict:
         """
-        Rebuild holdings and session stats from a list of exchange trades.
+        Rebuild holdings and portfolio stats from a list of exchange trades.
         Malformed entries are skipped with warnings instead of breaking the rebuild.
         """
         self.reset_holdings()
@@ -216,17 +216,17 @@ class PortfolioTracker:
                 skipped += 1
                 continue
 
-            self.session_stats["total_trades"] += 1
-            self.session_stats["total_fees"] += fee_cost
-            self.session_stats["gross_pnl"] += realized
+            self.portfolio_stats["total_trades"] += 1
+            self.portfolio_stats["total_fees"] += fee_cost
+            self.portfolio_stats["gross_pnl"] += realized
 
         if skipped:
             self.logger.warning(f"Skipped {skipped} malformed trades while rebuilding stats")
         self._persist_stats_cache()
-        return self.session_stats
+        return self.portfolio_stats
 
-    def rebuild_session_stats_from_trades(self, current_equity: float | None = None) -> dict:
-        """Recompute session_stats from recorded trades and update cache."""
+    def rebuild_portfolio_stats_from_trades(self, current_equity: float | None = None) -> dict:
+        """Recompute portfolio_stats from recorded trades and update cache."""
         trades = self.db.get_trades_for_portfolio(self.portfolio_id)
         self.reset_holdings()
         self.reset_stats()
@@ -240,9 +240,9 @@ class PortfolioTracker:
                     trade["price"],
                     fee_cost,
                 )
-                self.session_stats["total_trades"] += 1
-                self.session_stats["total_fees"] += fee_cost
-                self.session_stats["gross_pnl"] += realized
+                self.portfolio_stats["total_trades"] += 1
+                self.portfolio_stats["total_fees"] += fee_cost
+                self.portfolio_stats["gross_pnl"] += realized
             except Exception as exc:  # pragma: no cover - defensive
                 self.logger.warning(f"Skipping trade during stats rebuild due to error: {exc}")
 
@@ -253,16 +253,16 @@ class PortfolioTracker:
                 db_stats = self.db.get_portfolio_stats_cache(self.portfolio_id) or {}
             except Exception:
                 db_stats = {}
-        self.session_stats["total_llm_cost"] = db_stats.get("total_llm_cost", 0.0)
-        self.session_stats["exposure_notional"] = db_stats.get("exposure_notional", self.session_stats.get("exposure_notional", 0.0) or 0.0)
+        self.portfolio_stats["total_llm_cost"] = db_stats.get("total_llm_cost", 0.0)
+        self.portfolio_stats["exposure_notional"] = db_stats.get("exposure_notional", self.portfolio_stats.get("exposure_notional", 0.0) or 0.0)
         self._persist_stats_cache()
-        return self.session_stats
+        return self.portfolio_stats
 
     def _persist_stats_cache(self) -> None:
         """Write stats aggregates to the appropriate cache scope."""
         try:
             portfolio_ref = self.portfolio_id
             if portfolio_ref is not None and hasattr(self.db, "set_portfolio_stats_cache"):
-                self.db.set_portfolio_stats_cache(portfolio_ref, self.session_stats)
+                self.db.set_portfolio_stats_cache(portfolio_ref, self.portfolio_stats)
         except Exception as exc:  # pragma: no cover - defensive
-            self.logger.warning(f"Failed to persist session stats cache: {exc}")
+            self.logger.warning(f"Failed to persist portfolio stats cache: {exc}")

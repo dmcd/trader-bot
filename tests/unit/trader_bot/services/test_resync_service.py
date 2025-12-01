@@ -63,7 +63,7 @@ class TrackingRisk:
 
 
 def test_filter_our_orders_only_keeps_prefixed():
-    resync = ResyncService(db=None, bot=None, risk_manager=None, holdings_updater=None, session_stats_applier=None, logger=None)
+    resync = ResyncService(db=None, bot=None, risk_manager=None, holdings_updater=None, portfolio_stats_applier=None, logger=None)
     ours = {"clientOrderId": f"{CLIENT_ORDER_PREFIX}123"}
     foreign = {"clientOrderId": "X-1"}
     missing = {"id": 1}
@@ -84,7 +84,7 @@ async def test_reconcile_exchange_state_replaces_snapshots():
         bot=bot,
         risk_manager=risk,
         holdings_updater=lambda *args, **kwargs: 0.0,
-        session_stats_applier=lambda *args, **kwargs: None,
+        portfolio_stats_applier=lambda *args, **kwargs: None,
         record_health_state=lambda key, val, detail=None: db.set_health_state(key, val),
     )
     resync.set_portfolio(1)
@@ -106,7 +106,7 @@ def test_bootstrap_snapshots_restores_portfolio_state():
         bot=None,
         risk_manager=risk,
         holdings_updater=lambda *args, **kwargs: 0.0,
-        session_stats_applier=lambda *args, **kwargs: None,
+        portfolio_stats_applier=lambda *args, **kwargs: None,
     )
     resync.set_portfolio(7)
 
@@ -136,7 +136,7 @@ async def test_reconcile_exchange_state_records_errors():
         bot=bot,
         risk_manager=SimpleNamespace(update_positions=lambda *_: None, update_pending_orders=lambda *_: None),
         holdings_updater=lambda *args, **kwargs: 0.0,
-        session_stats_applier=lambda *args, **kwargs: None,
+        portfolio_stats_applier=lambda *args, **kwargs: None,
         record_health_state=record_health,
     )
     resync.set_portfolio(1)
@@ -159,7 +159,7 @@ async def test_reconcile_open_orders_handles_exchange_failure():
         bot=bot,
         risk_manager=SimpleNamespace(update_positions=lambda *_: None, update_pending_orders=lambda *_: None),
         holdings_updater=lambda *args, **kwargs: 0.0,
-        session_stats_applier=lambda *args, **kwargs: None,
+        portfolio_stats_applier=lambda *args, **kwargs: None,
     )
     resync.set_portfolio(1)
 
@@ -178,7 +178,7 @@ async def test_reconcile_open_orders_replaces_stale_snapshot(caplog):
         bot=bot,
         risk_manager=SimpleNamespace(update_positions=lambda *_: None, update_pending_orders=lambda *_: None),
         holdings_updater=lambda *args, **kwargs: 0.0,
-        session_stats_applier=lambda *args, **kwargs: None,
+        portfolio_stats_applier=lambda *args, **kwargs: None,
     )
     resync.set_portfolio(1)
 
@@ -239,7 +239,7 @@ async def test_sync_trades_processes_and_records_ids():
         bot=bot,
         risk_manager=SimpleNamespace(),
         holdings_updater=lambda *args, **kwargs: 0.0,
-        session_stats_applier=lambda *args, **kwargs: None,
+        portfolio_stats_applier=lambda *args, **kwargs: None,
     )
     resync.set_portfolio(1)
 
@@ -286,7 +286,7 @@ async def test_sync_trades_paginates_and_skips_duplicates():
         bot=bot,
         risk_manager=SimpleNamespace(),
         holdings_updater=lambda *args, **kwargs: 0.0,
-        session_stats_applier=lambda *args, **kwargs: None,
+        portfolio_stats_applier=lambda *args, **kwargs: None,
     )
     resync.set_portfolio(2)
 
@@ -318,7 +318,7 @@ async def test_sync_trades_noop_when_session_missing():
         bot=bot,
         risk_manager=SimpleNamespace(),
         holdings_updater=lambda *args, **kwargs: 0.0,
-        session_stats_applier=lambda *args, **kwargs: None,
+        portfolio_stats_applier=lambda *args, **kwargs: None,
     )
     resync.set_portfolio(0)
 

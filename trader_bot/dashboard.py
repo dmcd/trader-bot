@@ -25,10 +25,10 @@ from trader_bot.database import TradingDatabase
 cost_tracker = CostTracker(ACTIVE_EXCHANGE, llm_provider=LLM_PROVIDER)
 
 
-def resolve_base_currency(session_stats, fallback="USD"):
-    """Prefer explicit base currency hints from session stats."""
-    if session_stats:
-        return session_stats.get("base_currency") or fallback
+def resolve_base_currency(portfolio_stats, fallback="USD"):
+    """Prefer explicit base currency hints from portfolio stats."""
+    if portfolio_stats:
+        return portfolio_stats.get("base_currency") or fallback
     return fallback
 
 
@@ -73,10 +73,10 @@ def extract_circuit_status(health_states):
     return summary
 
 
-def build_venue_status_payload(exchange: str, session_stats, ib_session_stats=None, health_states=None, now: datetime | None = None):
-    # Prefer explicit base currency hints from the current session; fall back to IB metadata if present.
-    fallback_ccy = resolve_base_currency(ib_session_stats, "USD")
-    base_currency = resolve_base_currency(session_stats, fallback_ccy)
+def build_venue_status_payload(exchange: str, portfolio_stats, ib_portfolio_stats=None, health_states=None, now: datetime | None = None):
+    # Prefer explicit base currency hints from the current portfolio; fall back to IB metadata if present.
+    fallback_ccy = resolve_base_currency(ib_portfolio_stats, "USD")
+    base_currency = resolve_base_currency(portfolio_stats, fallback_ccy)
     return {
         "venue": exchange or "Unknown",
         "base_currency": base_currency,
@@ -398,12 +398,12 @@ def load_trade_plans(portfolio_id):
         db.close()
 
 
-def get_llm_burn_stats(session_stats):
-    if not session_stats:
+def get_llm_burn_stats(portfolio_stats):
+    if not portfolio_stats:
         return None
     try:
-        start = session_stats.get("created_at") or session_stats.get("date")
-        total = session_stats.get("total_llm_cost", 0.0) or 0.0
+        start = portfolio_stats.get("created_at") or portfolio_stats.get("date")
+        total = portfolio_stats.get("total_llm_cost", 0.0) or 0.0
         return cost_tracker.calculate_llm_burn(total, start, budget=LLM_MAX_SESSION_COST)
     except Exception:
         return None
@@ -456,21 +456,21 @@ if current_portfolio_id is None and available_portfolios:
     current_portfolio_id = available_portfolios[0]["id"]
 db_version_lookup.close()
 health_states = load_health_state()
-session_stats, portfolio_id = load_portfolio_stats(current_portfolio_id)
+portfolio_stats, portfolio_id = load_portfolio_stats(current_portfolio_id)
 current_trades_df = load_history(portfolio_id, user_timezone)
-venue_status = build_venue_status_payload(ACTIVE_EXCHANGE, session_stats, health_states=health_states)
+venue_status = build_venue_status_payload(ACTIVE_EXCHANGE, portfolio_stats, health_states=health_states)
 base_currency_label = venue_status.get("base_currency") or "USD"
 
 col_header, col_status = st.columns([3, 1])
 with col_header:
     st.title("🤖 Dennis-Day Trading Bot")
-    if session_stats:
-        if session_stats.get("portfolio_name"):
-            st.caption(f"Portfolio: {session_stats['portfolio_name']} (id {portfolio_id})")
-        if session_stats.get("run_id"):
-            last_seen = session_stats.get("run_updated_at")
+    if portfolio_stats:
+        if portfolio_stats.get("portfolio_name"):
+            st.caption(f"Portfolio: {portfolio_stats['portfolio_name']} (id {portfolio_id})")
+        if portfolio_stats.get("run_id"):
+            last_seen = portfolio_stats.get("run_updated_at")
             suffix = f" · last seen {last_seen}" if last_seen else ""
-            st.caption(f"Run ID: {session_stats['run_id']}{suffix}")
+            st.caption(f"Run ID: {portfolio_stats['run_id']}{suffix}")
 with col_status:
     st.markdown(f"<div style='padding-top: 20px;'>{format_venue_badge(venue_status.get('venue'), base_currency_label)}</div>", unsafe_allow_html=True)
 
@@ -534,7 +534,7 @@ with tab_live:
         st.subheader("📊 Current Performance")
         df = current_trades_df.copy()
         
-        if session_stats and not df.empty:
+        if portfolio_stats and not df.empty:
             symbols = df['symbol'].unique()
             current_prices = get_latest_prices(portfolio_id, symbols)
             realized_pnl, unrealized_pnl, active_positions, df, exposure, trade_spacing = calculate_pnl(df, current_prices)
@@ -556,8 +556,8 @@ with tab_live:
             gross_pnl = realized_pnl + unrealized_pnl
             currency_symbol = base_currency_label
 
-            fees = session_stats.get('total_fees', 0)
-            llm_cost = session_stats.get('total_llm_cost', 0)
+            fees = portfolio_stats.get('total_fees', 0)
+            llm_cost = portfolio_stats.get('total_llm_cost', 0)
             net_pnl = gross_pnl - fees - llm_cost
             total_costs = fees + llm_cost
             
@@ -577,13 +577,13 @@ with tab_live:
             c1.metric("Total Fees", format_currency_value(fees, currency_symbol))
             c2.metric("LLM Costs", f"{currency_symbol} {llm_cost:,.4f}")
             c3.metric("Total Costs", format_currency_value(total_costs, currency_symbol))
-            c4.metric("Total Trades", session_stats.get('total_trades', 0))
+            c4.metric("Total Trades", portfolio_stats.get('total_trades', 0))
             if fee_badge:
                 c1.markdown(f"<div style='margin-top:-8px;'>{fee_badge}</div>", unsafe_allow_html=True)
             if cost_badge:
                 c3.markdown(f"<div style='margin-top:-8px;'>{cost_badge}</div>", unsafe_allow_html=True)
 
-            burn_stats = get_llm_burn_stats(session_stats)
+            burn_stats = get_llm_burn_stats(portfolio_stats)
             if burn_stats:
                 burn_rate = burn_stats.get("burn_rate_per_hour", 0.0)
                 pct_budget = burn_stats.get("pct_of_budget", 0.0) * 100
@@ -637,9 +637,9 @@ with tab_live:
                 width="stretch"
             )
 
-        elif session_stats:
+        elif portfolio_stats:
             st.info("Bot version started, waiting for trades...")
-            st.metric("Starting Balance", f"${session_stats.get('starting_balance', 0):,.2f}")
+            st.metric("Starting Balance", f"${portfolio_stats.get('starting_balance', 0):,.2f}")
         else:
             st.warning("No session stats available for this version.")
         
@@ -663,7 +663,7 @@ with tab_live:
             st.info("No trade history for this version yet.")
 
     with col2:
-        if session_stats and portfolio_id:
+        if portfolio_stats and portfolio_id:
             st.subheader("📌 Open Orders")
             open_orders = load_open_orders(portfolio_id)
             if open_orders:
@@ -709,13 +709,13 @@ with tab_live:
 
 with tab_costs:
     st.subheader("💵 Portfolio Costs")
-    if not session_stats:
+    if not portfolio_stats:
         st.info("No portfolio data available yet.")
     else:
-        total_fees = session_stats.get('total_fees', 0.0) or 0.0
-        total_llm_cost = session_stats.get('total_llm_cost', 0.0) or 0.0
-        gross_pnl = session_stats.get('gross_pnl', 0.0) or 0.0
-        net_pnl = session_stats.get('net_pnl', 0.0) or (gross_pnl - total_fees - total_llm_cost)
+        total_fees = portfolio_stats.get('total_fees', 0.0) or 0.0
+        total_llm_cost = portfolio_stats.get('total_llm_cost', 0.0) or 0.0
+        gross_pnl = portfolio_stats.get('gross_pnl', 0.0) or 0.0
+        net_pnl = portfolio_stats.get('net_pnl', 0.0) or (gross_pnl - total_fees - total_llm_cost)
         total_costs = total_fees + total_llm_cost
         cost_ratio = (total_costs / abs(gross_pnl) * 100) if gross_pnl else None
 
@@ -727,9 +727,9 @@ with tab_costs:
         c4, c5, c6 = st.columns(3)
         c4.metric("Net PnL", format_currency_value(net_pnl, base_currency_label))
         c5.metric("Gross PnL", format_currency_value(gross_pnl, base_currency_label))
-        c6.metric("Total Trades", session_stats.get('total_trades', 0))
+        c6.metric("Total Trades", portfolio_stats.get('total_trades', 0))
 
-        burn_stats = get_llm_burn_stats(session_stats)
+        burn_stats = get_llm_burn_stats(portfolio_stats)
         if burn_stats:
             burn_rate = burn_stats.get("burn_rate_per_hour", 0.0)
             pct_budget = burn_stats.get("pct_of_budget", 0.0) * 100

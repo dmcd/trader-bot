@@ -381,7 +381,7 @@ async def test_kill_switch_stops_loop(circuit_runner):
 
 
 def test_operational_metrics_emit_health_state(circuit_runner):
-    circuit_runner.session_stats = {"gross_pnl": 100.0, "total_fees": 10.0, "total_llm_cost": 2.0}
+    circuit_runner.portfolio_stats = {"gross_pnl": 100.0, "total_fees": 10.0, "total_llm_cost": 2.0}
     circuit_runner.cost_tracker = MagicMock()
     circuit_runner.cost_tracker.calculate_llm_burn.return_value = {
         "remaining_budget": 8.0,
@@ -399,7 +399,7 @@ def test_operational_metrics_emit_health_state(circuit_runner):
 
 
 def test_equity_sanity_health_state(circuit_runner):
-    circuit_runner.session_stats = {"gross_pnl": 0.0, "total_fees": 0.0, "total_llm_cost": 0.0}
+    circuit_runner.portfolio_stats = {"gross_pnl": 0.0, "total_fees": 0.0, "total_llm_cost": 0.0}
     circuit_runner.starting_equity = 1000.0
     circuit_runner._sanity_check_equity_vs_stats(current_equity=800.0)
     health = {row["key"]: row for row in circuit_runner.db.get_health_state()}
@@ -434,7 +434,7 @@ class TestActionHandling(unittest.IsolatedAsyncioTestCase):
         self.runner.db.update_trade_plan_status = MagicMock()
         self.runner.db.log_trade_for_portfolio = MagicMock()
         self.runner.db.get_positions_for_portfolio = MagicMock(return_value=[{"symbol": "BTC/USD", "quantity": 0.2, "avg_price": 100}])
-        self.runner._apply_fill_to_session_stats = MagicMock()
+        self.runner._apply_fill_to_portfolio_stats = MagicMock()
         self.runner._update_holdings_and_realized = MagicMock(return_value=0.0)
         self.runner.cost_tracker = MagicMock()
         self.runner.cost_tracker.calculate_trade_fee.return_value = 0.1
@@ -534,7 +534,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.bot = MagicMock()
         self.runner.cost_tracker = MagicMock()
         self.runner.cost_tracker.calculate_trade_fee.return_value = 1.0
-        self.runner._apply_fill_to_session_stats = Mock(return_value=None)
+        self.runner._apply_fill_to_portfolio_stats = Mock(return_value=None)
         self._refresh_monitor_bindings()
 
     def _refresh_monitor_bindings(self):
@@ -560,7 +560,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
             risk_manager=self.runner.risk_manager,
             prefer_maker=self.runner._prefer_maker,
             holdings_updater=self.runner._update_holdings_and_realized,
-            session_stats_applier=self.runner._apply_fill_to_session_stats,
+            portfolio_stats_applier=self.runner._apply_fill_to_portfolio_stats,
             portfolio_id=self.runner.portfolio_id,
         )
 
@@ -837,16 +837,16 @@ def test_set_shutdown_reason_only_keeps_first():
 
 
 @pytest.mark.asyncio
-async def test_rebuild_session_stats_checks_equity(monkeypatch, tmp_path):
+async def test_rebuild_portfolio_stats_checks_equity(monkeypatch, tmp_path):
     monkeypatch.setenv("TRADING_DB_PATH", str(tmp_path / "rebuild-stats.db"))
     runner = StrategyRunner(execute_orders=False)
     runner.portfolio_tracker = MagicMock()
-    runner.portfolio_tracker.rebuild_session_stats_from_trades = MagicMock(return_value={"gross_pnl": 1.0})
+    runner.portfolio_tracker.rebuild_portfolio_stats_from_trades = MagicMock(return_value={"gross_pnl": 1.0})
     runner._sanity_check_equity_vs_stats = MagicMock()
-    await runner._rebuild_session_stats_from_trades(current_equity=123.0)
+    await runner._rebuild_portfolio_stats_from_trades(current_equity=123.0)
     runner.portfolio_tracker.set_portfolio.assert_called_with(runner.portfolio_id)
     runner._sanity_check_equity_vs_stats.assert_called_with(123.0)
-    assert runner.session_stats == {"gross_pnl": 1.0}
+    assert runner.portfolio_stats == {"gross_pnl": 1.0}
 
 
 @pytest.mark.asyncio

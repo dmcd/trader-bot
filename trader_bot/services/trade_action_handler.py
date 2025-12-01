@@ -272,7 +272,7 @@ class TradeActionHandler:
                 liquidity=order_result.get("liquidity") if order_result else "taker",
                 realized_pnl=realized,
             )
-            self.portfolio_tracker.apply_fill_to_session_stats(order_result.get("order_id") if order_result else None, fee, realized)
+            self.portfolio_tracker.apply_fill_to_portfolio_stats(order_result.get("order_id") if order_result else None, fee, realized)
             remaining_size = max(plan_size - close_qty, 0.0)
             try:
                 partial_reason = f"Partial close {close_fraction*100:.0f}%"
@@ -347,7 +347,7 @@ class TradeActionHandler:
                 liquidity=order_result.get("liquidity") if order_result else "taker",
                 realized_pnl=realized,
             )
-            self.portfolio_tracker.apply_fill_to_session_stats(order_result.get("order_id") if order_result else None, fee, realized)
+            self.portfolio_tracker.apply_fill_to_portfolio_stats(order_result.get("order_id") if order_result else None, fee, realized)
             telemetry_record["status"] = "close_position_executed"
             telemetry_record["order_result"] = order_result
             self._merge_ib_order_metadata(telemetry_record, order_result)

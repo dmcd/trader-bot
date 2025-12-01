@@ -179,7 +179,7 @@ class StrategyRunner:
             bot=self.bot,
             risk_manager=self.risk_manager,
             holdings_updater=self._update_holdings_and_realized,
-            session_stats_applier=self._apply_fill_to_session_stats,
+            portfolio_stats_applier=self._apply_fill_to_portfolio_stats,
             record_health_state=self._record_health_state,
             logger=logger,
             portfolio_id=self.portfolio_id,
@@ -201,7 +201,7 @@ class StrategyRunner:
         self.maker_preference_default = MAKER_PREFERENCE_DEFAULT
         self.maker_preference_overrides = MAKER_PREFERENCE_OVERRIDES or {}
         # Seed a default stats container so background tasks don't crash before initialization completes
-        self.session_stats = self.portfolio_tracker.session_stats
+        self.portfolio_stats = self.portfolio_tracker.portfolio_stats
         
         # Initialize Strategy
         self.strategy = LLMStrategy(
@@ -274,13 +274,13 @@ class StrategyRunner:
             risk_manager=self.risk_manager,
             prefer_maker=self._prefer_maker,
             holdings_updater=self._update_holdings_and_realized,
-            session_stats_applier=self._apply_fill_to_session_stats,
+            portfolio_stats_applier=self._apply_fill_to_portfolio_stats,
             max_total_exposure=MAX_TOTAL_EXPOSURE,
             portfolio_id=self.portfolio_id,
         )
 
     def _refresh_resync_bindings(self):
-        """Keep resync service aligned with current db/bot/session for tests and stubs."""
+        """Keep resync service aligned with current db/bot/portfolio for tests and stubs."""
         self.resync_service.db = self.db
         self.resync_service.bot = self.bot
         self.resync_service.risk_manager = self.risk_manager
@@ -406,10 +406,10 @@ class StrategyRunner:
 
     def _record_operational_metrics(self, current_exposure: float, current_equity: float):
         """Emit health metrics for risk counters and LLM budget."""
-        llm_cost = (self.session_stats or {}).get("total_llm_cost", 0.0) or 0.0
+        llm_cost = (self.portfolio_stats or {}).get("total_llm_cost", 0.0) or 0.0
         try:
-            gross = (self.session_stats or {}).get("gross_pnl", 0.0) or 0.0
-            fees = (self.session_stats or {}).get("total_fees", 0.0) or 0.0
+            gross = (self.portfolio_stats or {}).get("gross_pnl", 0.0) or 0.0
+            fees = (self.portfolio_stats or {}).get("total_fees", 0.0) or 0.0
             net = gross - fees - llm_cost
             fee_ratio = fees / max(abs(gross), 1.0)
             try:
@@ -498,7 +498,7 @@ class StrategyRunner:
     def _apply_exchange_trades_for_rebuild(self, trades: list) -> dict:
         """Delegate trade replay to portfolio tracker (kept for compatibility)."""
         stats = self.portfolio_tracker.apply_exchange_trades_for_rebuild(trades)
-        self.session_stats = self.portfolio_tracker.session_stats
+        self.portfolio_stats = self.portfolio_tracker.portfolio_stats
         return stats
 
     def _apply_volatility_sizing(self, quantity: float, regime_flags: dict) -> float:
@@ -543,7 +543,7 @@ class StrategyRunner:
     def _capture_sandbox_position_baseline(self, positions: list | None):
         """
         Record the initial sandbox inventory so exposure snapshots only reflect
-        positions opened/closed during this session.
+        positions opened/closed during this run.
         """
         if not self.sandbox_ignore_positions or not positions:
             return
@@ -733,7 +733,7 @@ class StrategyRunner:
             risk_manager=self.risk_manager,
             prefer_maker=self._prefer_maker,
             holdings_updater=self._update_holdings_and_realized,
-            session_stats_applier=self._apply_fill_to_session_stats,
+            portfolio_stats_applier=self._apply_fill_to_portfolio_stats,
             portfolio_id=self.portfolio_id,
         )
         await self.orchestrator.monitor_trade_plans(
@@ -788,7 +788,7 @@ class StrategyRunner:
         self.portfolio_tracker.set_portfolio(self.portfolio_id)
         self.resync_service.set_portfolio(self.portfolio_id)
 
-        # Clear any old pending commands from previous sessions
+        # Clear any old pending commands from previous runs
         self.db.clear_old_commands()
         try:
             self.db.prune_commands(COMMAND_RETENTION_DAYS)
@@ -807,12 +807,12 @@ class StrategyRunner:
         # Drop any stale open orders lingering from prior runs and sync with venue
         await self._reconcile_exchange_state()
 
-        # Initialize session stats with persistence awareness
-        logger.info("Initializing session stats...")
+        # Initialize portfolio stats with persistence awareness
+        logger.info("Initializing portfolio stats...")
         _, cache_hit = self.portfolio_tracker.load_cached_stats()
         if cache_hit:
-            self.session_stats = dict(self.portfolio_tracker.session_stats)
-            logger.info(f"Loaded portfolio stats from cache: {self.session_stats}")
+            self.portfolio_stats = dict(self.portfolio_tracker.portfolio_stats)
+            logger.info(f"Loaded portfolio stats from cache: {self.portfolio_stats}")
         else:
             logger.info("No cached portfolio stats found; rebuilding from exchange trades...")
             start_ts_ms = 0
@@ -833,13 +833,13 @@ class StrategyRunner:
             self._apply_exchange_trades_for_rebuild(trades)
 
             db_stats = self.db.get_portfolio_stats(self.portfolio_id)
-            self.session_stats['total_llm_cost'] = db_stats.get('total_llm_cost', 0.0)
-            self.portfolio_tracker.session_stats = self.session_stats
+            self.portfolio_stats['total_llm_cost'] = db_stats.get('total_llm_cost', 0.0)
+            self.portfolio_tracker.portfolio_stats = self.portfolio_stats
             try:
                 self.portfolio_tracker._persist_stats_cache()
             except Exception as exc:
                 logger.debug(f"Could not persist rebuilt stats cache: {exc}")
-            logger.info(f"Portfolio Stats Rebuilt: {self.session_stats}")
+            logger.info(f"Portfolio Stats Rebuilt: {self.portfolio_stats}")
 
         # Seed risk manager with current equity for telemetry
         self.risk_manager.update_equity(initial_equity)
@@ -856,25 +856,25 @@ class StrategyRunner:
     def _update_holdings_and_realized(self, symbol: str, action: str, quantity: float, price: float, fee: float) -> float:
         """Delegate holdings/PnL updates to portfolio tracker (kept for compatibility)."""
         realized = self.portfolio_tracker.update_holdings_and_realized(symbol, action, quantity, price, fee)
-        self.session_stats = self.portfolio_tracker.session_stats
+        self.portfolio_stats = self.portfolio_tracker.portfolio_stats
         return realized
 
     def _apply_trade_to_holdings(self, symbol: str, action: str, quantity: float, price: float):
         """Delegate to portfolio tracker."""
         self.portfolio_tracker.apply_trade_to_holdings(symbol, action, quantity, price)
-        self.session_stats = self.portfolio_tracker.session_stats
+        self.portfolio_stats = self.portfolio_tracker.portfolio_stats
 
     def _load_holdings_from_db(self):
         """Rebuild holdings via portfolio tracker."""
         self.portfolio_tracker.set_portfolio(self.portfolio_id)
         self.portfolio_tracker.load_holdings_from_db()
-        self.session_stats = self.portfolio_tracker.session_stats
+        self.portfolio_stats = self.portfolio_tracker.portfolio_stats
 
-    def _apply_fill_to_session_stats(self, order_id: str, actual_fee: float, realized_pnl: float):
-        """Delegate session accounting to portfolio tracker (kept for compatibility)."""
+    def _apply_fill_to_portfolio_stats(self, order_id: str, actual_fee: float, realized_pnl: float):
+        """Delegate portfolio accounting to portfolio tracker."""
         self.portfolio_tracker.set_portfolio(self.portfolio_id)
-        self.portfolio_tracker.apply_fill_to_session_stats(order_id, actual_fee, realized_pnl, estimated_fee_map=self._estimated_fees)
-        self.session_stats = self.portfolio_tracker.session_stats
+        self.portfolio_tracker.apply_fill_to_portfolio_stats(order_id, actual_fee, realized_pnl, estimated_fee_map=self._estimated_fees)
+        self.portfolio_stats = self.portfolio_tracker.portfolio_stats
 
     def _sanity_check_equity_vs_stats(self, current_equity: float):
         """Compare estimated net PnL vs equity delta; log if off by >10%."""
@@ -892,9 +892,9 @@ class StrategyRunner:
             if starting is None:
                 return
             estimated_net = (
-                self.session_stats.get('gross_pnl', 0.0)
-                - self.session_stats.get('total_fees', 0.0)
-                - self.session_stats.get('total_llm_cost', 0.0)
+                self.portfolio_stats.get('gross_pnl', 0.0)
+                - self.portfolio_stats.get('total_fees', 0.0)
+                - self.portfolio_stats.get('total_llm_cost', 0.0)
             )
             actual_net = current_equity - starting
             diff = actual_net - estimated_net
@@ -917,11 +917,11 @@ class StrategyRunner:
         except Exception as e:
             logger.debug(f"Equity sanity check failed: {e}")
 
-    async def _rebuild_session_stats_from_trades(self, current_equity: float = None):
-        """Recompute session_stats from recorded trades and update cache via portfolio tracker."""
+    async def _rebuild_portfolio_stats_from_trades(self, current_equity: float = None):
+        """Recompute portfolio_stats from recorded trades and update cache via portfolio tracker."""
         self.portfolio_tracker.set_portfolio(self.portfolio_id)
-        self.session_stats = self.portfolio_tracker.rebuild_session_stats_from_trades(current_equity)
-        logger.info(f"Session stats rebuilt from trades: {self.session_stats}")
+        self.portfolio_stats = self.portfolio_tracker.rebuild_portfolio_stats_from_trades(current_equity)
+        logger.info(f"Portfolio stats rebuilt from trades: {self.portfolio_stats}")
         if current_equity is not None:
             self._sanity_check_equity_vs_stats(current_equity)
 
@@ -992,23 +992,23 @@ class StrategyRunner:
         logger.info(f"Cleaning up connections... (reason: {self.shutdown_reason or 'unspecified'})")
         bot_actions_logger.info(f"🧹 Cleanup starting (reason: {self.shutdown_reason or 'unspecified'})")
         
-        # Save final session statistics
+        # Save final portfolio statistics
         if self.portfolio_id:
             try:
                 # Get final equity snapshot
                 final_equity = await self.bot.get_equity_async()
                 
-                # Get session stats and rebuild to ensure consistency
-                session_stats = self.db.get_portfolio_stats(self.portfolio_id)
+                # Get portfolio stats and rebuild to ensure consistency
+                portfolio_stats = self.db.get_portfolio_stats(self.portfolio_id)
                 try:
-                    await self._rebuild_session_stats_from_trades(final_equity)
-                    session_stats = self.db.get_portfolio_stats(self.portfolio_id)
+                    await self._rebuild_portfolio_stats_from_trades(final_equity)
+                    portfolio_stats = self.db.get_portfolio_stats(self.portfolio_id)
                 except Exception as e:
                     logger.debug(f"Could not rebuild stats on cleanup: {e}")
                 
                 # Calculate PnL using fee-exclusive realized and separate fees
-                gross_pnl = session_stats.get('gross_pnl', 0.0) or 0.0
-                net_pnl = gross_pnl - (session_stats.get('total_fees', 0.0) or 0.0) - (session_stats.get('total_llm_cost', 0.0) or 0.0)
+                gross_pnl = portfolio_stats.get('gross_pnl', 0.0) or 0.0
+                net_pnl = gross_pnl - (portfolio_stats.get('total_fees', 0.0) or 0.0) - (portfolio_stats.get('total_llm_cost', 0.0) or 0.0)
                 equity_delta = final_equity - (self.starting_equity or final_equity)
                 try:
                     self.db.log_equity_snapshot_for_portfolio(self.portfolio_id, final_equity)
@@ -1019,21 +1019,21 @@ class StrategyRunner:
                 bot_actions_logger.info("=" * 50)
                 bot_actions_logger.info("📊 PORTFOLIO SUMMARY")
                 bot_actions_logger.info("=" * 50)
-                bot_actions_logger.info(f"Total Trades: {session_stats['total_trades']}")
+                bot_actions_logger.info(f"Total Trades: {portfolio_stats['total_trades']}")
                 bot_actions_logger.info(f"Gross PnL (ex-fee): ${gross_pnl:,.2f}")
-                bot_actions_logger.info(f"Trading Fees: ${session_stats['total_fees']:.2f}")
-                bot_actions_logger.info(f"LLM Costs: ${session_stats['total_llm_cost']:.4f}")
+                bot_actions_logger.info(f"Trading Fees: ${portfolio_stats['total_fees']:.2f}")
+                bot_actions_logger.info(f"LLM Costs: ${portfolio_stats['total_llm_cost']:.4f}")
                 bot_actions_logger.info(f"Net PnL: ${net_pnl:,.2f}")
                 bot_actions_logger.info(f"Equity Delta (broker): ${equity_delta:,.2f}")
                 
                 if net_pnl > 0:
-                    bot_actions_logger.info(f"✅ Profitable session!")
+                    bot_actions_logger.info("✅ Profitable run!")
                 else:
-                    bot_actions_logger.info(f"❌ Unprofitable session")
+                    bot_actions_logger.info("❌ Unprofitable run")
                 bot_actions_logger.info("=" * 50)
                 
             except Exception as e:
-                logger.error(f"Error saving session stats: {e}")
+                logger.error(f"Error saving portfolio stats: {e}")
         
         # Close bot connection
         try:
@@ -1305,22 +1305,22 @@ class StrategyRunner:
                         logger.warning(f"Trade sync failed: {e}")
                         self.health_manager.record_exchange_failure("sync_trades_from_exchange", e)
                         exchange_error_seen = True
-                    # Keep session stats cache fresh if DB trades grew
+                    # Keep portfolio stats cache fresh if DB trades grew
                     try:
                         db_trade_count = self.db.get_trade_count_for_portfolio(self.portfolio_id)
-                        if db_trade_count > self.session_stats.get('total_trades', 0):
-                            await self._rebuild_session_stats_from_trades(current_equity)
+                        if db_trade_count > self.portfolio_stats.get('total_trades', 0):
+                            await self._rebuild_portfolio_stats_from_trades(current_equity)
                     except Exception as e:
                         logger.debug(f"Could not refresh stats cache mid-loop: {e}")
 
                     # 3. Generate Signal via Strategy
-                    # Pass session_stats explicitly
+                    # Pass portfolio_stats explicitly
                     signal = await self.strategy.generate_signal(
                         market_data,
                         current_equity,
                         current_exposure,
                         self.context,
-                        session_stats=self.session_stats
+                        portfolio_stats=self.portfolio_stats
                     )
 
                     # 4. Execute Signal

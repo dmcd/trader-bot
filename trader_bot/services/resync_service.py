@@ -22,7 +22,7 @@ class ResyncService:
         bot: Any,
         risk_manager: Any,
         holdings_updater: Callable[[str, str, float, float, float], float],
-        session_stats_applier: Callable[[str, float, float], None],
+        portfolio_stats_applier: Callable[[str, float, float], None] | None,
         record_health_state: Optional[Callable[[str, str, Optional[dict]], None]] = None,
         logger: Optional[logging.Logger] = None,
         trade_sync_cutoff_minutes: int = TRADE_SYNC_CUTOFF_MINUTES,
@@ -32,7 +32,7 @@ class ResyncService:
         self.bot = bot
         self.risk_manager = risk_manager
         self.holdings_updater = holdings_updater
-        self.session_stats_applier = session_stats_applier
+        self.portfolio_stats_applier = portfolio_stats_applier
         self.record_health_state = record_health_state or (lambda *_: None)
         self.logger = logger or logging.getLogger(__name__)
         self.portfolio_id: Optional[int] = portfolio_id
@@ -303,7 +303,8 @@ class ResyncService:
                             trade_id=trade_id,
                             timestamp=trade.get("datetime"),
                         )
-                        self.session_stats_applier(order_id, fee, realized_pnl)
+                        if self.portfolio_stats_applier is not None:
+                            self.portfolio_stats_applier(order_id, fee, realized_pnl)
                         processed_trade_ids.add(trade_id)
                         new_processed.add((trade_id, client_oid))
                         self.logger.info(f"✅ Synced trade: {side} {quantity} {symbol} @ ${price:,.2f} (Fee: ${fee:.4f})")

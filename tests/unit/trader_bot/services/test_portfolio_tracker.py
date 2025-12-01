@@ -31,17 +31,17 @@ def test_apply_fill_updates_holdings_and_stats():
     # Buy 1 @ 100, then sell 0.5 @ 110 with $1 fee
     tracker.update_holdings_and_realized("BTC/USD", "BUY", 1.0, 100.0, 0.0)
     realized = tracker.update_holdings_and_realized("BTC/USD", "SELL", 0.5, 110.0, 1.0)
-    tracker.apply_fill_to_session_stats(order_id="abc", actual_fee=1.0, realized_pnl=realized, estimated_fee_map={"abc": 0.2})
+    tracker.apply_fill_to_portfolio_stats(order_id="abc", actual_fee=1.0, realized_pnl=realized, estimated_fee_map={"abc": 0.2})
 
     assert tracker.holdings["BTC/USD"]["qty"] == pytest.approx(0.5)
-    assert tracker.session_stats["total_trades"] == 1
-    assert tracker.session_stats["total_fees"] == pytest.approx(1.0)
-    assert tracker.session_stats["gross_pnl"] == pytest.approx(5.0)
+    assert tracker.portfolio_stats["total_trades"] == 1
+    assert tracker.portfolio_stats["total_fees"] == pytest.approx(1.0)
+    assert tracker.portfolio_stats["gross_pnl"] == pytest.approx(5.0)
     # Cache write captured on portfolio scope
     assert db.cached_stats_portfolio[0] == 99
 
 
-def test_rebuild_session_stats_from_trades_applies_fees_and_realized():
+def test_rebuild_portfolio_stats_from_trades_applies_fees_and_realized():
     db = FakeDB()
     db.trades = [
         {"symbol": "ETH/USD", "action": "BUY", "quantity": 1.0, "price": 2000.0, "fee": {"cost": 0.5}},
@@ -50,7 +50,7 @@ def test_rebuild_session_stats_from_trades_applies_fees_and_realized():
     db.portfolio_stats_row = {"total_llm_cost": 2.0}
     tracker = PortfolioTracker(db, portfolio_id=55, logger=logging.getLogger("test"))
 
-    stats = tracker.rebuild_session_stats_from_trades()
+    stats = tracker.rebuild_portfolio_stats_from_trades()
 
     assert stats["total_trades"] == 2
     assert stats["total_fees"] == pytest.approx(1.0)
@@ -149,6 +149,6 @@ def test_update_exposure_notional_persists_cache():
 
     tracker.update_exposure_notional(125.5)
 
-    assert tracker.session_stats["exposure_notional"] == pytest.approx(125.5)
+    assert tracker.portfolio_stats["exposure_notional"] == pytest.approx(125.5)
     assert db.cached_stats_portfolio[0] == 11
     assert db.cached_stats_portfolio[1]["exposure_notional"] == pytest.approx(125.5)

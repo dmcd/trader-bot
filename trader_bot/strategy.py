@@ -240,17 +240,17 @@ class LLMStrategy(BaseStrategy):
             logger.warning(f"Priority signal error: {e}")
         return False
 
-    def _fees_too_high(self, session_stats: Dict[str, Any]):
+    def _fees_too_high(self, portfolio_stats: Dict[str, Any]):
         """
         Check fee ratio vs gross PnL; returns True to pause when fees dominate.
         """
         try:
-            if not isinstance(session_stats, dict):
-                logger.warning(f"Invalid session_stats type: {type(session_stats)}")
+            if not isinstance(portfolio_stats, dict):
+                logger.warning(f"Invalid portfolio_stats type: {type(portfolio_stats)}")
                 return False
                 
-            gross = session_stats.get('gross_pnl', 0) or 0
-            fees = session_stats.get('total_fees', 0) or 0
+            gross = portfolio_stats.get('gross_pnl', 0) or 0
+            fees = portfolio_stats.get('total_fees', 0) or 0
             if gross == 0:
                 return False
             ratio = (fees / abs(gross)) * 100
@@ -355,7 +355,7 @@ class LLMStrategy(BaseStrategy):
 
         return flags
 
-    async def generate_signal(self, market_data: Dict[str, Any], current_equity: float, current_exposure: float, context: Any = None, session_stats: Dict[str, Any] = None) -> Optional[StrategySignal]:
+    async def generate_signal(self, market_data: Dict[str, Any], current_equity: float, current_exposure: float, context: Any = None, portfolio_stats: Dict[str, Any] = None) -> Optional[StrategySignal]:
         if not market_data:
             return None
 
@@ -367,13 +367,13 @@ class LLMStrategy(BaseStrategy):
         now_ts = asyncio.get_event_loop().time()
 
         # LLM cost/frequency guards (HOLD instead of burning tokens)
-        total_llm_cost = (session_stats or {}).get('total_llm_cost', 0.0) if session_stats else 0.0
+        total_llm_cost = (portfolio_stats or {}).get('total_llm_cost', 0.0) if portfolio_stats else 0.0
         burn_stats = None
         try:
-            if session_stats is not None:
+            if portfolio_stats is not None:
                 burn_stats = self.cost_tracker.calculate_llm_burn(
                     total_llm_cost=total_llm_cost,
-                    session_started=session_stats.get('created_at') or session_stats.get('date'),
+                    session_started=portfolio_stats.get('created_at') or portfolio_stats.get('date'),
                     budget=LLM_MAX_SESSION_COST,
                 )
         except Exception:
@@ -388,7 +388,7 @@ class LLMStrategy(BaseStrategy):
         regime_flags = {}
 
         # 1. Fee Check
-        if session_stats and self._fees_too_high(session_stats):
+        if portfolio_stats and self._fees_too_high(portfolio_stats):
             logger.info("Skipping trading due to high fee ratio")
             return None
 
@@ -443,7 +443,7 @@ class LLMStrategy(BaseStrategy):
 
         last_trade_age = (now_ts - self.last_trade_ts) if self.last_trade_ts else None
         last_trade_age_str = f"{last_trade_age:.0f}s" if last_trade_age is not None else "n/a"
-        fee_ratio_flag = "high" if (session_stats and self._fees_too_high(session_stats)) else "normal"
+        fee_ratio_flag = "high" if (portfolio_stats and self._fees_too_high(portfolio_stats)) else "normal"
         priority_flag = "true" if priority and allow_break_glass else "false"
         spacing_flag = "clear" if can_trade else f"cooldown {MIN_TRADE_INTERVAL_SECONDS - (now_ts - self.last_trade_ts):.0f}s"
         

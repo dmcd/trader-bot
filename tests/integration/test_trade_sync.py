@@ -122,7 +122,7 @@ async def test_sync_trades_ignores_missing_client_ids():
     runner.db = StubDB()
     runner.bot = StubBot([trade_missing_oid, trade_with_oid])
     runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
-    runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
+    runner._apply_fill_to_portfolio_stats = lambda *args, **kwargs: None
     runner.order_reasons = {"order-1": "LLM signal"}
     runner.portfolio_id = 1
 
@@ -144,7 +144,7 @@ async def test_sync_trades_uses_plan_reason_fallback():
     runner.db = StubDB(plan_reason="Plan reason")
     runner.bot = StubBot([trade_with_reason])
     runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
-    runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
+    runner._apply_fill_to_portfolio_stats = lambda *args, **kwargs: None
     runner.order_reasons = {}  # ensure cache miss
     runner.portfolio_id = 2
 
@@ -163,7 +163,7 @@ async def test_sync_trades_skips_unattributed_trades():
     runner.db = StubDB(plan_reason=None)
     runner.bot = StubBot([trade_unknown])
     runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
-    runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
+    runner._apply_fill_to_portfolio_stats = lambda *args, **kwargs: None
     runner.order_reasons = {}  # no cached reason
     runner.portfolio_id = 4
 
@@ -187,7 +187,7 @@ async def test_sync_trades_respects_cutoff(monkeypatch):
     runner.db = StubDB(plan_reason=None)
     runner.bot = StubBot([old_trade])
     runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
-    runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
+    runner._apply_fill_to_portfolio_stats = lambda *args, **kwargs: None
     runner.order_reasons = {"order-old": "LLM reason"}
     runner.portfolio_id = 6
 
@@ -210,7 +210,7 @@ async def test_sync_trades_skips_invalid_symbols():
     runner.db = SymbolDB()
     runner.bot = StubBot([])
     runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
-    runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
+    runner._apply_fill_to_portfolio_stats = lambda *args, **kwargs: None
     runner.portfolio_id = 3
 
     await runner.sync_trades_from_exchange()
@@ -236,7 +236,7 @@ async def test_sync_trades_records_reported_liquidity(liquidity_fields, expected
     runner.db = StubDB(plan_reason="LLM reason")
     runner.bot = StubBot([trade_liq])
     runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
-    runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
+    runner._apply_fill_to_portfolio_stats = lambda *args, **kwargs: None
     runner.order_reasons = {}
     runner.portfolio_id = 5
 
@@ -349,7 +349,7 @@ async def test_processed_trade_ids_persist_across_runs(test_db_path):
     runner.db = db
     runner.bot = StubBot([orphan_trade])
     runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
-    runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
+    runner._apply_fill_to_portfolio_stats = lambda *args, **kwargs: None
     runner.order_reasons = {}
 
     try:
@@ -364,7 +364,7 @@ async def test_processed_trade_ids_persist_across_runs(test_db_path):
         runner2.db = db
         runner2.bot = StubBot([orphan_trade])
         runner2._update_holdings_and_realized = lambda *args, **kwargs: 0.0
-        runner2._apply_fill_to_session_stats = lambda *args, **kwargs: None
+        runner2._apply_fill_to_portfolio_stats = lambda *args, **kwargs: None
         runner2.order_reasons = {"order-repeat": "Recovered reason"}
         runner2.portfolio_id = portfolio_id
 

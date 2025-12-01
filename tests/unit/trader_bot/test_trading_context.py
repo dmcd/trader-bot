@@ -32,12 +32,12 @@ class TestTradingContext(unittest.TestCase):
     def test_context_summary_contains_key_sections(self):
         summary = self.context.get_context_summary("BTC/USD")
         parsed = json.loads(summary)
-        self.assertIn("session", parsed)
+        self.assertIn("portfolio", parsed)
         self.assertIn("positions", parsed)
         self.assertIn("open_orders", parsed)
         self.assertIn("recent_trades", parsed)
         self.assertIn("trend_pct", parsed)
-        self.assertIn("win_rate_pct", parsed["session"])
+        self.assertIn("win_rate_pct", parsed["portfolio"])
         self.assertIn("venue", parsed)
 
     def test_memory_snapshot_is_capped_and_includes_plans_and_traces(self):
@@ -118,7 +118,7 @@ class TestTradingContext(unittest.TestCase):
         ] + [{"order_id": "ignored", "clientOrderId": "OTHER", "symbol": "BTC/USD", "side": "buy", "price": 1, "amount": 0.01, "remaining": 0.01, "status": "open"}]
 
         summary = json.loads(self.context.get_context_summary("BTC/USD", open_orders=open_orders))
-        self.assertEqual(summary["session"]["win_rate_pct"], 50.0)
+        self.assertEqual(summary["portfolio"]["win_rate_pct"], 50.0)
         self.assertIsNotNone(summary["trend_pct"])
         self.assertEqual(len(summary["positions"]), 5)
         self.assertEqual(len(summary["open_orders"]), 5)
@@ -127,9 +127,9 @@ class TestTradingContext(unittest.TestCase):
     def test_context_summary_uses_equity_baseline(self):
         self.db.log_equity_snapshot_for_portfolio(self.portfolio_id, 1234.5, timestamp="2024-01-01T00:00:00Z")
         summary = json.loads(self.context.get_context_summary("BTC/USD"))
-        session = summary["session"]
-        self.assertEqual(session["starting_balance"], 1234.5)
-        self.assertIsNotNone(session["baseline_timestamp"])
+        portfolio = summary["portfolio"]
+        self.assertEqual(portfolio["starting_balance"], 1234.5)
+        self.assertIsNotNone(portfolio["baseline_timestamp"])
 
     def test_memory_snapshot_trims_large_payloads(self):
         for i in range(3):

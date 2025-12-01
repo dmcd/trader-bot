@@ -21,8 +21,8 @@ def handler():
     cost_tracker.calculate_trade_fee.return_value = 1.0
     portfolio = MagicMock()
     portfolio.update_holdings_and_realized.return_value = 5.0
-    portfolio.apply_fill_to_session_stats.return_value = None
-    portfolio.session_stats = {}
+    portfolio.apply_fill_to_portfolio_stats.return_value = None
+    portfolio.portfolio_stats = {}
     health_manager = MagicMock()
     telemetry = []
     handler = TradeActionHandler(
@@ -79,7 +79,7 @@ async def test_partial_close_executes_and_updates_plan(handler):
 
     handler.db.log_trade_for_portfolio.assert_called_once()
     handler.db.update_trade_plan_size.assert_called_once()
-    handler.portfolio_tracker.apply_fill_to_session_stats.assert_called_once()
+    handler.portfolio_tracker.apply_fill_to_portfolio_stats.assert_called_once()
     assert result["status"] == "partial_close_executed"
 
 

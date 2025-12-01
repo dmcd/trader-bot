@@ -48,7 +48,7 @@ def _monitor_with(db, risk_manager=None, bot=None):
         risk_manager=risk_manager,
         prefer_maker=lambda symbol: False,
         holdings_updater=lambda *args, **kwargs: 0.0,
-        session_stats_applier=lambda *args, **kwargs: None,
+        portfolio_stats_applier=lambda *args, **kwargs: None,
     ), bot
 
 

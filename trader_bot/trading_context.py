@@ -75,7 +75,7 @@ class TradingContext:
     def _net_quantity_with_baseline(quantity: float, baseline_qty: float) -> float:
         """
         Remove baseline inventory so exposure reflects only positions opened/closed
-        during the session. Baseline defines a neutral band between 0 and baseline.
+        during the current portfolio run. Baseline defines a neutral band between 0 and baseline.
         """
         quantity = quantity or 0.0
         baseline_qty = baseline_qty or 0.0
@@ -182,19 +182,19 @@ class TradingContext:
                 continue
 
             baseline_qty = baseline_map.get(sym, 0.0)
-            session_qty = self._net_quantity_with_baseline(qty, baseline_qty)
-            if abs(session_qty) < 1e-9:
+            portfolio_qty = self._net_quantity_with_baseline(qty, baseline_qty)
+            if abs(portfolio_qty) < 1e-9:
                 continue
 
-            cost_basis = session_qty * avg_price
-            current_value = session_qty * current_price
+            cost_basis = portfolio_qty * avg_price
+            current_value = portfolio_qty * current_price
             unrealized_pnl = current_value - cost_basis
             total_exposure += abs(current_value)
 
             positions_summary.append(
                 {
                     "symbol": sym,
-                    "qty": round(session_qty, 8),
+                    "qty": round(portfolio_qty, 8),
                     "avg": avg_price,
                     "px": current_price,
                     "unrealized": unrealized_pnl,
@@ -230,7 +230,7 @@ class TradingContext:
 
         venue_base_currency = portfolio_meta.get("base_currency") or (IB_BASE_CURRENCY if ACTIVE_EXCHANGE == "IB" else "USD")
         summary = {
-            "session": {
+            "portfolio": {
                 "portfolio_id": self.portfolio_id,
                 "created_at": created_at,
                 "baseline_timestamp": baseline_ts,

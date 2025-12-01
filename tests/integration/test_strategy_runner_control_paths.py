@@ -168,7 +168,7 @@ def test_get_sync_symbols_dedupes_and_fallback():
 
 def test_record_operational_metrics_emits_budget_branches():
     runner = StrategyRunner(execute_orders=False)
-    runner.session_stats = {"gross_pnl": 100.0, "total_fees": 50.0, "total_llm_cost": 2.0}
+    runner.portfolio_stats = {"gross_pnl": 100.0, "total_fees": 50.0, "total_llm_cost": 2.0}
     runner.portfolio = {"created_at": datetime.now(timezone.utc).isoformat()}
     runner.risk_manager = DummyRiskManager()
     runner._record_health_state = MagicMock()

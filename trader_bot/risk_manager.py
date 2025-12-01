@@ -9,6 +9,7 @@ from trader_bot.config import (
     ORDER_VALUE_BUFFER,
     CORRELATION_BUCKETS,
     BUCKET_MAX_POSITIONS,
+    PORTFOLIO_BASE_CURRENCY,
 )
 from trader_bot.symbols import normalize_symbol
 
@@ -105,8 +106,11 @@ class RiskManager:
         self.ignore_baseline_positions = ignore_baseline_positions
         # Baseline positions seen at startup (used to ignore sandbox airdrops)
         self.position_baseline: dict[str, float] = {}
-        self.base_currency = base_currency.upper() if base_currency else None
-        self._converter = QuoteToBaseConverter(self.base_currency, fx_rate_provider)
+        self.fx_rate_provider = fx_rate_provider
+        self.base_currency = None
+        self._converter = QuoteToBaseConverter(None, fx_rate_provider)
+        resolved_base_currency = base_currency or PORTFOLIO_BASE_CURRENCY
+        self.set_base_currency(resolved_base_currency)
         self.portfolio_id = portfolio_id
         self.baseline_equity: float | None = None
         self.baseline_timestamp: str | None = None
@@ -197,6 +201,13 @@ class RiskManager:
         """Update the active portfolio scope for downstream services."""
         self.portfolio_id = portfolio_id
 
+    def set_base_currency(self, base_currency: str | None, fx_rate_provider=None):
+        """Update the portfolio base currency and reset the converter."""
+        if fx_rate_provider is not None:
+            self.fx_rate_provider = fx_rate_provider
+        self.base_currency = base_currency.upper() if base_currency else None
+        self._converter = QuoteToBaseConverter(self.base_currency, self.fx_rate_provider)
+
     def apply_order_value_buffer(self, quantity: float, price: float, symbol: str | None = None):
         """Trim quantity so notional stays under the order cap minus buffer."""
         if price <= 0 or quantity <= 0:
@@ -261,11 +272,13 @@ class RiskManager:
             projected_exposure = projected_exposure_for_sell(sym_qty, quantity, price)
 
         if projected_exposure > MAX_TOTAL_EXPOSURE:
-            msg = f"Total exposure ${projected_exposure:.2f} would exceed limit of ${MAX_TOTAL_EXPOSURE:.2f}"
+            currency_label = self.base_currency or "base"
+            msg = f"Total exposure {projected_exposure:.2f} {currency_label} would exceed limit of {MAX_TOTAL_EXPOSURE:.2f} {currency_label}"
             logger.warning(f"Risk Reject: {msg}")
             return RiskCheckResult(False, msg)
         if projected_exposure > (MAX_TOTAL_EXPOSURE * 0.9):
-            logger.warning(f"Risk Warning: Total exposure ${projected_exposure:.2f} is close to limit of ${MAX_TOTAL_EXPOSURE:.2f}")
+            currency_label = self.base_currency or "base"
+            logger.warning(f"Risk Warning: Total exposure {projected_exposure:.2f} {currency_label} is close to limit of {MAX_TOTAL_EXPOSURE:.2f} {currency_label}")
 
         # Enforce max distinct positions (including pending buys on new symbols)
         if action == 'BUY':

@@ -110,13 +110,15 @@ class StrategyRunner:
             self.exchange_name = 'GEMINI'
         self.sandbox_ignore_positions = TRADING_MODE == 'PAPER' and SANDBOX_IGNORE_INITIAL_POSITIONS
         self._sandbox_position_baseline = {}
-        base_currency = IB_BASE_CURRENCY if self.exchange_name == 'IB' else None
-        self.base_currency = base_currency
+        resolved_base_currency = PORTFOLIO_BASE_CURRENCY
+        if self.exchange_name == 'IB' and IB_BASE_CURRENCY:
+            resolved_base_currency = IB_BASE_CURRENCY
+        self.base_currency = resolved_base_currency
         fx_rate_provider = getattr(self.bot, "get_cached_fx_rate", None)
         self.risk_manager = RiskManager(
             self.bot,
             ignore_baseline_positions=self.sandbox_ignore_positions,
-            base_currency=base_currency,
+            base_currency=resolved_base_currency,
             fx_rate_provider=fx_rate_provider,
         )
         self.running = False
@@ -126,11 +128,14 @@ class StrategyRunner:
         self.db = TradingDatabase()
         self.portfolio_id, self.run_id = self.db.ensure_active_portfolio(
             name=PORTFOLIO_NAME,
-            base_currency=self.base_currency or PORTFOLIO_BASE_CURRENCY,
+            base_currency=self.base_currency,
             bot_version=BOT_VERSION,
         )
         self.portfolio = self.db.get_portfolio(self.portfolio_id)
+        portfolio_base_currency = (self.portfolio or {}).get("base_currency") or self.base_currency
+        self.base_currency = portfolio_base_currency
         self.risk_manager.set_portfolio(self.portfolio_id)
+        self.risk_manager.set_base_currency(portfolio_base_currency, fx_rate_provider=fx_rate_provider)
         self.cost_tracker = CostTracker(self.exchange_name, llm_provider=LLM_PROVIDER)
         self.technical_analysis = TechnicalAnalysis()
         self.context = None

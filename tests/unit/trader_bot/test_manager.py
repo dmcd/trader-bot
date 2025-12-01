@@ -172,6 +172,17 @@ def test_pending_orders_by_symbol_tracks_count_and_notional(risk_manager):
     assert sym["ETH/USD"]["sell"] == pytest.approx(1050.0)
 
 
+def test_default_base_currency_comes_from_config(monkeypatch):
+    monkeypatch.setattr(rm_module, "PORTFOLIO_BASE_CURRENCY", "AUD")
+    rm = RiskManager()
+
+    assert rm.base_currency == "AUD"
+    # Converter remains usable after base currency injection
+    converted, rate = rm._convert_notional_to_base("AAPL/USD", 10.0, price=2.0)
+    assert converted == pytest.approx(10.0)
+    assert rate is None
+
+
 def test_exposure_converts_to_base_currency(risk_config):
     fx_rates = {"USD": 1.5}
     fx_provider = lambda currency, **_: fx_rates.get(currency)
@@ -198,6 +209,23 @@ def test_min_trade_size_uses_converted_value(risk_config):
     result = rm.check_trade_allowed("AAPL/USD", "BUY", 0.2, price=2.0)
     assert result.allowed is False
     assert "below minimum" in result.reason
+
+
+def test_base_currency_setter_rebuilds_converter_and_keeps_provider(monkeypatch):
+    calls = []
+
+    def fx_provider(currency, **_):
+        calls.append(currency)
+        return 2.0 if currency == "USD" else 1.0
+
+    rm = RiskManager(base_currency="USD", fx_rate_provider=fx_provider)
+    rm.set_base_currency("AUD")
+
+    converted, rate = rm._convert_notional_to_base("MSFT/USD", 10.0, price=10.0)
+    assert rate == pytest.approx(2.0)
+    assert converted == pytest.approx(20.0)
+    assert rm.base_currency == "AUD"
+    assert calls  # fx provider still wired through converter
 
 
 def test_short_exposure_converts_to_base_currency(risk_config):

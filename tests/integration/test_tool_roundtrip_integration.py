@@ -43,19 +43,19 @@ class StubDB:
         self.traces = []
         self.calls = []
 
-    def get_recent_ohlcv(self, session_id, symbol, timeframe, limit=50, portfolio_id=None):
+    def get_recent_ohlcv_for_portfolio(self, portfolio_id, symbol, timeframe, limit=50):
         return [{"close": 10, "volume": 1}, {"close": 11, "volume": 2}]
 
-    def get_recent_market_data(self, session_id, symbol, limit=50, before_timestamp=None, portfolio_id=None):
+    def get_recent_market_data_for_portfolio(self, portfolio_id, symbol, limit=50, before_timestamp=None):
         return [{"price": 10}]
 
-    def log_llm_call(self, *args, **kwargs):
+    def log_llm_call_for_portfolio(self, *args, **kwargs):
         self.calls.append((args, kwargs))
 
-    def log_llm_trace(self, session_id, prompt, response_text, decision_json=None, market_context=None, **kwargs):
+    def log_llm_trace_for_portfolio(self, portfolio_id, prompt, response_text, decision_json=None, market_context=None, **kwargs):
         self.traces.append(
             {
-                "session_id": session_id,
+                "portfolio_id": portfolio_id,
                 "prompt": prompt,
                 "response": response_text,
                 "decision": decision_json,
@@ -99,7 +99,7 @@ async def test_tool_roundtrip_executes_and_returns_decision(monkeypatch):
     ta = StubTA()
     cost = StubCost()
     coordinator = DataFetchCoordinator(StubExchange(), allowed_symbols=["BTC/USD"])
-    strategy = LLMStrategy(db, ta, cost, tool_coordinator=coordinator)
+    strategy = LLMStrategy(db, ta, cost, tool_coordinator=coordinator, portfolio_id=1)
 
     calls = []
 
@@ -116,7 +116,6 @@ async def test_tool_roundtrip_executes_and_returns_decision(monkeypatch):
     monkeypatch.setattr(strategy, "_invoke_llm", fake_invoke)
 
     decision_json, trace_id = await strategy._get_llm_decision(
-        session_id=1,
         market_data={"BTC/USD": {"price": 100, "bid": 99, "ask": 101}},
         current_equity=1000.0,
         prompt_context="",
@@ -143,7 +142,7 @@ async def test_tool_truncation_flag_propagates_to_trace(monkeypatch):
     ta = StubTA()
     cost = StubCost()
     coordinator = DataFetchCoordinator(BigOrderBookExchange(), max_json_bytes=200, allowed_symbols=["BTC/USD"])
-    strategy = LLMStrategy(db, ta, cost, tool_coordinator=coordinator)
+    strategy = LLMStrategy(db, ta, cost, tool_coordinator=coordinator, portfolio_id=1)
 
     async def fake_invoke(prompt, timeout=30):
         # Planner then decision
@@ -156,7 +155,6 @@ async def test_tool_truncation_flag_propagates_to_trace(monkeypatch):
     monkeypatch.setattr(strategy, "_invoke_llm", fake_invoke)
 
     decision_json, trace_id = await strategy._get_llm_decision(
-        session_id=1,
         market_data={"BTC/USD": {"price": 100, "bid": 99, "ask": 101}},
         current_equity=1000.0,
         prompt_context="",

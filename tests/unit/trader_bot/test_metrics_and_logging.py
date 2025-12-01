@@ -73,23 +73,35 @@ def test_setup_logging_defaults_without_test_env(tmp_path, monkeypatch):
 
 
 class StubDB:
-    def __init__(self, session_marker=_DEFAULT, equity_marker=_DEFAULT, should_fail_log=False):
-        self.session = (
-            {"starting_balance": 100.0, "net_pnl": -10.0}
-            if session_marker is _DEFAULT
-            else session_marker
-        )
+    def __init__(self, portfolio_marker=_DEFAULT, stats_marker=_DEFAULT, equity_marker=_DEFAULT, should_fail_log=False):
+        self.portfolio = {"id": 1} if portfolio_marker is _DEFAULT else portfolio_marker
+        self.stats = {"net_pnl": -10.0} if stats_marker is _DEFAULT else stats_marker
         self.equity = 120.0 if equity_marker is _DEFAULT else equity_marker
         self.should_fail_log = should_fail_log
         self.log_calls = 0
+        self.conn = self
 
-    def get_session(self, session_id):
-        return self.session
+    def cursor(self):
+        return self
 
-    def get_latest_equity(self, session_id):
+    def execute(self, *_args, **_kwargs):
+        return self
+
+    def fetchone(self):
+        if self.equity is None:
+            return None
+        return {"equity": self.equity}
+
+    def get_portfolio(self, portfolio_id):
+        return self.portfolio
+
+    def get_portfolio_stats(self, portfolio_id):
+        return self.stats or {}
+
+    def get_latest_equity_for_portfolio(self, portfolio_id):
         return self.equity
 
-    def log_llm_call(self, session_id, *args, **kwargs):
+    def log_llm_call_for_portfolio(self, portfolio_id, *args, **kwargs):
         self.log_calls += 1
         if self.should_fail_log:
             raise RuntimeError("log failed")
@@ -97,27 +109,27 @@ class StubDB:
 
 def test_metrics_drift_flags_threshold_and_logs():
     db = StubDB()
-    drift = MetricsDrift(session_id=1, db=db).check_drift(threshold_pct=5.0)
+    drift = MetricsDrift(portfolio_id=1, db=db).check_drift(threshold_pct=5.0)
 
-    assert drift["reference_equity"] == 90.0
+    assert drift["reference_equity"] == 110.0
     assert drift["latest_equity"] == 120.0
     assert drift["exceeded"] is True
     assert db.log_calls == 1
 
 
 def test_metrics_drift_handles_missing_rows():
-    missing_session_db = StubDB(session_marker=None)
+    missing_portfolio_db = StubDB(portfolio_marker=None)
     with pytest.raises(ValueError):
-        MetricsDrift(session_id=2, db=missing_session_db).check_drift()
+        MetricsDrift(portfolio_id=2, db=missing_portfolio_db).check_drift()
 
     missing_equity_db = StubDB(equity_marker=None)
     with pytest.raises(ValueError):
-        MetricsDrift(session_id=3, db=missing_equity_db).check_drift()
+        MetricsDrift(portfolio_id=3, db=missing_equity_db).check_drift()
 
 
 def test_metrics_drift_swallows_logging_failures():
     db = StubDB(should_fail_log=True)
-    drift = MetricsDrift(session_id=4, db=db).check_drift(threshold_pct=200.0)
+    drift = MetricsDrift(portfolio_id=4, db=db).check_drift(threshold_pct=200.0)
 
     assert drift["exceeded"] is False
     assert db.log_calls == 1
@@ -126,27 +138,28 @@ def test_metrics_drift_swallows_logging_failures():
 @pytest.fixture
 def metrics_db(test_db_path):
     db = TradingDatabase(db_path=str(test_db_path))
-    session_id = db.get_or_create_session(starting_balance=1000.0, bot_version="test")
-    db.log_equity_snapshot(session_id, 1010.0)
-    db.update_session_totals(session_id, net_pnl=10.0)
+    portfolio_id, _ = db.ensure_active_portfolio(name="metrics-test", bot_version="test")
+    db.log_equity_snapshot_for_portfolio(portfolio_id, 1000.0)
+    db.log_equity_snapshot_for_portfolio(portfolio_id, 1010.0)
+    db.set_portfolio_stats_cache(portfolio_id, {"gross_pnl": 10.0, "total_fees": 0.0, "total_llm_cost": 0.0})
     try:
-        yield db, session_id
+        yield db, portfolio_id
     finally:
         db.close()
 
 
 def test_no_drift_within_threshold(metrics_db):
-    db, session_id = metrics_db
-    validator = MetricsDrift(session_id, db=db)
+    db, portfolio_id = metrics_db
+    validator = MetricsDrift(portfolio_id, db=db)
     result = validator.check_drift(threshold_pct=2.0)
     assert result["exceeded"] is False
     assert result["drift"] == pytest.approx(0.0)
 
 
 def test_detects_drift_beyond_threshold(metrics_db):
-    db, session_id = metrics_db
-    db.log_equity_snapshot(session_id, 1200.0)
-    validator = MetricsDrift(session_id, db=db)
+    db, portfolio_id = metrics_db
+    db.log_equity_snapshot_for_portfolio(portfolio_id, 1200.0)
+    validator = MetricsDrift(portfolio_id, db=db)
     result = validator.check_drift(threshold_pct=1.0)
     assert result["exceeded"] is True
     assert result["drift_pct"] > 0

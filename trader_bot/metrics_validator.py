@@ -7,28 +7,31 @@ logger = logging.getLogger(__name__)
 
 
 class MetricsDrift:
-    def __init__(self, session_id: int, db: Optional[TradingDatabase] = None):
-        self.session_id = session_id
+    def __init__(self, portfolio_id: int, db: Optional[TradingDatabase] = None):
+        self.portfolio_id = portfolio_id
         self.db = db or TradingDatabase()
 
     def check_drift(self, threshold_pct: float = 1.0) -> Dict[str, float | bool]:
-        """Compare persisted session stats vs latest equity snapshot.
+        """Compare persisted portfolio stats vs latest equity snapshot."""
+        portfolio = self.db.get_portfolio(self.portfolio_id)
+        if not portfolio:
+            raise ValueError(f"Portfolio {self.portfolio_id} not found")
 
-        Returns a dict with computed drift percent and a flag indicating if drift exceeds threshold.
-        Drift is calculated as (equity - (starting_balance + net_pnl)) / max(1, abs(reference)).
-        """
-        session = self.db.get_session(self.session_id)
-        if not session:
-            raise ValueError(f"Session {self.session_id} not found")
-
-        starting_balance = session.get("starting_balance") or 0.0
-        net_pnl = session.get("net_pnl") or 0.0
-        reference = starting_balance + net_pnl
-        latest_equity = self.db.get_latest_equity(self.session_id)
-        if latest_equity is None:
+        stats = self.db.get_portfolio_stats(self.portfolio_id) or {}
+        cursor = self.db.conn.cursor()
+        first_row = cursor.execute(
+            "SELECT equity FROM equity_snapshots WHERE portfolio_id = ? ORDER BY timestamp ASC LIMIT 1",
+            (self.portfolio_id,),
+        ).fetchone()
+        if first_row is None:
             raise ValueError("No equity snapshots available")
 
-        drift = latest_equity - reference
+        starting_balance = first_row["equity"] or 0.0
+        net_pnl = stats.get("net_pnl") or 0.0
+        reference = starting_balance + net_pnl
+        latest_equity = self.db.get_latest_equity_for_portfolio(self.portfolio_id)
+
+        drift = (latest_equity or 0.0) - reference
         ref_denom = max(1.0, abs(reference))
         drift_pct = (drift / ref_denom) * 100
         exceeded = abs(drift_pct) >= threshold_pct
@@ -45,7 +48,7 @@ class MetricsDrift:
         }
 
         try:
-            self.db.log_llm_call(self.session_id, 0, 0, 0.0, f"metrics_drift:{result}")
+            self.db.log_llm_call_for_portfolio(self.portfolio_id, 0, 0, 0.0, f"metrics_drift:{result}")
         except Exception:
             logger.debug("Could not log metrics drift")
         return result

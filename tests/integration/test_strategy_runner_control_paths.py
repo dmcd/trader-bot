@@ -56,41 +56,41 @@ class DummyDB:
     def __init__(self):
         self.replaced_open_orders = 0
 
-    def log_equity_snapshot(self, *_args, **_kwargs):
+    def log_equity_snapshot_for_portfolio(self, *_args, **_kwargs):
         return None
 
-    def log_market_data(self, *_args, **_kwargs):
+    def log_market_data_for_portfolio(self, *_args, **_kwargs):
         return None
 
     def get_pending_commands(self):
         return []
 
-    def get_positions(self, *_args, **_kwargs):
+    def get_positions_for_portfolio(self, *_args, **_kwargs):
         return []
 
-    def replace_positions(self, *_args, **_kwargs):
+    def replace_positions_for_portfolio(self, *_args, **_kwargs):
         return None
 
-    def get_open_orders(self, *_args, **_kwargs):
+    def get_open_orders_for_portfolio(self, *_args, **_kwargs):
         return []
 
-    def replace_open_orders(self, *_args, **_kwargs):
+    def replace_open_orders_for_portfolio(self, *_args, **_kwargs):
         self.replaced_open_orders += 1
         return None
 
     def prune_market_data(self, *_args, **_kwargs):
         return None
 
-    def get_recent_market_data(self, *_args, **_kwargs):
+    def get_recent_market_data_for_portfolio(self, *_args, **_kwargs):
         return []
 
-    def get_open_trade_plans(self, *_args, **_kwargs):
+    def get_open_trade_plans_for_portfolio(self, *_args, **_kwargs):
         return []
 
-    def count_open_trade_plans_for_symbol(self, *_args, **_kwargs):
+    def count_open_trade_plans_for_symbol_for_portfolio(self, *_args, **_kwargs):
         return 0
 
-    def get_trade_count(self, *_args, **_kwargs):
+    def get_trade_count_for_portfolio(self, *_args, **_kwargs):
         return 0
 
 
@@ -148,29 +148,28 @@ async def test_equity_fetch_failure_short_circuits(monkeypatch):
 
 def test_get_sync_symbols_dedupes_and_fallback():
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = 7
     runner.db = MagicMock()
-    runner.db.get_distinct_trade_symbols.return_value = ["BTC/USD", "BTC/USD", None]
-    runner.db.get_positions.return_value = [{"symbol": "ETH/USD"}, {"symbol": "USD"}]
-    runner.db.get_open_trade_plans.return_value = [{"symbol": "ETH/USD"}, {"symbol": ""}]
-    runner.db.get_open_orders.return_value = [{"symbol": "SOL/USD"}]
+    runner.db.get_distinct_trade_symbols_for_portfolio.return_value = ["BTC/USD", "BTC/USD", None]
+    runner.db.get_positions_for_portfolio.return_value = [{"symbol": "ETH/USD"}, {"symbol": "USD"}]
+    runner.db.get_open_trade_plans_for_portfolio.return_value = [{"symbol": "ETH/USD"}, {"symbol": ""}]
+    runner.db.get_open_orders_for_portfolio.return_value = [{"symbol": "SOL/USD"}]
 
     symbols = runner._get_sync_symbols()
 
     assert symbols == {"BTC/USD", "ETH/USD", "SOL/USD"}
 
-    runner.db.get_distinct_trade_symbols.return_value = []
-    runner.db.get_positions.return_value = []
-    runner.db.get_open_trade_plans.return_value = []
-    runner.db.get_open_orders.return_value = []
+    runner.db.get_distinct_trade_symbols_for_portfolio.return_value = []
+    runner.db.get_positions_for_portfolio.return_value = []
+    runner.db.get_open_trade_plans_for_portfolio.return_value = []
+    runner.db.get_open_orders_for_portfolio.return_value = []
 
     assert runner._get_sync_symbols() == {"BTC/USD"}
 
 
 def test_record_operational_metrics_emits_budget_branches():
     runner = StrategyRunner(execute_orders=False)
-    runner.session = {"created_at": datetime.now(timezone.utc)}
     runner.session_stats = {"gross_pnl": 100.0, "total_fees": 50.0, "total_llm_cost": 2.0}
+    runner.portfolio = {"created_at": datetime.now(timezone.utc).isoformat()}
     runner.risk_manager = DummyRiskManager()
     runner._record_health_state = MagicMock()
     runner.cost_tracker = MagicMock()
@@ -197,7 +196,7 @@ async def test_run_loop_pauses_when_health_manager_requests(monkeypatch):
     runner.bot = FakeBot(price=101.0, spread_pct=0.5)
     runner.db = DummyDB()
     runner.risk_manager = DummyRiskManager()
-    runner.session_id = 1
+    runner.portfolio_id = 1
     runner._get_active_symbols = lambda: ["BTC/USD"]
     runner._capture_ohlcv = AsyncMock()
     runner.health_manager.should_pause = MagicMock(return_value=True)
@@ -224,7 +223,7 @@ async def test_market_health_gating_records_stale(monkeypatch):
     runner.bot = FakeBot(price=101.0, spread_pct=0.5)
     runner.db = DummyDB()
     runner.risk_manager = DummyRiskManager()
-    runner.session_id = 1
+    runner.portfolio_id = 1
     runner._record_health_state = MagicMock()
     runner._capture_ohlcv = AsyncMock()
     runner._get_active_symbols = lambda: ["BTC/USD"]
@@ -252,7 +251,7 @@ async def test_cancel_action_refreshes_open_orders(monkeypatch):
     runner.bot = FakeBot(price=101.0, spread_pct=0.5)
     runner.db = DummyDB()
     runner.risk_manager = DummyRiskManager()
-    runner.session_id = 1
+    runner.portfolio_id = 1
     runner._capture_ohlcv = AsyncMock()
     runner._get_active_symbols = lambda: ["BTC/USD"]
     runner._liquidity_ok = lambda _md: True
@@ -282,7 +281,7 @@ async def test_cancel_action_refreshes_open_orders(monkeypatch):
 @pytest.mark.asyncio
 async def test_handle_signal_routes_to_action_handler():
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = 42
+    runner.portfolio_id = 42
     runner.action_handler = MagicMock()
     runner.action_handler.handle_update_plan = AsyncMock(return_value={"status": "updated"})
     runner.action_handler.handle_partial_close = AsyncMock(return_value={"status": "partial"})

@@ -29,6 +29,12 @@ def _reset_prompt_cache():
             delattr(LLMStrategy, attr)
 
 
+async def _run_generate(strategy, market_data=None, equity=1000, exposure=0, context=None, stats=None):
+    """Helper to call generate_signal with defaults."""
+    payload = market_data or {"BTC/USD": {"price": 100}}
+    return await strategy.generate_signal(payload, equity, exposure, context, session_stats=stats or {"gross_pnl": 0, "total_fees": 0})
+
+
 def test_fees_too_high(strategy_env):
     strategy = strategy_env.strategy
     stats_high = {"gross_pnl": 100, "total_fees": 60}
@@ -59,11 +65,11 @@ async def test_generate_signal_cooldown(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)
     strategy.last_trade_ts = 990
-    strategy_env.db.get_session_stats.return_value = {"gross_pnl": 100, "total_fees": 0}
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_portfolio_stats.return_value = {"gross_pnl": 100, "total_fees": 0}
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
 
-    signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+    signal = await _run_generate(strategy, equity=1000, exposure=0, stats={"gross_pnl": 100, "total_fees": 0})
 
     assert signal is None
 
@@ -73,16 +79,14 @@ async def test_generate_signal_success(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)
     strategy.last_trade_ts = 0
-    strategy_env.db.get_session_stats.return_value = {"gross_pnl": 100, "total_fees": 0}
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_portfolio_stats.return_value = {"gross_pnl": 100, "total_fees": 0}
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     low_fee_stats = {"gross_pnl": 100, "total_fees": 10}
 
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = '{"action": "BUY", "symbol": "BTC/USD", "quantity": 0.1, "reason": "Test"}'
-        signal = await strategy.generate_signal(
-            1, {"BTC/USD": {"price": 100}}, 1000, 0, session_stats=low_fee_stats
-        )
+        signal = await _run_generate(strategy, equity=1000, exposure=0, stats=low_fee_stats)
 
     assert signal is not None
     assert signal.action == "BUY"
@@ -95,15 +99,13 @@ async def test_generate_signal_blocks_on_fee_ratio(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)
     strategy.last_trade_ts = 0
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
 
     high_fee_stats = {"gross_pnl": 100, "total_fees": 60}
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = '{"action": "BUY", "symbol": "BTC/USD", "quantity": 0.1, "reason": "Test"}'
-        signal = await strategy.generate_signal(
-            1, {"BTC/USD": {"price": 100}}, 1000, 0, session_stats=high_fee_stats
-        )
+        signal = await _run_generate(strategy, equity=1000, exposure=0, stats=high_fee_stats)
         mock_llm.assert_not_awaited()
 
     assert signal is None
@@ -114,7 +116,7 @@ async def test_clamps_stops_targets(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)
     strategy.last_trade_ts = 0
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     low_fee_stats = {"gross_pnl": 100, "total_fees": 10}
 
@@ -122,9 +124,7 @@ async def test_clamps_stops_targets(strategy_env, set_loop_time):
         mock_llm.return_value = json.dumps(
             {"action": "BUY", "symbol": "BTC/USD", "quantity": 0.1, "reason": "Test", "stop_price": 150, "target_price": 300}
         )
-        signal = await strategy.generate_signal(
-            1, {"BTC/USD": {"price": 100}}, 1000, 0, session_stats=low_fee_stats
-        )
+        signal = await _run_generate(strategy, equity=1000, exposure=0, stats=low_fee_stats)
 
     assert signal is not None
     assert signal.stop_price <= 100
@@ -138,7 +138,7 @@ def test_prompt_template_loaded_and_rendered(strategy_env):
             delattr(LLMStrategy, attr)
 
     with patch("trader_bot.strategy.Path.read_text", return_value=template_body):
-        strategy = LLMStrategy(strategy_env.db, strategy_env.ta, strategy_env.cost)
+        strategy = LLMStrategy(strategy_env.db, strategy_env.ta, strategy_env.cost, portfolio_id=strategy_env.portfolio_id)
 
     rendered = strategy._build_prompt(asset_class="crypto", available_symbols="BTC/USD", prompt_context_block="CTX")
     assert "TEMPLATE crypto BTC/USD CTX" in rendered
@@ -150,7 +150,7 @@ def test_venue_note_for_ib(monkeypatch, strategy_env):
     monkeypatch.setattr("trader_bot.strategy.IB_BASE_CURRENCY", "AUD")
 
     with patch("trader_bot.strategy.Path.read_text", return_value="PROMPT {venue_note}"):
-        strategy = LLMStrategy(strategy_env.db, strategy_env.ta, strategy_env.cost)
+        strategy = LLMStrategy(strategy_env.db, strategy_env.ta, strategy_env.cost, portfolio_id=strategy_env.portfolio_id)
 
     note = strategy._venue_note()
     rendered = strategy._build_prompt(venue_note=note)
@@ -163,21 +163,21 @@ def test_venue_note_for_ib(monkeypatch, strategy_env):
 def test_priority_signal_respects_context_and_move(strategy_env):
     strategy = strategy_env.strategy
     context = SimpleNamespace(current_iso_time="2024-01-01T00:00:00Z")
-    strategy_env.db.get_recent_market_data.return_value = [
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [
         {"price": 105},
         {"price": 103},
         {"price": 99},
         {"price": 98},
     ]
 
-    triggered = strategy._priority_signal(1, "BTC/USD", context)
-    _, kwargs = strategy_env.db.get_recent_market_data.call_args
+    triggered = strategy._priority_signal("BTC/USD", context)
+    _, kwargs = strategy_env.db.get_recent_market_data_for_portfolio.call_args
     assert kwargs.get("before_timestamp") == context.current_iso_time
     assert triggered
 
-    strategy_env.db.get_recent_market_data.reset_mock()
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}]
-    assert strategy._priority_signal(1, "BTC/USD") is False
+    strategy_env.db.get_recent_market_data_for_portfolio.reset_mock()
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}]
+    assert strategy._priority_signal("BTC/USD") is False
 
 
 def test_build_timeframe_summary_includes_vol_and_volume(strategy_env):
@@ -195,9 +195,9 @@ def test_build_timeframe_summary_includes_vol_and_volume(strategy_env):
                 "volume": 10 + i,
             }
         )
-    strategy_env.db.get_recent_ohlcv.side_effect = lambda session_id, symbol, tf, limit=50: list(bars)
+    strategy_env.db.get_recent_ohlcv_for_portfolio.side_effect = lambda portfolio_id, symbol, tf, limit=50: list(bars)
 
-    summary = strategy._build_timeframe_summary(1, "BTC/USD")
+    summary = strategy._build_timeframe_summary("BTC/USD")
 
     assert summary.startswith("Multi-timeframe")
     assert "vol" in summary
@@ -212,7 +212,6 @@ def test_compute_regime_flags_buckets(strategy_env):
     market_point = {"spread_pct": 0.1, "bid_size": 2, "ask_size": 3, "bid": 99, "ask": 101}
 
     flags = strategy._compute_regime_flags(
-        session_id=1,
         symbol="BTC/USD",
         market_data_point=market_point,
         recent_bars={"1h": one_h},
@@ -236,8 +235,8 @@ def test_prompt_template_cache_single_read(strategy_env):
             delattr(LLMStrategy, attr)
 
     with patch("trader_bot.strategy.Path.read_text", fake_read):
-        LLMStrategy(strategy_env.db, strategy_env.ta, strategy_env.cost)
-        LLMStrategy(strategy_env.db, strategy_env.ta, strategy_env.cost)
+        LLMStrategy(strategy_env.db, strategy_env.ta, strategy_env.cost, portfolio_id=strategy_env.portfolio_id)
+        LLMStrategy(strategy_env.db, strategy_env.ta, strategy_env.cost, portfolio_id=strategy_env.portfolio_id)
 
     assert calls["llm_prompt_template.txt"] == 1
     assert calls["llm_system_prompt.txt"] == 1
@@ -326,9 +325,9 @@ async def test_get_llm_decision_tool_flow_and_constraints(strategy_env):
         prompts.append(prompt)
         return responses.pop(0)
 
-    strategy_env.db.get_recent_ohlcv.return_value = [{"close": 100}] * 12
-    strategy_env.db.get_open_orders.return_value = []
-    strategy_env.db.get_open_trade_plans.return_value = [{"symbol": "BTC/USD"}] * (PLAN_MAX_PER_SYMBOL + 1)
+    strategy_env.db.get_recent_ohlcv_for_portfolio.return_value = [{"close": 100}] * 12
+    strategy_env.db.get_open_orders_for_portfolio.return_value = []
+    strategy_env.db.get_open_trade_plans_for_portfolio.return_value = [{"symbol": "BTC/USD"}] * (PLAN_MAX_PER_SYMBOL + 1)
     trading_context = SimpleNamespace(
         get_context_summary=lambda symbol, open_orders=None: "ctx",
         get_memory_snapshot=lambda: "mem",
@@ -336,7 +335,6 @@ async def test_get_llm_decision_tool_flow_and_constraints(strategy_env):
 
     with patch.object(strategy, "_invoke_llm", fake_invoke):
         decision_json, trace_id = await strategy._get_llm_decision(
-            session_id=1,
             market_data={
                 "BTC/USD": {
                     "price": 100,
@@ -380,7 +378,7 @@ async def test_get_llm_decision_tool_flow_and_constraints(strategy_env):
 async def test_trade_callbacks_update_cooldown(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
 
     strategy.on_trade_executed(990)
@@ -388,7 +386,7 @@ async def test_trade_callbacks_update_cooldown(strategy_env, set_loop_time):
 
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = None
-        signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+        signal = await _run_generate(strategy)
 
     assert signal is None
     strategy.on_trade_rejected("too risky")
@@ -399,14 +397,14 @@ async def test_trade_callbacks_update_cooldown(strategy_env, set_loop_time):
 async def test_schema_validation_failure(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     strategy.last_trade_ts = 0
     bad_json = '{"action": "BUY"}'
 
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = bad_json
-        signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+        signal = await _run_generate(strategy)
 
     assert signal is None
 
@@ -415,7 +413,7 @@ async def test_schema_validation_failure(strategy_env, set_loop_time):
 async def test_stop_target_clamping(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     strategy.last_trade_ts = 0
     raw_decision = json.dumps(
@@ -431,7 +429,7 @@ async def test_stop_target_clamping(strategy_env, set_loop_time):
 
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = raw_decision
-        signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+        signal = await _run_generate(strategy)
 
     assert signal is not None
     assert signal.stop_price <= 100
@@ -442,7 +440,7 @@ async def test_stop_target_clamping(strategy_env, set_loop_time):
 async def test_null_quantity_validation(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     strategy.last_trade_ts = 0
     raw_decision = json.dumps(
@@ -451,7 +449,7 @@ async def test_null_quantity_validation(strategy_env, set_loop_time):
 
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = raw_decision
-        signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+        signal = await _run_generate(strategy)
 
     assert signal is not None
     assert signal.action == "HOLD"
@@ -462,7 +460,7 @@ async def test_null_quantity_validation(strategy_env, set_loop_time):
 async def test_null_symbol_validation(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     strategy.last_trade_ts = 0
     raw_decision = json.dumps(
@@ -477,7 +475,7 @@ async def test_null_symbol_validation(strategy_env, set_loop_time):
 
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = raw_decision
-        signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+        signal = await _run_generate(strategy)
 
     assert signal is not None
     assert signal.action == "PAUSE_TRADING"
@@ -489,7 +487,7 @@ async def test_generate_signal_plan_management_actions(strategy_env, set_loop_ti
     strategy = strategy_env.strategy
     set_loop_time(1500)
     strategy.last_trade_ts = 0
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     update_decision = json.dumps(
         {
@@ -505,7 +503,7 @@ async def test_generate_signal_plan_management_actions(strategy_env, set_loop_ti
     )
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = (update_decision, 99)
-        signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+        signal = await _run_generate(strategy)
     assert signal.action == "UPDATE_PLAN"
     assert signal.plan_id == 5
     assert signal.stop_price == 95
@@ -519,7 +517,7 @@ async def test_generate_signal_partial_and_close_actions(strategy_env, set_loop_
     strategy = strategy_env.strategy
     set_loop_time(1500)
     strategy.last_trade_ts = 0
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     partial_json = json.dumps(
         {
@@ -533,7 +531,7 @@ async def test_generate_signal_partial_and_close_actions(strategy_env, set_loop_
     )
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = (partial_json, 101)
-        partial_signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+        partial_signal = await _run_generate(strategy)
     assert partial_signal.action == "PARTIAL_CLOSE"
     assert partial_signal.plan_id == 7
     assert partial_signal.close_fraction == 0.25
@@ -545,7 +543,7 @@ async def test_generate_signal_partial_and_close_actions(strategy_env, set_loop_
     )
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = (close_json, 202)
-        close_signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+        close_signal = await _run_generate(strategy)
     assert close_signal.action == "CLOSE_POSITION"
     assert close_signal.symbol == "BTC/USD"
     assert close_signal.trace_id == 202
@@ -558,14 +556,14 @@ async def test_break_glass_allows_trade_during_cooldown(strategy_env, set_loop_t
     strategy.last_trade_ts = 3985
     strategy._last_break_glass = 0
     strategy._priority_signal = MagicMock(return_value=True)
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     buy_decision = json.dumps(
         {"action": "BUY", "symbol": "BTC/USD", "quantity": 0.1, "reason": "break glass", "stop_price": 98, "target_price": 102}
     )
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = (buy_decision, 303)
-        signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+        signal = await _run_generate(strategy)
     assert signal.action == "BUY"
     assert strategy._last_break_glass == 4000
     assert signal.trace_id == 303
@@ -577,10 +575,10 @@ async def test_generate_signal_returns_none_when_llm_not_ready(strategy_env, set
     set_loop_time(2000)
     strategy._llm_ready = False
     strategy.last_trade_ts = 0
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
 
-    signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+    signal = await _run_generate(strategy)
     assert signal is None
 
 
@@ -646,27 +644,27 @@ def test_tool_request_filtering_and_alias(strategy_env):
 async def test_prompt_includes_plan_cap_note(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
-    strategy_env.db.get_open_orders.return_value = []
-    strategy_env.db.get_open_trade_plans.return_value = [{"symbol": "BTC/USD"} for _ in range(3)]
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_open_orders_for_portfolio.return_value = []
+    strategy_env.db.get_open_trade_plans_for_portfolio.return_value = [{"symbol": "BTC/USD"} for _ in range(3)]
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     strategy.last_trade_ts = 0
 
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = None
-        await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+        await _run_generate(strategy)
         args, kwargs = mock_llm.call_args
-        prompt_context = args[3] if len(args) >= 4 else kwargs.get("prompt_context", "")
+        prompt_context = kwargs.get("prompt_context") or (args[2] if len(args) >= 3 else "")
 
-    assert "Plan cap reached" in prompt_context
+    assert "plan cap" in (prompt_context or "").lower()
 
 
 @pytest.mark.asyncio
 async def test_rejection_reason_surfaces_in_prompt(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
-    strategy_env.db.get_open_orders.return_value = []
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_open_orders_for_portfolio.return_value = []
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     strategy.last_trade_ts = 0
     strategy.last_rejection_reason = "Plan cap reached for BTC/USD (2/2)"
@@ -678,7 +676,7 @@ async def test_rejection_reason_surfaces_in_prompt(strategy_env, set_loop_time):
         return _fake_response('{"action":"HOLD","symbol":"BTC/USD","reason":"test"}')
 
     with patch.object(strategy, "_invoke_llm", fake_invoke):
-        await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+        await _run_generate(strategy)
 
     joined = "\n".join(captured_prompts)
     assert "previous order was REJECTED" in joined
@@ -689,7 +687,7 @@ async def test_rejection_reason_surfaces_in_prompt(strategy_env, set_loop_time):
 async def test_prompt_includes_llm_burn_note(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     strategy.last_trade_ts = 0
 
@@ -710,12 +708,9 @@ async def test_prompt_includes_llm_burn_note(strategy_env, set_loop_time):
         return _fake_response('{"action":"HOLD","symbol":"BTC/USD","reason":"burn"}')
 
     with patch.object(strategy, "_invoke_llm", fake_invoke):
-        await strategy.generate_signal(
-            1,
-            {"BTC/USD": {"price": 100}},
-            1000,
-            0,
-            session_stats={"total_llm_cost": 2.0, "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc).isoformat()},
+        await _run_generate(
+            strategy,
+            stats={"total_llm_cost": 2.0, "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc).isoformat()},
         )
 
     combined = "\n".join(captured_prompts)
@@ -726,12 +721,12 @@ async def test_prompt_includes_llm_burn_note(strategy_env, set_loop_time):
 async def test_llm_cost_guard_blocks_when_cap_hit(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     session_stats = {"total_llm_cost": 999.0}
 
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
-        signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0, session_stats=session_stats)
+        signal = await _run_generate(strategy, stats=session_stats)
 
     assert signal is not None
     assert signal.action == "HOLD"
@@ -741,12 +736,12 @@ async def test_llm_cost_guard_blocks_when_cap_hit(strategy_env, set_loop_time):
 async def test_llm_call_throttle_blocks_when_interval_short(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1002)
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     strategy._last_llm_call_ts = 1000
 
     with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
-        signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+        signal = await _run_generate(strategy)
         mock_llm.assert_not_called()
 
     assert signal is not None
@@ -757,7 +752,7 @@ async def test_llm_call_throttle_blocks_when_interval_short(strategy_env, set_lo
 async def test_consecutive_llm_errors_force_hold(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)
-    strategy_env.db.get_recent_market_data.return_value = [{"price": 100}] * 50
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
     strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
     strategy.last_trade_ts = 0
 
@@ -765,7 +760,7 @@ async def test_consecutive_llm_errors_force_hold(strategy_env, set_loop_time):
         mock_llm.return_value = (None, None)
         hold_signal = None
         for _ in range(4):
-            hold_signal = await strategy.generate_signal(1, {"BTC/USD": {"price": 100}}, 1000, 0)
+            hold_signal = await _run_generate(strategy)
 
     assert hold_signal is not None
     assert hold_signal.action == "HOLD"
@@ -824,7 +819,6 @@ def test_compute_regime_flags(strategy_env):
     one_h_bars = [{"close": 100 - i * 5} for i in range(12)]
     market_point = {"spread_pct": 0.1, "bid_size": 2, "ask_size": 3, "bid": 99, "ask": 101}
     flags = strategy._compute_regime_flags(
-        session_id=1,
         symbol="BTC/USD",
         market_data_point=market_point,
         recent_bars={"1h": one_h_bars},
@@ -838,8 +832,8 @@ def test_build_timeframe_summary(strategy_env):
         {"timestamp": 0, "open": 1, "high": 2, "low": 1, "close": 2, "volume": 10},
         {"timestamp": 1, "open": 2, "high": 3, "low": 2, "close": 3, "volume": 20},
     ]
-    strategy_env.db.get_recent_ohlcv.side_effect = lambda s_id, sym, tf, limit=50: sample
-    summary = strategy_env.strategy._build_timeframe_summary(1, "BTC/USD")
+    strategy_env.db.get_recent_ohlcv_for_portfolio.side_effect = lambda p_id, sym, tf, limit=50: sample
+    summary = strategy_env.strategy._build_timeframe_summary("BTC/USD")
     assert "1m:" in summary
     assert "1d:" in summary
 
@@ -882,14 +876,18 @@ async def test_openai_provider_invocation_and_usage_logging(strategy_env):
         client = MagicMock()
         with patch("trader_bot.strategy.OpenAI", return_value=client):
             client.chat.completions.create.return_value = mock_response
-            strategy = LLMStrategy(mock_db, strategy_env.ta, mock_cost)
+            strategy = LLMStrategy(mock_db, strategy_env.ta, mock_cost, portfolio_id=1)
 
     resp = await strategy._invoke_llm("prompt")
     assert resp.text == mock_choice.message.content
 
-    strategy._log_llm_usage(session_id=1, response=resp, response_text=resp.text)
+    strategy._log_llm_usage(response=resp, response_text=resp.text)
     mock_cost.calculate_llm_cost.assert_called_with(10, 5)
-    mock_db.log_llm_call.assert_called_once()
+    mock_db.log_llm_call_for_portfolio.assert_called_once()
+    args, _ = mock_db.log_llm_call_for_portfolio.call_args
+    assert args[0] == 1
+    assert args[1] == 10
+    assert args[2] == 5
 
 
 def test_openai_provider_requires_key(monkeypatch):

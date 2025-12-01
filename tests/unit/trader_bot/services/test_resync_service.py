@@ -19,16 +19,16 @@ class StubDB:
         self.replace_calls = 0
         self.replace_fail = False
 
-    def get_positions(self, session_id, portfolio_id=None):
+    def get_positions_for_portfolio(self, portfolio_id):
         return self.positions
 
-    def get_open_orders(self, session_id, portfolio_id=None):
+    def get_open_orders_for_portfolio(self, portfolio_id):
         return self.orders
 
-    def replace_positions(self, session_id, positions, portfolio_id=None):
+    def replace_positions_for_portfolio(self, portfolio_id, positions):
         self.replaced_positions = positions
 
-    def replace_open_orders(self, session_id, orders, portfolio_id=None):
+    def replace_open_orders_for_portfolio(self, portfolio_id, orders):
         self.replace_calls += 1
         if self.replace_fail:
             raise RuntimeError("replace failed")
@@ -87,7 +87,7 @@ async def test_reconcile_exchange_state_replaces_snapshots():
         session_stats_applier=lambda *args, **kwargs: None,
         record_health_state=lambda key, val, detail=None: db.set_health_state(key, val),
     )
-    resync.set_session(1)
+    resync.set_portfolio(1)
 
     await resync.reconcile_exchange_state()
 
@@ -108,7 +108,7 @@ def test_bootstrap_snapshots_restores_portfolio_state():
         holdings_updater=lambda *args, **kwargs: 0.0,
         session_stats_applier=lambda *args, **kwargs: None,
     )
-    resync.set_session(99, portfolio_id=7)
+    resync.set_portfolio(7)
 
     state = resync.bootstrap_snapshots()
 
@@ -139,7 +139,7 @@ async def test_reconcile_exchange_state_records_errors():
         session_stats_applier=lambda *args, **kwargs: None,
         record_health_state=record_health,
     )
-    resync.set_session(1)
+    resync.set_portfolio(1)
 
     await resync.reconcile_exchange_state()
     assert db.health.get("restart_recovery") == "error"
@@ -161,7 +161,7 @@ async def test_reconcile_open_orders_handles_exchange_failure():
         holdings_updater=lambda *args, **kwargs: 0.0,
         session_stats_applier=lambda *args, **kwargs: None,
     )
-    resync.set_session(1)
+    resync.set_portfolio(1)
 
     await resync.reconcile_open_orders()
 
@@ -180,7 +180,7 @@ async def test_reconcile_open_orders_replaces_stale_snapshot(caplog):
         holdings_updater=lambda *args, **kwargs: 0.0,
         session_stats_applier=lambda *args, **kwargs: None,
     )
-    resync.set_session(1)
+    resync.set_portfolio(1)
 
     with caplog.at_level("INFO"):
         await resync.reconcile_open_orders()
@@ -195,16 +195,16 @@ class SyncStubDB:
         self.recorded = None
         self.conn = SimpleNamespace(execute=lambda *args, **kwargs: SimpleNamespace(fetchone=lambda: None))
 
-    def get_processed_trade_ids(self, session_id, portfolio_id=None):
+    def get_processed_trade_ids_for_portfolio(self, portfolio_id):
         return set()
 
-    def get_latest_trade_timestamp(self, session_id, portfolio_id=None):
+    def get_latest_trade_timestamp_for_portfolio(self, portfolio_id):
         return None
 
-    def log_trade(self, *args, **kwargs):
+    def log_trade_for_portfolio(self, *args, **kwargs):
         self.logged.append((args, kwargs))
 
-    def record_processed_trade_ids(self, session_id, processed, portfolio_id=None):
+    def record_processed_trade_ids_for_portfolio(self, portfolio_id, processed, session_id=None):
         self.recorded = processed
 
 
@@ -241,10 +241,10 @@ async def test_sync_trades_processes_and_records_ids():
         holdings_updater=lambda *args, **kwargs: 0.0,
         session_stats_applier=lambda *args, **kwargs: None,
     )
+    resync.set_portfolio(1)
 
     processed_ids: set[tuple[str, str | None]] = set()
     await resync.sync_trades_from_exchange(
-        session_id=1,
         processed_trade_ids=processed_ids,
         order_reasons={"o1": "entry"},
         plan_reason_lookup=lambda *_: None,
@@ -288,10 +288,10 @@ async def test_sync_trades_paginates_and_skips_duplicates():
         holdings_updater=lambda *args, **kwargs: 0.0,
         session_stats_applier=lambda *args, **kwargs: None,
     )
+    resync.set_portfolio(2)
 
     processed_ids: set[tuple[str, str | None]] = set()
     await resync.sync_trades_from_exchange(
-        session_id=2,
         processed_trade_ids=processed_ids,
         order_reasons={"o2": "exit"},
         plan_reason_lookup=lambda *_: None,
@@ -320,9 +320,9 @@ async def test_sync_trades_noop_when_session_missing():
         holdings_updater=lambda *args, **kwargs: 0.0,
         session_stats_applier=lambda *args, **kwargs: None,
     )
+    resync.set_portfolio(0)
 
     await resync.sync_trades_from_exchange(
-        session_id=0,
         processed_trade_ids=set(),
         order_reasons={},
         plan_reason_lookup=lambda *_: None,

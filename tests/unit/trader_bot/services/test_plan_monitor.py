@@ -14,7 +14,7 @@ class StubDB:
         self.closed = []
         self.logged_trades = []
 
-    def get_open_trade_plans(self, session_id, portfolio_id=None):
+    def get_open_trade_plans_for_portfolio(self, portfolio_id):
         return self.plans
 
     def update_trade_plan_prices(self, plan_id, *, stop_price, reason):
@@ -23,7 +23,7 @@ class StubDB:
     def update_trade_plan_status(self, plan_id, *, status, closed_at, reason):
         self.closed.append((plan_id, status, closed_at, reason))
 
-    def log_trade(self, *args, **kwargs):
+    def log_trade_for_portfolio(self, *args, **kwargs):
         self.logged_trades.append((args, kwargs))
 
 
@@ -73,11 +73,11 @@ async def test_trails_sell_stop_to_breakeven_without_closing():
     config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=None, trail_to_breakeven_pct=0.05)
 
     await monitor.monitor(
-        session_id=1,
         price_lookup={"ETH/USD": 85.0},
         open_orders=[],
         config=config,
         now=now,
+        portfolio_id=1,
     )
 
     assert db.updated_prices == [(10, 100.0, "Trailed stop to breakeven")]
@@ -105,11 +105,11 @@ async def test_skips_when_price_missing():
     config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=None, trail_to_breakeven_pct=0.01)
 
     await monitor.monitor(
-        session_id=1,
         price_lookup={},
         open_orders=[],
         config=config,
         now=now,
+        portfolio_id=1,
     )
 
     bot.place_order_async.assert_not_awaited()
@@ -138,11 +138,11 @@ async def test_closes_when_flat_and_no_symbol_orders():
     config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=None, trail_to_breakeven_pct=0.02)
 
     await monitor.monitor(
-        session_id=99,
         price_lookup={"BTC/USD": 25_100.0},
         open_orders=[{"symbol": "ETH/USD", "id": "ignored"}],
         config=config,
         now=now,
+        portfolio_id=99,
     )
 
     bot.place_order_async.assert_awaited_once()
@@ -173,11 +173,11 @@ async def test_plan_monitor_requests_marketable_exit():
     config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=None, trail_to_breakeven_pct=0.02)
 
     await monitor.monitor(
-        session_id=1,
         price_lookup={"BHP/AUD": 111.0},
         open_orders=[],
         config=config,
         now=now,
+        portfolio_id=1,
     )
 
     bot.place_order_async.assert_awaited_once()
@@ -189,7 +189,7 @@ async def test_plan_monitor_requests_marketable_exit():
 @pytest.mark.asyncio
 async def test_handles_db_failure_gracefully(caplog):
     class FailingDB(StubDB):
-        def get_open_trade_plans(self, session_id, portfolio_id=None):
+        def get_open_trade_plans_for_portfolio(self, portfolio_id):
             raise RuntimeError("db unavailable")
 
     monitor, _ = _monitor_with(FailingDB(plans=[]))
@@ -197,11 +197,11 @@ async def test_handles_db_failure_gracefully(caplog):
 
     with caplog.at_level(logging.WARNING):
         await monitor.monitor(
-            session_id=1,
             price_lookup={"BTC/USD": 100.0},
             open_orders=[],
             config=config,
             now=datetime.now(timezone.utc),
+            portfolio_id=1,
         )
 
     assert any("Monitor trade plans failed" in rec.message for rec in caplog.records)

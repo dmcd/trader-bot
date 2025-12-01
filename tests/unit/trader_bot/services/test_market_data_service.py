@@ -34,12 +34,12 @@ def test_timeframe_to_seconds():
 async def test_capture_ohlcv_spacing_and_prune(tmp_path):
     db_path = tmp_path / "ohlcv.db"
     db = TradingDatabase(db_path=str(db_path))
-    session_id = db.get_or_create_session(starting_balance=1000.0, bot_version="ohlcv-test")
+    portfolio_id, _ = db.ensure_active_portfolio(name="ohlcv-test", bot_version="ohlcv-test")
     bot = StubBot()
     svc = MarketDataService(
         db=db,
         bot=bot,
-        session_id=session_id,
+        portfolio_id=portfolio_id,
         monotonic=lambda: 0.0,
         ohlcv_min_capture_spacing_seconds=60,
         ohlcv_retention_limit=2,
@@ -48,7 +48,7 @@ async def test_capture_ohlcv_spacing_and_prune(tmp_path):
     await svc.capture_ohlcv("BTC/USD")
     assert len(bot.calls) == 4
     count_1m = db.conn.execute(
-        "SELECT COUNT(*) as cnt FROM ohlcv_bars WHERE session_id = ? AND timeframe = '1m'", (session_id,)
+        "SELECT COUNT(*) as cnt FROM ohlcv_bars WHERE portfolio_id = ? AND timeframe = '1m'", (portfolio_id,)
     ).fetchone()["cnt"]
     assert count_1m == 1
 
@@ -62,7 +62,7 @@ async def test_capture_ohlcv_spacing_and_prune(tmp_path):
     await svc.capture_ohlcv("BTC/USD")
     assert len(bot.calls) == 5
     latest_count = db.conn.execute(
-        "SELECT COUNT(*) as cnt FROM ohlcv_bars WHERE session_id = ? AND timeframe = '1m'", (session_id,)
+        "SELECT COUNT(*) as cnt FROM ohlcv_bars WHERE portfolio_id = ? AND timeframe = '1m'", (portfolio_id,)
     ).fetchone()["cnt"]
     assert latest_count == 2
     db.close()
@@ -75,18 +75,18 @@ async def test_capture_ohlcv_invokes_prune_with_limit():
             self.logged = []
             self.pruned = []
 
-        def log_ohlcv_batch(self, session_id, symbol, timeframe, bars, portfolio_id=None):
-            self.logged.append((session_id, symbol, timeframe, len(bars)))
+        def log_ohlcv_batch_for_portfolio(self, portfolio_id, symbol, timeframe, bars, session_id=None):
+            self.logged.append((portfolio_id, symbol, timeframe, len(bars)))
 
-        def prune_ohlcv(self, session_id, symbol, timeframe, retain, portfolio_id=None):
-            self.pruned.append((session_id, symbol, timeframe, retain))
+        def prune_ohlcv_for_portfolio(self, portfolio_id, symbol, timeframe, retain):
+            self.pruned.append((portfolio_id, symbol, timeframe, retain))
 
     db = StubDB()
     bot = StubBot()
     svc = MarketDataService(
         db=db,
         bot=bot,
-        session_id=42,
+        portfolio_id=42,
         monotonic=lambda: 0.0,
         ohlcv_min_capture_spacing_seconds=30,
         ohlcv_retention_limit=1,

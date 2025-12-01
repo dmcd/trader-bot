@@ -14,16 +14,16 @@ class TestTradingContext(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.tmpdir.name, "context.db")
         self.db = TradingDatabase(self.db_path)
-        self.session_id = self.db.get_or_create_session(starting_balance=10000.0, bot_version="test-version")
+        self.portfolio_id, _ = self.db.ensure_active_portfolio(name="test-portfolio", bot_version="test-version")
 
         # Simple trade history and market data
-        self.db.log_trade(self.session_id, "BTC/USD", "BUY", 0.1, 20000.0, 2.0, "entry")
-        self.db.log_trade(self.session_id, "BTC/USD", "SELL", 0.05, 21000.0, 1.0, "trim")
+        self.db.log_trade_for_portfolio(self.portfolio_id, "BTC/USD", "BUY", 0.1, 20000.0, 2.0, "entry")
+        self.db.log_trade_for_portfolio(self.portfolio_id, "BTC/USD", "SELL", 0.05, 21000.0, 1.0, "trim")
         for i in range(25):
             price = 20000.0 + i * 10
-            self.db.log_market_data(self.session_id, "BTC/USD", price, price - 5, price + 5)
+            self.db.log_market_data_for_portfolio(self.portfolio_id, "BTC/USD", price, price - 5, price + 5)
 
-        self.context = TradingContext(self.db, self.session_id)
+        self.context = TradingContext(self.db, self.portfolio_id, run_id="run-ctx")
 
     def tearDown(self):
         self.db.close()
@@ -42,8 +42,8 @@ class TestTradingContext(unittest.TestCase):
 
     def test_memory_snapshot_is_capped_and_includes_plans_and_traces(self):
         # Create a plan and traces to populate memory
-        plan_id = self.db.create_trade_plan(
-            self.session_id,
+        plan_id = self.db.create_trade_plan_for_portfolio(
+            self.portfolio_id,
             symbol="BTC/USD",
             side="BUY",
             entry_price=20500.0,
@@ -54,8 +54,8 @@ class TestTradingContext(unittest.TestCase):
             entry_order_id="ord-1",
             entry_client_order_id="cli-1",
         )
-        trace_id = self.db.log_llm_trace(
-            self.session_id,
+        trace_id = self.db.log_llm_trace_for_portfolio(
+            self.portfolio_id,
             prompt="p",
             response="r",
             decision_json='{"action":"BUY","symbol":"BTC/USD","quantity":0.1}',
@@ -86,22 +86,22 @@ class TestTradingContext(unittest.TestCase):
         filtered = self.context._filter_our_orders(orders)
         self.assertEqual([o["order_id"] for o in filtered], ["o1", "o3"])
 
-        self.assertEqual(self.context._net_quantity_for_session(1.5, 1.0), 0.5)
-        self.assertEqual(self.context._net_quantity_for_session(-0.6, -0.3), -0.3)
-        self.assertEqual(self.context._net_quantity_for_session(0.25, -0.5), 0.25)
+        self.assertEqual(self.context._net_quantity_with_baseline(1.5, 1.0), 0.5)
+        self.assertEqual(self.context._net_quantity_with_baseline(-0.6, -0.3), -0.3)
+        self.assertEqual(self.context._net_quantity_with_baseline(0.25, -0.5), 0.25)
 
     def test_context_summary_win_rate_trend_and_trimming(self):
         # Add a losing sell to pair with existing win
-        self.db.log_trade(self.session_id, "BTC/USD", "SELL", 0.05, 19000.0, 1.0, "stop")
+        self.db.log_trade_for_portfolio(self.portfolio_id, "BTC/USD", "SELL", 0.05, 19000.0, 1.0, "stop")
         # Add filler trades to exceed max_trades cap
         for i in range(4):
-            self.db.log_trade(self.session_id, "ETH/USD", "BUY", 0.1, 1000 + i, 0.1, f"entry-{i}")
+            self.db.log_trade_for_portfolio(self.portfolio_id, "ETH/USD", "BUY", 0.1, 1000 + i, 0.1, f"entry-{i}")
 
         positions = [
             {"symbol": f"SYM{i}", "quantity": 0.5 + i, "avg_price": 1000 + i * 10, "timestamp": None}
             for i in range(6)
         ]
-        self.db.replace_positions(self.session_id, positions)
+        self.db.replace_positions_for_portfolio(self.portfolio_id, positions)
 
         open_orders = [
             {
@@ -126,8 +126,8 @@ class TestTradingContext(unittest.TestCase):
 
     def test_memory_snapshot_trims_large_payloads(self):
         for i in range(3):
-            self.db.create_trade_plan(
-                self.session_id,
+            self.db.create_trade_plan_for_portfolio(
+                self.portfolio_id,
                 symbol="BTC/USD",
                 side="BUY",
                 entry_price=20000 + i,
@@ -139,8 +139,8 @@ class TestTradingContext(unittest.TestCase):
                 entry_client_order_id=f"cli-{i}",
             )
         for i in range(2):
-            trace_id = self.db.log_llm_trace(
-                self.session_id,
+            trace_id = self.db.log_llm_trace_for_portfolio(
+                self.portfolio_id,
                 prompt="p",
                 response="r",
                 decision_json=json.dumps({"idx": i}),
@@ -162,13 +162,13 @@ class TestTradingContext(unittest.TestCase):
             pass
 
         class BrokenDB:
-            def get_open_trade_plans(self, session_id, portfolio_id=None):
+            def get_open_trade_plans_for_portfolio(self, portfolio_id):
                 return [{"id": 1, "symbol": "BTC/USD", "side": "BUY", "size": Weird(), "entry_price": 1}]
 
-            def get_recent_llm_traces(self, session_id, limit=5, portfolio_id=None):
+            def get_recent_llm_traces_for_portfolio(self, portfolio_id, limit=5):
                 return []
 
-        ctx = TradingContext(BrokenDB(), session_id=1)
+        ctx = TradingContext(BrokenDB(), portfolio_id=1)
         result = ctx.get_memory_snapshot(max_bytes=50)
         self.assertEqual(result, "")
 
@@ -176,8 +176,8 @@ class TestTradingContext(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "empty.db")
             db = TradingDatabase(db_path)
-            session_id = db.get_or_create_session(starting_balance=1000.0, bot_version="v1")
-            ctx = TradingContext(db, session_id)
+            portfolio_id, _ = db.ensure_active_portfolio(name="perf", bot_version="v1")
+            ctx = TradingContext(db, portfolio_id)
 
             empty_perf = ctx.get_recent_performance()
             self.assertEqual(empty_perf, {
@@ -187,10 +187,10 @@ class TestTradingContext(unittest.TestCase):
                 'last_trade_profitable': None
             })
 
-            db.log_trade(session_id, "BTC/USD", "BUY", 1, 100, 1, "entry")
-            db.log_trade(session_id, "BTC/USD", "SELL", 1, 110, 1, "take-profit")
-            db.log_trade(session_id, "BTC/USD", "BUY", 1, 100, 1, "entry2")
-            db.log_trade(session_id, "BTC/USD", "SELL", 1, 90, 1, "stop")
+            db.log_trade_for_portfolio(portfolio_id, "BTC/USD", "BUY", 1, 100, 1, "entry")
+            db.log_trade_for_portfolio(portfolio_id, "BTC/USD", "SELL", 1, 110, 1, "take-profit")
+            db.log_trade_for_portfolio(portfolio_id, "BTC/USD", "BUY", 1, 100, 1, "entry2")
+            db.log_trade_for_portfolio(portfolio_id, "BTC/USD", "SELL", 1, 90, 1, "stop")
 
             perf = ctx.get_recent_performance()
             self.assertEqual(perf["total_trades"], 4)

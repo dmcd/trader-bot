@@ -140,12 +140,14 @@ def strategy_env(monkeypatch):
             delattr(LLMStrategy, attr)
 
     db = MagicMock()
-    db.get_session_stats.return_value = {"gross_pnl": 0, "total_fees": 0}
-    db.get_recent_market_data.return_value = [{"price": 100}] * 50
-    db.get_recent_ohlcv.return_value = [{"close": 100, "volume": 1}] * 2
-    db.get_open_orders.return_value = []
-    db.get_open_trade_plans.return_value = []
-    db.log_llm_trace.return_value = 42
+    portfolio_id = 1
+    db.get_portfolio_stats.return_value = {"gross_pnl": 0, "total_fees": 0, "total_llm_cost": 0}
+    db.get_recent_market_data_for_portfolio.return_value = [{"price": 100}] * 50
+    db.get_recent_ohlcv_for_portfolio.return_value = [{"close": 100, "volume": 1}] * 2
+    db.get_open_orders_for_portfolio.return_value = []
+    db.get_open_trade_plans_for_portfolio.return_value = []
+    db.log_llm_trace_for_portfolio.return_value = 42
+    db.portfolio_id = portfolio_id
 
     ta = MagicMock()
     ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
@@ -159,8 +161,8 @@ def strategy_env(monkeypatch):
         "hours_to_cap": None,
     }
 
-    strategy = LLMStrategy(db, ta, cost)
-    return SimpleNamespace(db=db, ta=ta, cost=cost, strategy=strategy)
+    strategy = LLMStrategy(db, ta, cost, portfolio_id=portfolio_id, run_id="test-run")
+    return SimpleNamespace(db=db, ta=ta, cost=cost, strategy=strategy, portfolio_id=portfolio_id)
 
 
 @pytest.fixture

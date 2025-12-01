@@ -11,75 +11,72 @@ from trader_bot.database import TradingDatabase
 def db_session(tmp_path):
     db_path = tmp_path / "db.sqlite"
     db = TradingDatabase(str(db_path))
-    session_id = db.get_or_create_session(starting_balance=5000.0, bot_version="test-version")
+    portfolio_id, _ = db.ensure_active_portfolio(name="test-portfolio", bot_version="test-version", base_currency="USD")
     try:
-        yield db, session_id
+        yield db, portfolio_id
     finally:
         db.close()
 
 
-def _insert_market_data_rows(db, session_id, old_ts, recent_ts):
+def _insert_market_data_rows(db, portfolio_id, old_ts, recent_ts):
     cursor = db.conn.cursor()
-    portfolio_id = db.get_session_portfolio_id(session_id)
     cursor.execute(
         """
-        INSERT INTO market_data (session_id, portfolio_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO market_data (portfolio_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (session_id, portfolio_id, old_ts.isoformat(), "BTC/USD", 10.0, 9.5, 10.5, 1.0, None, None, None, None),
+        (portfolio_id, old_ts.isoformat(), "BTC/USD", 10.0, 9.5, 10.5, 1.0, None, None, None, None),
     )
     cursor.execute(
         """
-        INSERT INTO market_data (session_id, portfolio_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO market_data (portfolio_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (session_id, portfolio_id, recent_ts.isoformat(), "BTC/USD", 11.0, 10.5, 11.5, 2.0, None, None, None, None),
+        (portfolio_id, recent_ts.isoformat(), "BTC/USD", 11.0, 10.5, 11.5, 2.0, None, None, None, None),
     )
     db.conn.commit()
 
 
-def _insert_llm_traces(db, session_id, old_ts, recent_ts):
+def _insert_llm_traces(db, portfolio_id, old_ts, recent_ts):
     cursor = db.conn.cursor()
-    portfolio_id = db.get_session_portfolio_id(session_id)
     cursor.execute(
-        "INSERT INTO llm_traces (session_id, portfolio_id, timestamp, prompt, response, decision_json, market_context) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (session_id, portfolio_id, old_ts.isoformat(), "old", "resp", "{}", "{}"),
+        "INSERT INTO llm_traces (portfolio_id, timestamp, prompt, response, decision_json, market_context) VALUES (?, ?, ?, ?, ?, ?)",
+        (portfolio_id, old_ts.isoformat(), "old", "resp", "{}", "{}"),
     )
     cursor.execute(
-        "INSERT INTO llm_traces (session_id, portfolio_id, timestamp, prompt, response, decision_json, market_context) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (session_id, portfolio_id, recent_ts.isoformat(), "new", "resp", "{}", "{}"),
+        "INSERT INTO llm_traces (portfolio_id, timestamp, prompt, response, decision_json, market_context) VALUES (?, ?, ?, ?, ?, ?)",
+        (portfolio_id, recent_ts.isoformat(), "new", "resp", "{}", "{}"),
     )
     db.conn.commit()
 
 
 def test_log_and_fetch_entities(db_session):
-    db, session_id = db_session
-    db.log_trade(session_id, "BTC/USD", "BUY", 0.1, 20000.0, fee=1.0, reason="test")
-    db.log_llm_call(session_id, input_tokens=10, output_tokens=5, cost=0.001, decision="{}")
-    db.log_market_data(session_id, "BTC/USD", price=20000.0, bid=19990.0, ask=20010.0, volume=1000.0)
-    db.log_equity_snapshot(session_id, equity=5050.0)
+    db, portfolio_id = db_session
+    db.log_trade_for_portfolio(portfolio_id, "BTC/USD", "BUY", 0.1, 20000.0, fee=1.0, reason="test")
+    db.log_llm_call_for_portfolio(portfolio_id, input_tokens=10, output_tokens=5, cost=0.001, decision="{}")
+    db.log_market_data_for_portfolio(portfolio_id, "BTC/USD", price=20000.0, bid=19990.0, ask=20010.0, volume=1000.0)
+    db.log_equity_snapshot_for_portfolio(portfolio_id, equity=5050.0)
 
-    trades = db.get_recent_trades(session_id, limit=5)
+    trades = db.get_recent_trades_for_portfolio(portfolio_id, limit=5)
     assert len(trades) == 1
 
-    stats = db.get_session_stats(session_id)
+    stats = db.get_portfolio_stats(portfolio_id)
     assert stats["total_trades"] == 1
     assert stats["total_fees"] >= 1.0
 
-    latest_equity = db.get_latest_equity(session_id)
+    latest_equity = db.get_latest_equity_for_portfolio(portfolio_id)
     assert latest_equity == 5050.0
 
-    positions = db.get_net_positions_from_trades(session_id)
+    positions = db.get_net_positions_from_trades_for_portfolio(portfolio_id)
     assert positions["BTC/USD"] == pytest.approx(0.1)
 
 
 def test_session_base_currency_round_trip(tmp_path):
     db_path = tmp_path / "base_ccy.db"
     db = TradingDatabase(str(db_path))
-    session_id = db.get_or_create_session(starting_balance=1000.0, bot_version="aud", base_currency="aud")
-
-    session = db.get_session(session_id)
-    assert session["base_currency"] == "AUD"
+    portfolio_id, _ = db.ensure_active_portfolio(name="aud-portfolio", base_currency="aud", bot_version="aud")
+    portfolio = db.get_portfolio(portfolio_id)
+    assert portfolio["base_currency"] == "AUD"
     db.close()
 
 
@@ -89,9 +86,9 @@ def test_base_currency_column_present(tmp_path):
     cols = {row["name"] for row in db.conn.execute("PRAGMA table_info(sessions)")}
     assert "base_currency" in cols
 
-    session_id = db.get_or_create_session(starting_balance=200.0, bot_version="new", base_currency=None)
-    session = db.get_session(session_id)
-    assert session["base_currency"] is None
+    portfolio_id, _ = db.ensure_active_portfolio(name="new", bot_version="new")
+    portfolio = db.get_portfolio(portfolio_id)
+    assert portfolio["base_currency"] is None
     db.close()
 
 
@@ -212,9 +209,8 @@ def test_processed_trades_store_portfolio(tmp_path):
     db_path = tmp_path / "portfolio-processed.db"
     db = TradingDatabase(str(db_path))
     portfolio = db.get_or_create_portfolio("proc", base_currency="usd", bot_version="v1")
-    session_id = db.get_or_create_session(1000.0, "v1", portfolio_id=portfolio["id"])
 
-    db.record_processed_trade_ids(session_id, [("tid-1", "cid-1")], portfolio_id=portfolio["id"])
+    db.record_processed_trade_ids_for_portfolio(portfolio["id"], [("tid-1", "cid-1")])
     row = db.conn.execute("SELECT portfolio_id FROM processed_trades WHERE trade_id = 'tid-1'").fetchone()
 
     assert row["portfolio_id"] == portfolio["id"]
@@ -225,10 +221,9 @@ def test_trades_can_be_fetched_by_portfolio(tmp_path):
     db_path = tmp_path / "portfolio-trades.db"
     db = TradingDatabase(str(db_path))
     portfolio = db.get_or_create_portfolio("p1", base_currency="usd", bot_version="v1")
-    session_id = db.get_or_create_session(1000.0, "v1", portfolio_id=portfolio["id"])
-    db.log_trade(session_id, "BTC/USD", "BUY", 0.1, 20000.0, fee=0.0, portfolio_id=portfolio["id"])
+    db.log_trade_for_portfolio(portfolio["id"], "BTC/USD", "BUY", 0.1, 20000.0, fee=0.0)
 
-    trades = db.get_recent_trades(portfolio_id=portfolio["id"], limit=5)
+    trades = db.get_recent_trades_for_portfolio(portfolio["id"], limit=5)
 
     assert trades and trades[0]["portfolio_id"] == portfolio["id"]
     db.close()
@@ -238,7 +233,8 @@ def test_session_portfolios_view_exists(tmp_path):
     db_path = tmp_path / "session-portfolio-view.db"
     db = TradingDatabase(str(db_path))
     portfolio = db.get_or_create_portfolio("viewp", base_currency="usd", bot_version="v1")
-    session_id = db.get_or_create_session(1000.0, "v1", portfolio_id=portfolio["id"])
+    # session_portfolios view remains for legacy lookup; ensure row exists when a session is created
+    session_id = db.get_or_create_portfolio_session(portfolio["id"], starting_balance=1000.0, bot_version="v1")
     row = db.conn.execute("SELECT portfolio_id FROM session_portfolios WHERE session_id = ?", (session_id,)).fetchone()
 
     assert row["portfolio_id"] == portfolio["id"]
@@ -331,9 +327,9 @@ def test_session_shim_emits_warning(tmp_path, caplog):
 
 
 def test_market_data_preserves_integer_sizes(db_session):
-    db, session_id = db_session
-    db.log_market_data(
-        session_id,
+    db, portfolio_id = db_session
+    db.log_market_data_for_portfolio(
+        portfolio_id,
         "BHP/AUD",
         price=100.0,
         bid=99.5,
@@ -345,7 +341,7 @@ def test_market_data_preserves_integer_sizes(db_session):
         ob_imbalance=0.1,
     )
 
-    rows = db.get_recent_market_data(session_id, "BHP/AUD", limit=1)
+    rows = db.get_recent_market_data_for_portfolio(portfolio_id, "BHP/AUD", limit=1)
     assert rows[0]["volume"] == 200
     assert isinstance(rows[0]["volume"], int)
     assert rows[0]["bid_size"] == 150
@@ -353,20 +349,20 @@ def test_market_data_preserves_integer_sizes(db_session):
 
 
 def test_log_and_fetch_ohlcv(db_session):
-    db, session_id = db_session
+    db, portfolio_id = db_session
     bars = [
         {"timestamp": 1_000_000, "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 10},
         {"timestamp": 1_000_060, "open": 1.5, "high": 2.5, "low": 1.0, "close": 2.0, "volume": 20},
     ]
-    db.log_ohlcv_batch(session_id, "BTC/USD", "1m", bars)
-    fetched = db.get_recent_ohlcv(session_id, "BTC/USD", "1m", limit=5)
+    db.log_ohlcv_batch_for_portfolio(portfolio_id, "BTC/USD", "1m", bars)
+    fetched = db.get_recent_ohlcv_for_portfolio(portfolio_id, "BTC/USD", "1m", limit=5)
 
     assert len(fetched) == 2
     assert fetched[0]["close"] == pytest.approx(2.0)
 
 
 def test_prune_ohlcv_retains_latest_rows(db_session):
-    db, session_id = db_session
+    db, portfolio_id = db_session
     bars = []
     for idx in range(6):
         bars.append(
@@ -379,10 +375,10 @@ def test_prune_ohlcv_retains_latest_rows(db_session):
                 "volume": idx + 1,
             }
         )
-    db.log_ohlcv_batch(session_id, "ETH/USD", "5m", bars)
-    db.prune_ohlcv(session_id, "ETH/USD", "5m", retain=3)
+    db.log_ohlcv_batch_for_portfolio(portfolio_id, "ETH/USD", "5m", bars)
+    db.prune_ohlcv_for_portfolio(portfolio_id, "ETH/USD", "5m", retain=3)
 
-    remaining = db.get_recent_ohlcv(session_id, "ETH/USD", "5m", limit=10)
+    remaining = db.get_recent_ohlcv_for_portfolio(portfolio_id, "ETH/USD", "5m", limit=10)
     assert len(remaining) == 3
     assert remaining[0]["close"] == pytest.approx(5.5)
     assert remaining[-1]["close"] == pytest.approx(3.5)
@@ -392,35 +388,35 @@ def test_prune_ohlcv_retains_latest_rows(db_session):
     "setup_fn, prune_call, count_query",
     [
         (
-            lambda db, session_id: _insert_market_data_rows(
+            lambda db, portfolio_id: _insert_market_data_rows(
                 db,
-                session_id,
+                portfolio_id,
                 datetime.now() - timedelta(minutes=10),
                 datetime.now(),
             ),
-            lambda db, session_id: db.prune_market_data(session_id, retention_minutes=5),
-            "SELECT COUNT(*) as cnt FROM market_data WHERE session_id = ?",
+            lambda db, portfolio_id: db.prune_market_data_for_portfolio(portfolio_id, retention_minutes=5),
+            "SELECT COUNT(*) as cnt FROM market_data WHERE portfolio_id = ?",
         ),
         (
-            lambda db, session_id: _insert_llm_traces(
+            lambda db, portfolio_id: _insert_llm_traces(
                 db,
-                session_id,
+                portfolio_id,
                 datetime.now() - timedelta(days=10),
                 datetime.now(),
             ),
-            lambda db, session_id: db.prune_llm_traces(session_id, retention_days=7),
-            "SELECT COUNT(*) as cnt FROM llm_traces WHERE session_id = ?",
+            lambda db, portfolio_id: db.prune_llm_traces_for_portfolio(portfolio_id, retention_days=7),
+            "SELECT COUNT(*) as cnt FROM llm_traces WHERE portfolio_id = ?",
         ),
     ],
 )
 def test_prune_tables_drop_old_rows(db_session, setup_fn, prune_call, count_query):
-    db, session_id = db_session
-    setup_fn(db, session_id)
+    db, portfolio_id = db_session
+    setup_fn(db, portfolio_id)
 
-    prune_call(db, session_id)
+    prune_call(db, portfolio_id)
 
     cursor = db.conn.cursor()
-    cursor.execute(count_query, (session_id,))
+    cursor.execute(count_query, (portfolio_id,))
     assert cursor.fetchone()["cnt"] == 1
 
 
@@ -478,9 +474,9 @@ def test_health_state_roundtrip(db_session):
 
 
 def test_trade_plan_crud_and_versioning(db_session):
-    db, session_id = db_session
-    plan_id = db.create_trade_plan(
-        session_id,
+    db, portfolio_id = db_session
+    plan_id = db.create_trade_plan_for_portfolio(
+        portfolio_id,
         symbol="BTC/USD",
         side="long",
         entry_price=100.0,
@@ -493,28 +489,28 @@ def test_trade_plan_crud_and_versioning(db_session):
     db.update_trade_plan_prices(plan_id, stop_price=95.0, target_price=125.0, reason="tighten")
     db.update_trade_plan_size(plan_id, size=0.5, reason="partial")
 
-    open_plans = db.get_open_trade_plans(session_id)
+    open_plans = db.get_open_trade_plans_for_portfolio(portfolio_id)
     assert len(open_plans) == 1
     assert open_plans[0]["version"] == 3
     assert open_plans[0]["size"] == 0.5
     assert open_plans[0]["reason"] == "partial"
 
     db.update_trade_plan_status(plan_id, "closed", closed_at="2024-01-01T00:00:00Z", reason="exit")
-    assert db.get_open_trade_plans(session_id) == []
-    reason = db.get_trade_plan_reason_by_order(session_id, client_order_id="cid-1")
+    assert db.get_open_trade_plans_for_portfolio(portfolio_id) == []
+    reason = db.get_trade_plan_reason_by_order_for_portfolio(portfolio_id, client_order_id="cid-1")
     assert reason == "exit"
 
 
 def test_equity_snapshot_logging_and_pruning(db_session):
-    db, session_id = db_session
-    db.log_equity_snapshot(session_id, 100.0)
-    db.log_equity_snapshot(session_id, 150.0)
+    db, portfolio_id = db_session
+    db.log_equity_snapshot_for_portfolio(portfolio_id, 100.0)
+    db.log_equity_snapshot_for_portfolio(portfolio_id, 150.0)
 
-    assert db.get_latest_equity(session_id) == 150.0
+    assert db.get_latest_equity_for_portfolio(portfolio_id) == 150.0
     cursor = db.conn.cursor()
     cursor.execute("DELETE FROM equity_snapshots WHERE equity < 150")
     db.conn.commit()
-    assert db.get_latest_equity(session_id) == 150.0
+    assert db.get_latest_equity_for_portfolio(portfolio_id) == 150.0
 
 
 def test_portfolio_day_updates_from_equity_snapshots(tmp_path):
@@ -591,8 +587,8 @@ def test_portfolio_day_updates_from_equity_snapshots(tmp_path):
 
 
 def test_get_open_orders_handles_empty_table(db_session):
-    db, session_id = db_session
-    assert db.get_open_orders(session_id) == []
+    db, portfolio_id = db_session
+    assert db.get_open_orders_for_portfolio(portfolio_id) == []
 
 
 def test_replace_positions_removes_legacy_session_rows(tmp_path):
@@ -639,11 +635,11 @@ def test_replace_open_orders_removes_legacy_session_rows(tmp_path):
 
 
 def test_log_llm_trace_handles_bad_json(db_session):
-    db, session_id = db_session
+    db, portfolio_id = db_session
     cyclical = []
     cyclical.append(cyclical)
 
-    trace_id = db.log_llm_trace(session_id, "prompt", "resp", decision_json="{}", market_context=cyclical)
+    trace_id = db.log_llm_trace_for_portfolio(portfolio_id, "prompt", "resp", decision_json="{}", market_context=cyclical)
     cursor = db.conn.cursor()
     cursor.execute("SELECT market_context FROM llm_traces WHERE id = ?", (trace_id,))
     stored = cursor.fetchone()["market_context"]
@@ -652,16 +648,13 @@ def test_log_llm_trace_handles_bad_json(db_session):
 
 
 def test_multiple_sessions_created_per_version(db_session):
-    db, first_session = db_session
-    next_session = db.get_or_create_session(starting_balance=6000.0, bot_version="test-version")
+    db, portfolio_id = db_session
+    session_id_1 = db.get_or_create_portfolio_session(portfolio_id, starting_balance=5000.0, bot_version="test-version")
+    session_id_2 = db.get_or_create_portfolio_session(portfolio_id, starting_balance=6000.0, bot_version="test-version")
 
-    cursor = db.conn.cursor()
-    cursor.execute("SELECT COUNT(*) as count FROM sessions WHERE bot_version = ?", ("test-version",))
-    row = cursor.fetchone()
-
-    assert first_session != next_session
-    assert row["count"] == 2
-    assert db.get_session_id_by_version("test-version") == next_session
+    # Portfolio sessions should reuse the latest for the portfolio/version combo
+    assert session_id_1 == session_id_2
+    assert db.get_session_id_by_version("test-version") == session_id_2
 
 
 def test_session_creation_does_not_reuse_on_restart(tmp_path):
@@ -705,10 +698,10 @@ def test_log_estimated_fee_persists_row(db_session):
 
 
 def test_llm_trace_roundtrip_and_prune(db_session):
-    db, session_id = db_session
-    trace_id = db.log_llm_trace(session_id, prompt="p", response="r", decision_json="{}", market_context={"a": 1}, run_id="run-1")
+    db, portfolio_id = db_session
+    trace_id = db.log_llm_trace_for_portfolio(portfolio_id, prompt="p", response="r", decision_json="{}", market_context={"a": 1}, run_id="run-1")
     db.update_llm_trace_execution(trace_id, {"result": "ok"})
-    traces = db.get_recent_llm_traces(session_id, limit=5)
+    traces = db.get_recent_llm_traces_for_portfolio(portfolio_id, limit=5)
     assert traces and traces[0]["id"] == trace_id
     assert '"result": "ok"' in (traces[0]["execution_result"] or "")
     cursor = db.conn.cursor()
@@ -716,37 +709,36 @@ def test_llm_trace_roundtrip_and_prune(db_session):
     assert row["run_id"] == "run-1"
 
     old_ts = (datetime.now() - timedelta(days=10)).isoformat()
-    portfolio_id = db.get_session_portfolio_id(session_id)
     db.conn.execute(
-        "INSERT INTO llm_traces (session_id, portfolio_id, timestamp, prompt, response, decision_json) VALUES (?, ?, ?, ?, ?, ?)",
-        (session_id, portfolio_id, old_ts, "old", "resp", "{}"),
+        "INSERT INTO llm_traces (portfolio_id, timestamp, prompt, response, decision_json) VALUES (?, ?, ?, ?, ?)",
+        (portfolio_id, old_ts, "old", "resp", "{}"),
     )
     db.conn.commit()
 
-    db.prune_llm_traces(session_id, retention_days=7)
-    remaining = db.get_recent_llm_traces(session_id, limit=10)
+    db.prune_llm_traces_for_portfolio(portfolio_id, retention_days=7)
+    remaining = db.get_recent_llm_traces_for_portfolio(portfolio_id, limit=10)
     assert all(t["timestamp"] >= old_ts for t in remaining)
 
 
 def test_recent_llm_stats_counts_flags(db_session):
-    db, session_id = db_session
-    db.log_llm_call(session_id, input_tokens=1, output_tokens=1, cost=0.0, decision="schema_error_missing")
-    db.log_llm_call(session_id, input_tokens=1, output_tokens=1, cost=0.0, decision="clamped_size")
-    db.log_llm_call(session_id, input_tokens=1, output_tokens=1, cost=0.0, decision="ok")
+    db, portfolio_id = db_session
+    db.log_llm_call_for_portfolio(portfolio_id, input_tokens=1, output_tokens=1, cost=0.0, decision="schema_error_missing")
+    db.log_llm_call_for_portfolio(portfolio_id, input_tokens=1, output_tokens=1, cost=0.0, decision="clamped_size")
+    db.log_llm_call_for_portfolio(portfolio_id, input_tokens=1, output_tokens=1, cost=0.0, decision="ok")
 
-    stats = db.get_recent_llm_stats(session_id, limit=10)
+    stats = db.get_recent_llm_stats_for_portfolio(portfolio_id, limit=10)
     assert stats["total"] == 3
     assert stats["schema_errors"] == 1
     assert stats["clamped"] == 1
 
 
 def test_session_stats_aggregates_without_cache(db_session):
-    db, session_id = db_session
-    db.log_trade(session_id, "BTC/USD", "BUY", 0.1, 20000.0, fee=1.0, realized_pnl=2.5)
-    db.log_trade(session_id, "BTC/USD", "SELL", 0.1, 21000.0, fee=1.5, realized_pnl=3.5)
-    db.log_llm_call(session_id, input_tokens=1, output_tokens=1, cost=0.2, decision="ok")
+    db, portfolio_id = db_session
+    db.log_trade_for_portfolio(portfolio_id, "BTC/USD", "BUY", 0.1, 20000.0, fee=1.0, realized_pnl=2.5)
+    db.log_trade_for_portfolio(portfolio_id, "BTC/USD", "SELL", 0.1, 21000.0, fee=1.5, realized_pnl=3.5)
+    db.log_llm_call_for_portfolio(portfolio_id, input_tokens=1, output_tokens=1, cost=0.2, decision="ok")
 
-    stats = db.get_session_stats(session_id)
+    stats = db.get_portfolio_stats(portfolio_id)
 
     assert stats["total_trades"] == 2
     assert stats["gross_pnl"] == pytest.approx(6.0)
@@ -758,12 +750,6 @@ def test_session_stats_prefers_portfolio_cache(tmp_path):
     db_path = tmp_path / "portfolio-stats.db"
     db = TradingDatabase(str(db_path))
     portfolio = db.get_or_create_portfolio("swing", base_currency="USD", bot_version="v1")
-    session_id = db.get_or_create_portfolio_session(
-        portfolio_id=portfolio["id"],
-        starting_balance=5000.0,
-        bot_version="v1",
-        base_currency="USD",
-    )
     db.set_portfolio_stats_cache(
         portfolio["id"],
         {
@@ -775,7 +761,7 @@ def test_session_stats_prefers_portfolio_cache(tmp_path):
         },
     )
 
-    stats = db.get_session_stats(session_id)
+    stats = db.get_portfolio_stats(portfolio["id"])
 
     assert stats["portfolio_id"] == portfolio["id"]
     assert stats["total_trades"] == 7
@@ -803,9 +789,9 @@ def test_command_lifecycle_roundtrip(db_session):
 
 
 def test_trade_plan_reason_lookup_and_counts(db_session):
-    db, session_id = db_session
-    plan_id = db.create_trade_plan(
-        session_id,
+    db, portfolio_id = db_session
+    plan_id = db.create_trade_plan_for_portfolio(
+        portfolio_id,
         symbol="BTC/USD",
         side="long",
         entry_price=100.0,
@@ -816,9 +802,9 @@ def test_trade_plan_reason_lookup_and_counts(db_session):
         entry_order_id="OID-1",
         entry_client_order_id="CID-1",
     )
-    reason_by_order = db.get_trade_plan_reason_by_order(session_id, order_id="OID-1")
-    reason_by_client = db.get_trade_plan_reason_by_order(session_id, client_order_id="CID-1")
-    count = db.count_open_trade_plans_for_symbol(session_id, "BTC/USD")
+    reason_by_order = db.get_trade_plan_reason_by_order_for_portfolio(portfolio_id, order_id="OID-1")
+    reason_by_client = db.get_trade_plan_reason_by_order_for_portfolio(portfolio_id, client_order_id="CID-1")
+    count = db.count_open_trade_plans_for_symbol_for_portfolio(portfolio_id, "BTC/USD")
 
     assert reason_by_order == "entry"
     assert reason_by_client == "entry"

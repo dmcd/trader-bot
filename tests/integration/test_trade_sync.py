@@ -31,25 +31,24 @@ class StubDB:
         # Mirror TradingDatabase interface for tests that clean up explicitly
         return None
 
-    def get_distinct_trade_symbols(self, session_id, portfolio_id=None):
+    def get_distinct_trade_symbols_for_portfolio(self, portfolio_id):
         return ["BTC/USD"]
 
-    def get_positions(self, session_id, portfolio_id=None):
+    def get_positions_for_portfolio(self, portfolio_id):
         return []
 
-    def get_open_trade_plans(self, session_id, portfolio_id=None):
+    def get_open_trade_plans_for_portfolio(self, portfolio_id):
         return []
 
-    def get_open_orders(self, session_id, portfolio_id=None):
+    def get_open_orders_for_portfolio(self, portfolio_id):
         return []
 
-    def get_latest_trade_timestamp(self, session_id, portfolio_id=None):
+    def get_latest_trade_timestamp_for_portfolio(self, portfolio_id):
         return None
 
-    def log_trade(self, session_id, symbol, action, quantity, price, fee, reason, liquidity="unknown", realized_pnl=0.0, trade_id=None, timestamp=None, portfolio_id=None):
+    def log_trade_for_portfolio(self, portfolio_id, symbol, action, quantity, price, fee, reason, liquidity="unknown", realized_pnl=0.0, trade_id=None, timestamp=None, session_id=None):
         self.logged_trades.append(
             {
-                "session_id": session_id,
                 "portfolio_id": portfolio_id,
                 "symbol": symbol,
                 "action": action,
@@ -64,13 +63,13 @@ class StubDB:
             }
         )
 
-    def get_trade_plan_reason_by_order(self, session_id, order_id=None, client_order_id=None, portfolio_id=None):
+    def get_trade_plan_reason_by_order_for_portfolio(self, portfolio_id, order_id=None, client_order_id=None):
         return self.plan_reason
 
-    def get_processed_trade_ids(self, session_id, portfolio_id=None):
+    def get_processed_trade_ids_for_portfolio(self, portfolio_id):
         return set()
 
-    def record_processed_trade_ids(self, session_id, processed, portfolio_id=None):
+    def record_processed_trade_ids_for_portfolio(self, portfolio_id, processed, session_id=None):
         self.recorded = processed
 
 
@@ -119,13 +118,13 @@ async def test_sync_trades_ignores_missing_client_ids():
     trade_with_oid = build_trade("t-kept", client_oid=f"{CLIENT_ORDER_PREFIX}123")
 
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = 1
     runner.telemetry_logger = None
     runner.db = StubDB()
     runner.bot = StubBot([trade_missing_oid, trade_with_oid])
     runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
     runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
     runner.order_reasons = {"order-1": "LLM signal"}
+    runner.portfolio_id = 1
 
     try:
         await runner.sync_trades_from_exchange()
@@ -141,13 +140,13 @@ async def test_sync_trades_uses_plan_reason_fallback():
     trade_with_reason = build_trade("t-plan", client_oid=client_oid, order_id="order-42")
 
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = 2
     runner.telemetry_logger = None
     runner.db = StubDB(plan_reason="Plan reason")
     runner.bot = StubBot([trade_with_reason])
     runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
     runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
     runner.order_reasons = {}  # ensure cache miss
+    runner.portfolio_id = 2
 
     await runner.sync_trades_from_exchange()
 
@@ -160,13 +159,13 @@ async def test_sync_trades_skips_unattributed_trades():
     trade_unknown = build_trade("t-unknown", client_oid=client_oid, order_id="order-99")
 
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = 4
     runner.telemetry_logger = None
     runner.db = StubDB(plan_reason=None)
     runner.bot = StubBot([trade_unknown])
     runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
     runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
     runner.order_reasons = {}  # no cached reason
+    runner.portfolio_id = 4
 
     await runner.sync_trades_from_exchange()
 
@@ -184,13 +183,13 @@ async def test_sync_trades_respects_cutoff(monkeypatch):
     old_trade["timestamp"] = old_ts
 
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = 6
     runner.telemetry_logger = None
     runner.db = StubDB(plan_reason=None)
     runner.bot = StubBot([old_trade])
     runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
     runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
     runner.order_reasons = {"order-old": "LLM reason"}
+    runner.portfolio_id = 6
 
     monkeypatch.setattr("trader_bot.strategy_runner.TRADE_SYNC_CUTOFF_MINUTES", 60)
 
@@ -202,17 +201,17 @@ async def test_sync_trades_respects_cutoff(monkeypatch):
 @pytest.mark.asyncio
 async def test_sync_trades_skips_invalid_symbols():
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = 3
     runner.telemetry_logger = None
 
     class SymbolDB(StubDB):
-        def get_distinct_trade_symbols(self, session_id, portfolio_id=None):
+        def get_distinct_trade_symbols_for_portfolio(self, portfolio_id):
             return ["USD", "BTC/USD"]
 
     runner.db = SymbolDB()
     runner.bot = StubBot([])
     runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
     runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
+    runner.portfolio_id = 3
 
     await runner.sync_trades_from_exchange()
 
@@ -233,13 +232,13 @@ async def test_sync_trades_records_reported_liquidity(liquidity_fields, expected
     trade_liq = build_trade("t-liq", client_oid=client_oid, **liquidity_fields)
 
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = 5
     runner.telemetry_logger = None
     runner.db = StubDB(plan_reason="LLM reason")
     runner.bot = StubBot([trade_liq])
     runner._update_holdings_and_realized = lambda *args, **kwargs: 0.0
     runner._apply_fill_to_session_stats = lambda *args, **kwargs: None
     runner.order_reasons = {}
+    runner.portfolio_id = 5
 
     await runner.sync_trades_from_exchange()
 
@@ -273,7 +272,6 @@ def test_get_client_order_id_variants():
 @pytest.mark.asyncio
 async def test_reconcile_open_orders_removes_stale():
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = 5
     runner.telemetry_logger = None
 
     class ReconDB(StubDB):
@@ -281,18 +279,19 @@ async def test_reconcile_open_orders_removes_stale():
             super().__init__()
             self.replaced = None
 
-        def get_open_orders(self, session_id, portfolio_id=None):
+        def get_open_orders_for_portfolio(self, portfolio_id):
             return [
                 {"order_id": "live-1", "symbol": "BTC/USD"},
                 {"order_id": "stale-1", "symbol": "BTC/USD"},
             ]
 
-        def replace_open_orders(self, session_id, orders, portfolio_id=None):
+        def replace_open_orders_for_portfolio(self, portfolio_id, orders):
             self.replaced = orders
 
     runner.db = ReconDB()
     runner.bot = StubBot(trades=[])
     runner.bot.open_orders = [{"order_id": "live-1", "clientOrderId": f"{CLIENT_ORDER_PREFIX}111", "symbol": "BTC/USD"}]
+    runner.portfolio_id = 5
 
     await runner._reconcile_open_orders()
 
@@ -301,31 +300,32 @@ async def test_reconcile_open_orders_removes_stale():
 
 def test_trading_context_filters_foreign_open_orders():
     class CtxDB(StubDB):
-        def get_session_stats(self, session_id, portfolio_id=None):
+        def get_portfolio_stats(self, portfolio_id):
             return {
-                "created_at": "2024-01-01T00:00:00",
-                "date": "2024-01-01",
-                "starting_balance": 0,
-                "net_pnl": 0,
+                "gross_pnl": 0,
                 "total_fees": 0,
                 "total_llm_cost": 0,
                 "total_trades": 0,
+                "net_pnl": 0,
             }
 
-        def get_recent_trades(self, session_id, limit=50, portfolio_id=None):
+        def get_recent_trades_for_portfolio(self, portfolio_id, limit=50):
             return []
 
-        def get_recent_market_data(self, session_id, symbol, limit=20, before_timestamp=None, portfolio_id=None):
+        def get_recent_market_data_for_portfolio(self, portfolio_id, symbol, limit=20, before_timestamp=None):
             return [{"price": 100}, {"price": 100}]
 
-        def get_positions(self, session_id, portfolio_id=None):
+        def get_positions_for_portfolio(self, portfolio_id):
             return []
 
-        def get_open_orders(self, session_id, portfolio_id=None):
+        def get_open_orders_for_portfolio(self, portfolio_id):
             return []
+
+        def get_portfolio(self, portfolio_id):
+            return {"id": portfolio_id, "base_currency": "USD", "created_at": datetime.now(timezone.utc).isoformat()}
 
     db = CtxDB()
-    ctx = TradingContext(db, session_id=1)
+    ctx = TradingContext(db, portfolio_id=1)
     ours = {"clientOrderId": f"{CLIENT_ORDER_PREFIX}xyz", "symbol": "BTC/USD", "amount": 1, "price": 100}
     foreign = {"clientOrderId": "OTHER999", "symbol": "BTC/USD", "amount": 1, "price": 100}
 
@@ -339,12 +339,12 @@ def test_trading_context_filters_foreign_open_orders():
 @pytest.mark.asyncio
 async def test_processed_trade_ids_persist_across_runs(test_db_path):
     db = TradingDatabase(db_path=str(test_db_path))
-    session_id = db.get_or_create_session(starting_balance=0.0, bot_version="test-dedupe")
+    portfolio_id, _ = db.ensure_active_portfolio(name="test-dedupe", bot_version="test-dedupe")
 
     orphan_trade = build_trade("t-repeat", client_oid=f"{CLIENT_ORDER_PREFIX}repeat", order_id="order-repeat")
 
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = session_id
+    runner.portfolio_id = portfolio_id
     runner.telemetry_logger = None
     runner.db = db
     runner.bot = StubBot([orphan_trade])
@@ -355,21 +355,22 @@ async def test_processed_trade_ids_persist_across_runs(test_db_path):
     try:
         await runner.sync_trades_from_exchange()
 
-        assert db.get_trade_count(session_id) == 0
-        assert "t-repeat" in db.get_processed_trade_ids(session_id)
+        assert db.get_trade_count_for_portfolio(portfolio_id) == 0
+        assert "t-repeat" in db.get_processed_trade_ids_for_portfolio(portfolio_id)
 
         runner2 = StrategyRunner(execute_orders=False)
-        runner2.session_id = session_id
+        runner2.portfolio_id = portfolio_id
         runner2.telemetry_logger = None
         runner2.db = db
         runner2.bot = StubBot([orphan_trade])
         runner2._update_holdings_and_realized = lambda *args, **kwargs: 0.0
         runner2._apply_fill_to_session_stats = lambda *args, **kwargs: None
         runner2.order_reasons = {"order-repeat": "Recovered reason"}
+        runner2.portfolio_id = portfolio_id
 
         await runner2.sync_trades_from_exchange()
 
-        assert db.get_trade_count(session_id) == 0
-        assert "t-repeat" in db.get_processed_trade_ids(session_id)
+        assert db.get_trade_count_for_portfolio(portfolio_id) == 0
+        assert "t-repeat" in db.get_processed_trade_ids_for_portfolio(portfolio_id)
     finally:
         db.close()

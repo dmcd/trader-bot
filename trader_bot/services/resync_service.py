@@ -103,7 +103,7 @@ class ResyncService:
             return
 
         try:
-            db_orders = self.db.get_open_orders(self.session_id, portfolio_id=self.portfolio_id)
+            db_orders = self.db.get_open_orders_for_portfolio(self.portfolio_id)
         except Exception as exc:
             self.logger.warning(f"Could not load open orders from DB for reconciliation: {exc}")
             db_orders = []

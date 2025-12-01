@@ -10,6 +10,8 @@ from trader_bot.services.trade_action_handler import TradeActionHandler
 @pytest.fixture
 def handler():
     db = MagicMock()
+    db.get_open_trade_plans_for_portfolio.return_value = []
+    db.get_positions_for_portfolio.return_value = []
     bot = MagicMock()
     bot.place_order_async = AsyncMock(return_value={"order_id": "1", "liquidity": "maker"})
     risk_manager = MagicMock()
@@ -35,6 +37,7 @@ def handler():
         log_execution_trace=lambda *args, **kwargs: None,
         actions_logger=logging.getLogger("actions_test"),
         logger=logging.getLogger("handler_test"),
+        portfolio_id=1,
     )
     handler.telemetry = telemetry
     handler.db = db
@@ -62,11 +65,10 @@ async def test_update_plan_missing_id_records_telemetry(handler):
 
 @pytest.mark.asyncio
 async def test_partial_close_executes_and_updates_plan(handler):
-    handler.db.get_open_trade_plans.return_value = [{"id": 1, "side": "BUY", "size": 1.0}]
+    handler.db.get_open_trade_plans_for_portfolio.return_value = [{"id": 1, "side": "BUY", "size": 1.0}]
     handler.db.update_trade_plan_size = MagicMock()
 
     result = await handler.handle_partial_close(
-        session_id=7,
         plan_id=1,
         close_fraction=0.5,
         symbol="BTC/USD",
@@ -75,7 +77,7 @@ async def test_partial_close_executes_and_updates_plan(handler):
         trace_id=None,
     )
 
-    handler.db.log_trade.assert_called_once()
+    handler.db.log_trade_for_portfolio.assert_called_once()
     handler.db.update_trade_plan_size.assert_called_once()
     handler.portfolio_tracker.apply_fill_to_session_stats.assert_called_once()
     assert result["status"] == "partial_close_executed"
@@ -83,10 +85,9 @@ async def test_partial_close_executes_and_updates_plan(handler):
 
 @pytest.mark.asyncio
 async def test_partial_close_missing_plan(handler):
-    handler.db.get_open_trade_plans.return_value = []
+    handler.db.get_open_trade_plans_for_portfolio.return_value = []
 
     result = await handler.handle_partial_close(
-        session_id=7,
         plan_id=9,
         close_fraction=0.5,
         symbol="BTC/USD",
@@ -101,10 +102,9 @@ async def test_partial_close_missing_plan(handler):
 
 @pytest.mark.asyncio
 async def test_partial_close_zero_size_plan(handler):
-    handler.db.get_open_trade_plans.return_value = [{"id": 3, "side": "SELL", "size": 0.0}]
+    handler.db.get_open_trade_plans_for_portfolio.return_value = [{"id": 3, "side": "SELL", "size": 0.0}]
 
     result = await handler.handle_partial_close(
-        session_id=7,
         plan_id=3,
         close_fraction=0.5,
         symbol="BTC/USD",
@@ -119,9 +119,9 @@ async def test_partial_close_zero_size_plan(handler):
 
 @pytest.mark.asyncio
 async def test_close_position_handles_missing_positions(handler):
-    handler.db.get_positions.return_value = []
+    handler.db.get_positions_for_portfolio.return_value = []
 
-    result = await handler.handle_close_position(session_id=1, symbol="ETH/USD", price=2000.0, trace_id=None)
+    result = await handler.handle_close_position(symbol="ETH/USD", price=2000.0, trace_id=None)
 
     assert result["status"] == "close_position_none"
     assert handler.telemetry[-1]["status"] == "close_position_none"
@@ -129,7 +129,7 @@ async def test_close_position_handles_missing_positions(handler):
 
 @pytest.mark.asyncio
 async def test_close_position_emits_ib_metadata(handler):
-    handler.db.get_positions.return_value = [{"symbol": "ETH/USD", "quantity": 1.0, "current_price": 2000.0}]
+    handler.db.get_positions_for_portfolio.return_value = [{"symbol": "ETH/USD", "quantity": 1.0, "current_price": 2000.0}]
     handler.bot.place_order_async.return_value = {
         "order_id": "99",
         "status": "filled",
@@ -141,7 +141,7 @@ async def test_close_position_emits_ib_metadata(handler):
         "instrument_type": "STK",
     }
 
-    result = await handler.handle_close_position(session_id=1, symbol="ETH/USD", price=2000.0, trace_id="t-1")
+    result = await handler.handle_close_position(symbol="ETH/USD", price=2000.0, trace_id="t-1")
 
     assert result["status"] == "close_position_executed"
     record = handler.telemetry[-1]

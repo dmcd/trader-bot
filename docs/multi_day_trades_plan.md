@@ -40,9 +40,8 @@ Notes on the current session model:
     - [x] Move stats accessors to portfolio-only entry points and mark session-based stats lookups as deprecated.
     - [x] Add tests for `ensure_active_portfolio` and portfolio-only stats retrieval.
 - [ ] **Runner/services wiring: remove session plumbing**
-  - [ ] Drop `StrategyRunner.session_id/session` fields; thread `portfolio_id`+`run_id` into ResyncService, PlanMonitor, TradeActionHandler, MarketDataService, TradingContext, and telemetry without requiring `set_session`.
-    - In progress: runtime code now provisions `(portfolio_id, run_id)` via `ensure_active_portfolio`; services and strategy use portfolio-first DB helpers and stop emitting `session_id`. Telemetry records `portfolio_id`/`run_id`. TradingContext rebuilt to read portfolio stats/market data.
-    - Remaining: tests/fixtures/integration stubs still set `session_id` and expect session-based DB calls; update them to create/get portfolios, use portfolio helpers, and drop `set_session` assertions. Locate lingering `session_id` references in tests (see `rg` results) and adjust mocks accordingly.
+  - [x] Drop `StrategyRunner.session_id/session` fields; thread `portfolio_id`+`run_id` into ResyncService, PlanMonitor, TradeActionHandler, MarketDataService, TradingContext, and telemetry without requiring `set_session`.
+    - Runtime code provisions `(portfolio_id, run_id)` via `ensure_active_portfolio`; services and strategy use portfolio-first DB helpers and stop emitting `session_id`. Telemetry records `portfolio_id`/`run_id`. TradingContext rebuilt to read portfolio stats/market data. Tests/fixtures/mocks now use portfolio helpers (no lingering `set_session` expectations).
   - [ ] Remove session-specific baselines (starting_balance, session_started) from runner lifecycle and resync; rely on portfolio stats cache and equity snapshots instead.
     - In progress: runner now tracks `starting_equity` (float) and logs portfolio equity snapshots; session metadata removed from telemetry. Sanity checks still assume session baseline in tests; update validations to use `starting_equity`/portfolio stats.
 - [ ] **Context and risk**
@@ -53,7 +52,7 @@ Notes on the current session model:
   - [ ] Switch dashboard loaders to select by portfolio (and optional bot_version filter) instead of `get_session_id_by_version`; read stats from portfolio cache and show run_id metadata.
   - [ ] Remove session_id from telemetry payloads/log lines; ensure run_id/portfolio_id are present everywhere a session_id is currently written.
 - [ ] **Tests and fixtures**
-  - [ ] Update fixtures/mocks to create portfolios instead of sessions; remove `set_session` expectations in service tests and cover portfolio-only flows.
+  - [x] Update fixtures/mocks to create portfolios instead of sessions; remove `set_session` expectations in service tests and cover portfolio-only flows.
   - [ ] Add regression tests ensuring no new session rows are created on restart and that portfolio-only writes/readbacks work across trades, plans, orders, market data, and telemetry.
 
 ## Work Plan
@@ -93,5 +92,3 @@ Notes on the current session model:
   - [ ] Update `README`/`architecture.md` to describe the new portfolio/daily model and operational scripts.
   - [ ] Document operator flows: starting a new portfolio, rolling daily baselines, and troubleshooting mismatched day PnL vs equity.
   - [ ] Update risk documentation (AGENTS, architecture, research notes) to reflect portfolio-level risk and removal of daily-loss gates.
-
-

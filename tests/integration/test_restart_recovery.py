@@ -24,7 +24,7 @@ class StubBot:
 def runner(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADING_DB_PATH", str(tmp_path / "restart.db"))
     r = StrategyRunner(execute_orders=False)
-    r.session_id = r.db.get_or_create_session(starting_balance=1000.0, bot_version="test")
+    r.portfolio_id, _ = r.db.ensure_active_portfolio(name="restart", bot_version="test", base_currency="USD")
     return r
 
 
@@ -45,16 +45,16 @@ async def test_reconcile_replaces_snapshots_and_updates_health(runner):
         ],
     )
     # seed stale snapshots
-    runner.db.replace_positions(runner.session_id, [{"symbol": "ETH/USD", "quantity": 2.0, "avg_price": 2000.0}])
-    runner.db.replace_open_orders(
-        runner.session_id,
+    runner.db.replace_positions_for_portfolio(runner.portfolio_id, [{"symbol": "ETH/USD", "quantity": 2.0, "avg_price": 2000.0}])
+    runner.db.replace_open_orders_for_portfolio(
+        runner.portfolio_id,
         [{"order_id": "old", "symbol": "ETH/USD", "side": "sell", "price": 2100, "amount": 1, "remaining": 1}],
     )
 
     await runner._reconcile_exchange_state()
 
-    positions = runner.db.get_positions(runner.session_id)
-    orders = runner.db.get_open_orders(runner.session_id)
+    positions = runner.db.get_positions_for_portfolio(runner.portfolio_id)
+    orders = runner.db.get_open_orders_for_portfolio(runner.portfolio_id)
     assert len(positions) == 1
     assert positions[0]["symbol"] == "BTC/USD"
     assert len(orders) == 1

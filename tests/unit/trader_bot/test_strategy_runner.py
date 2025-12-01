@@ -192,16 +192,15 @@ def test_order_value_buffer_logs_and_clamps(caplog):
 async def test_reconcile_exchange_state_refreshes_bindings(monkeypatch, tmp_path):
     monkeypatch.setenv("TRADING_DB_PATH", str(tmp_path / "reconcile.db"))
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = 7
     runner.resync_service = MagicMock()
-    runner.resync_service.set_session = MagicMock()
+    runner.resync_service.set_portfolio = MagicMock()
     runner.resync_service.reconcile_exchange_state = AsyncMock()
     await runner._reconcile_exchange_state()
     assert runner.resync_service.db is runner.db
     assert runner.resync_service.bot is runner.bot
     assert runner.resync_service.risk_manager is runner.risk_manager
     assert runner.resync_service.trade_sync_cutoff_minutes == TRADE_SYNC_CUTOFF_MINUTES
-    runner.resync_service.set_session.assert_called_with(7, portfolio_id=runner.portfolio_id)
+    runner.resync_service.set_portfolio.assert_called_with(runner.portfolio_id)
     runner.resync_service.reconcile_exchange_state.assert_awaited_once()
 
 
@@ -209,12 +208,11 @@ async def test_reconcile_exchange_state_refreshes_bindings(monkeypatch, tmp_path
 async def test_reconcile_open_orders_refreshes_bindings(monkeypatch, tmp_path):
     monkeypatch.setenv("TRADING_DB_PATH", str(tmp_path / "reconcile-orders.db"))
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = 9
     runner.resync_service = MagicMock()
-    runner.resync_service.set_session = MagicMock()
+    runner.resync_service.set_portfolio = MagicMock()
     runner.resync_service.reconcile_open_orders = AsyncMock()
     await runner._reconcile_open_orders()
-    runner.resync_service.set_session.assert_called_with(9, portfolio_id=runner.portfolio_id)
+    runner.resync_service.set_portfolio.assert_called_with(runner.portfolio_id)
     runner.resync_service.reconcile_open_orders.assert_awaited_once()
 
 
@@ -228,9 +226,8 @@ async def test_monitor_trade_plans_refreshes_bindings(monkeypatch, tmp_path):
     runner.plan_monitor.refresh_bindings = MagicMock()
     captured = {}
 
-    async def fake_monitor(session_id, price_lookup, open_orders, config, refresh_bindings_cb, portfolio_id=None):
+    async def fake_monitor(price_lookup, open_orders, config, refresh_bindings_cb, portfolio_id=None):
         refresh_bindings_cb()
-        captured["session_id"] = session_id
         captured["price_lookup"] = price_lookup
         captured["open_orders"] = open_orders
         captured["config"] = config
@@ -244,7 +241,6 @@ async def test_monitor_trade_plans_refreshes_bindings(monkeypatch, tmp_path):
     assert kwargs["db"] is runner.db
     assert kwargs["risk_manager"] is runner.risk_manager
     assert kwargs["portfolio_id"] == runner.portfolio_id
-    assert captured["session_id"] == runner.session_id
     assert captured["portfolio_id"] == runner.portfolio_id
     assert captured["price_lookup"] == {"BTC/USD": 100.0}
     assert captured["open_orders"] == [{"id": 1}]
@@ -278,25 +274,21 @@ async def test_initialize_reuses_portfolio_and_threads_run_metadata(monkeypatch,
     await runner.initialize()
 
     assert runner.portfolio_id is not None
-    assert runner.session_id is not None
-    first_session = runner.session_id
     first_run = runner.run_id
 
     runner._emit_telemetry({"type": "init_test"})
     args, _ = runner.telemetry_logger.info.call_args
     payload = json.loads(args[0])
     assert payload["portfolio_id"] == runner.portfolio_id
-    assert payload["session_id"] == first_session
     assert payload["run_id"] == first_run
 
-    # Simulate restart and ensure we reuse the same portfolio/session with a new run_id
+    # Simulate restart and ensure we reuse the same portfolio with a new run_id
     runner.db.close()
     runner_restart = StrategyRunner(execute_orders=False)
     runner_restart.telemetry_logger = MagicMock()
     await runner_restart.initialize()
 
     assert runner_restart.portfolio_id == runner.portfolio_id
-    assert runner_restart.session_id == first_session
     assert runner_restart.run_id != first_run
 
     runner_restart.db.close()
@@ -346,8 +338,6 @@ async def test_kill_switch_stops_loop(circuit_runner):
 
 
 def test_operational_metrics_emit_health_state(circuit_runner):
-    circuit_runner.session_id = circuit_runner.db.get_or_create_session(starting_balance=1000.0, bot_version="metric-test")
-    circuit_runner.session = circuit_runner.db.get_session(circuit_runner.session_id)
     circuit_runner.session_stats = {"gross_pnl": 100.0, "total_fees": 10.0, "total_llm_cost": 2.0}
     circuit_runner.cost_tracker = MagicMock()
     circuit_runner.cost_tracker.calculate_llm_burn.return_value = {
@@ -366,9 +356,8 @@ def test_operational_metrics_emit_health_state(circuit_runner):
 
 
 def test_equity_sanity_health_state(circuit_runner):
-    circuit_runner.session_id = circuit_runner.db.get_or_create_session(starting_balance=1000.0, bot_version="eq-test")
-    circuit_runner.session = circuit_runner.db.get_session(circuit_runner.session_id)
     circuit_runner.session_stats = {"gross_pnl": 0.0, "total_fees": 0.0, "total_llm_cost": 0.0}
+    circuit_runner.starting_equity = 1000.0
     circuit_runner._sanity_check_equity_vs_stats(current_equity=800.0)
     health = {row["key"]: row for row in circuit_runner.db.get_health_state()}
     detail = json.loads(health["equity_sanity"]["detail"])
@@ -385,7 +374,7 @@ class TestActionHandling(unittest.IsolatedAsyncioTestCase):
         self.runner.bot = MagicMock()
         self.runner.bot.place_order_async = AsyncMock(return_value={"order_id": "123", "liquidity": "taker"})
         self.runner.db = MagicMock()
-        self.runner.db.get_open_trade_plans.return_value = [
+        self.runner.db.get_open_trade_plans_for_portfolio.return_value = [
             {
                 "id": 1,
                 "symbol": "BTC/USD",
@@ -400,12 +389,12 @@ class TestActionHandling(unittest.IsolatedAsyncioTestCase):
         self.runner.db.update_trade_plan_prices = MagicMock()
         self.runner.db.update_trade_plan_size = MagicMock()
         self.runner.db.update_trade_plan_status = MagicMock()
-        self.runner.db.log_trade = MagicMock()
+        self.runner.db.log_trade_for_portfolio = MagicMock()
+        self.runner.db.get_positions_for_portfolio = MagicMock(return_value=[{"symbol": "BTC/USD", "quantity": 0.2, "avg_price": 100}])
         self.runner._apply_fill_to_session_stats = MagicMock()
         self.runner._update_holdings_and_realized = MagicMock(return_value=0.0)
         self.runner.cost_tracker = MagicMock()
         self.runner.cost_tracker.calculate_trade_fee.return_value = 0.1
-        self.runner.session_id = 1
         self.runner.risk_manager.update_positions({})
         self.runner.risk_manager.update_pending_orders([])
         self.runner.risk_manager.check_trade_allowed = MagicMock(return_value=MagicMock(allowed=True, reason=""))
@@ -451,7 +440,7 @@ class TestActionHandling(unittest.IsolatedAsyncioTestCase):
         await self.runner._handle_signal(
             signal=signal, market_data={"BTC/USD": {"price": 100}}, open_orders=[], current_equity=1000, current_exposure=0
         )
-        self.runner.db.log_trade.assert_called_once()
+        self.runner.db.log_trade_for_portfolio.assert_called_once()
         self.runner.db.update_trade_plan_size.assert_called_once()
         args, kwargs = self.runner.db.update_trade_plan_size.call_args
         self.assertAlmostEqual(kwargs.get("size"), 0.1)
@@ -473,7 +462,6 @@ class TestActionHandling(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs.get("status"), "closed")
 
     async def test_close_position_handling(self):
-        self.runner.db.get_positions.return_value = [{"symbol": "BTC/USD", "quantity": 0.2, "avg_price": 100}]
         signal = MagicMock()
         signal.action = "CLOSE_POSITION"
         signal.symbol = "BTC/USD"
@@ -482,7 +470,7 @@ class TestActionHandling(unittest.IsolatedAsyncioTestCase):
         await self.runner._handle_signal(
             signal=signal, market_data={"BTC/USD": {"price": 100}}, open_orders=[], current_equity=1000, current_exposure=0
         )
-        self.runner.db.log_trade.assert_called()
+        self.runner.db.log_trade_for_portfolio.assert_called()
 
     async def test_pause_trading_sets_pause_until(self):
         signal = MagicMock()
@@ -504,7 +492,6 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.cost_tracker = MagicMock()
         self.runner.cost_tracker.calculate_trade_fee.return_value = 1.0
         self.runner._apply_fill_to_session_stats = Mock(return_value=None)
-        self.runner.session_id = 1
         self._refresh_monitor_bindings()
 
     def _refresh_monitor_bindings(self):
@@ -542,7 +529,6 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         )
         self._refresh_monitor_bindings()
         await self.runner.plan_monitor.monitor(
-            self.runner.session_id,
             price_lookup=price_lookup,
             open_orders=open_orders,
             config=config,
@@ -557,7 +543,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         mock_dt.timezone = timezone
         self.runner.max_plan_age_minutes = 60
         self.runner.db = MagicMock()
-        self.runner.db.get_open_trade_plans.return_value = [
+        self.runner.db.get_open_trade_plans_for_portfolio.return_value = [
             {
                 "id": 1,
                 "symbol": "BTC/USD",
@@ -570,7 +556,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         ]
         self.runner.bot.place_order_async = AsyncMock(return_value={"order_id": "123", "liquidity": "taker"})
         self.runner.db.update_trade_plan_status = Mock()
-        self.runner.db.log_trade = Mock()
+        self.runner.db.log_trade_for_portfolio = Mock()
         self.runner.db.update_trade_plan_prices = Mock()
         await self._run_monitor(price_lookup={"BTC/USD": 100}, open_orders=[])
         self.runner.db.update_trade_plan_status.assert_called_once()
@@ -579,7 +565,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         now = datetime.now(timezone.utc)
         self.runner.max_plan_age_minutes = None
         self.runner.db = MagicMock()
-        self.runner.db.get_open_trade_plans.return_value = [
+        self.runner.db.get_open_trade_plans_for_portfolio.return_value = [
             {
                 "id": 2,
                 "symbol": "BTC/USD",
@@ -593,7 +579,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
         self.runner.risk_manager.get_total_exposure = MagicMock(return_value=1e12)
         self.runner.bot.place_order_async = AsyncMock(return_value={"order_id": "123", "liquidity": "taker"})
         self.runner.db.update_trade_plan_status = Mock()
-        self.runner.db.log_trade = Mock()
+        self.runner.db.log_trade_for_portfolio = Mock()
         self.runner.db.update_trade_plan_prices = Mock()
         await self._run_monitor(price_lookup={"BTC/USD": 100}, open_orders=[])
         self.runner.risk_manager.get_total_exposure.assert_called_once()
@@ -602,7 +588,7 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
     async def test_trailing_stop_to_breakeven(self):
         now = datetime.now(timezone.utc)
         self.runner.db = MagicMock()
-        self.runner.db.get_open_trade_plans.return_value = [
+        self.runner.db.get_open_trade_plans_for_portfolio.return_value = [
             {
                 "id": 3,
                 "symbol": "BTC/USD",
@@ -646,12 +632,12 @@ class StubBot:
 @pytest.mark.asyncio
 async def test_capture_ohlcv_throttles_and_prunes(test_db_path):
     db = TradingDatabase(db_path=str(test_db_path))
-    session_id = db.get_or_create_session(starting_balance=1000.0, bot_version="ohlcv-test")
+    portfolio_id, _ = db.ensure_active_portfolio(name="ohlcv-test", bot_version="ohlcv-test")
     bot = StubBot()
     runner = StrategyRunner(execute_orders=False)
     runner.db = db
     runner.bot = bot
-    runner.session_id = session_id
+    runner.portfolio_id = portfolio_id
     runner.telemetry_logger = None
     runner.ohlcv_retention_limit = 2
     runner.ohlcv_min_capture_spacing_seconds = 60
@@ -660,7 +646,7 @@ async def test_capture_ohlcv_throttles_and_prunes(test_db_path):
         await runner._capture_ohlcv("BTC/USD")
         assert len(bot.calls) == 4
         count_1m = db.conn.execute(
-            "SELECT COUNT(*) as cnt FROM ohlcv_bars WHERE session_id = ? AND timeframe = '1m'", (session_id,)
+            "SELECT COUNT(*) as cnt FROM ohlcv_bars WHERE portfolio_id = ? AND timeframe = '1m'", (portfolio_id,)
         ).fetchone()["cnt"]
         assert count_1m == 1
         runner._monotonic = lambda: 30.0
@@ -670,7 +656,7 @@ async def test_capture_ohlcv_throttles_and_prunes(test_db_path):
         await runner._capture_ohlcv("BTC/USD")
         assert len(bot.calls) == 5
         latest_count = db.conn.execute(
-            "SELECT COUNT(*) as cnt FROM ohlcv_bars WHERE session_id = ? AND timeframe = '1m'", (session_id,)
+            "SELECT COUNT(*) as cnt FROM ohlcv_bars WHERE portfolio_id = ? AND timeframe = '1m'", (portfolio_id,)
         ).fetchone()["cnt"]
         assert latest_count == 2
     finally:
@@ -684,14 +670,13 @@ async def test_capture_ohlcv_throttles_and_prunes(test_db_path):
 class TestActiveSymbolSelection(unittest.TestCase):
     def setUp(self):
         self.runner = StrategyRunner()
-        self.runner.session_id = 1
         self.runner.db = MagicMock()
 
     @patch("trader_bot.strategy_runner.ALLOWED_SYMBOLS", ["BTC/USD", "ETH/USD"])
     def test_merges_configured_and_state_symbols(self):
-        self.runner.db.get_positions.return_value = [{"symbol": "SOL/USD", "quantity": 1.0}]
-        self.runner.db.get_open_orders.return_value = [{"symbol": "BTC/USD"}, {"symbol": "ADA/USD"}]
-        self.runner.db.get_open_trade_plans.return_value = [{"symbol": "ETH/USD"}, {"symbol": "DOGE/USD"}]
+        self.runner.db.get_positions_for_portfolio.return_value = [{"symbol": "SOL/USD", "quantity": 1.0}]
+        self.runner.db.get_open_orders_for_portfolio.return_value = [{"symbol": "BTC/USD"}, {"symbol": "ADA/USD"}]
+        self.runner.db.get_open_trade_plans_for_portfolio.return_value = [{"symbol": "ETH/USD"}, {"symbol": "DOGE/USD"}]
         symbols = self.runner._get_active_symbols()
         self.assertEqual(symbols[:2], ["BTC/USD", "ETH/USD"])
         self.assertIn("SOL/USD", symbols)
@@ -701,9 +686,9 @@ class TestActiveSymbolSelection(unittest.TestCase):
 
     @patch("trader_bot.strategy_runner.ALLOWED_SYMBOLS", [])
     def test_fallback_to_default_when_empty(self):
-        self.runner.db.get_positions.return_value = []
-        self.runner.db.get_open_orders.return_value = []
-        self.runner.db.get_open_trade_plans.return_value = []
+        self.runner.db.get_positions_for_portfolio.return_value = []
+        self.runner.db.get_open_orders_for_portfolio.return_value = []
+        self.runner.db.get_open_trade_plans_for_portfolio.return_value = []
         symbols = self.runner._get_active_symbols()
         self.assertEqual(symbols, ["BTC/USD"])
 
@@ -734,8 +719,7 @@ class TestExchangeTradeRebuild(unittest.TestCase):
         self.prev_db_path = os.environ.get("TRADING_DB_PATH")
         os.environ["TRADING_DB_PATH"] = self.db_path
         self.runner = StrategyRunner(execute_orders=False)
-        self.runner.session_id = 1
-
+        
     def tearDown(self):
         self.runner.db.close()
         if self.prev_db_path is None:
@@ -813,12 +797,11 @@ def test_set_shutdown_reason_only_keeps_first():
 async def test_rebuild_session_stats_checks_equity(monkeypatch, tmp_path):
     monkeypatch.setenv("TRADING_DB_PATH", str(tmp_path / "rebuild-stats.db"))
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = 1
     runner.portfolio_tracker = MagicMock()
     runner.portfolio_tracker.rebuild_session_stats_from_trades = MagicMock(return_value={"gross_pnl": 1.0})
     runner._sanity_check_equity_vs_stats = MagicMock()
     await runner._rebuild_session_stats_from_trades(current_equity=123.0)
-    runner.portfolio_tracker.set_session.assert_called_with(1, portfolio_id=runner.portfolio_id)
+    runner.portfolio_tracker.set_portfolio.assert_called_with(runner.portfolio_id)
     runner._sanity_check_equity_vs_stats.assert_called_with(123.0)
     assert runner.session_stats == {"gross_pnl": 1.0}
 
@@ -839,8 +822,6 @@ async def test_run_loop_survives_ohlcv_failure():
 async def test_runner_handles_multi_symbol_exposure(monkeypatch, tmp_path):
     monkeypatch.setenv("TRADING_DB_PATH", str(tmp_path / "multi-exposure.db"))
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = runner.db.get_or_create_session(starting_balance=1000.0, bot_version="multi-exposure")
-    runner.session = runner.db.get_session(runner.session_id)
     runner._get_active_symbols = lambda: ["BTC/USD", "ETH/USD"]
     runner.bot.get_equity_async = AsyncMock(return_value=1000.0)
     positions = [
@@ -884,8 +865,8 @@ async def test_runner_handles_multi_symbol_exposure(monkeypatch, tmp_path):
     for sym in symbols:
         md = await runner.bot.get_market_data_async(sym)
         market_data[sym] = md
-        runner.db.log_market_data(
-            runner.session_id,
+        runner.db.log_market_data_for_portfolio(
+            runner.portfolio_id,
             sym,
             md.get("price"),
             md.get("bid"),
@@ -897,16 +878,16 @@ async def test_runner_handles_multi_symbol_exposure(monkeypatch, tmp_path):
             ob_imbalance=md.get("ob_imbalance"),
         )
     open_orders = await runner.bot.get_open_orders_async()
-    runner.db.replace_open_orders(runner.session_id, open_orders)
+    runner.db.replace_open_orders_for_portfolio(runner.portfolio_id, open_orders)
     live_positions = await runner.bot.get_positions_async()
-    runner.db.replace_positions(runner.session_id, live_positions)
+    runner.db.replace_positions_for_portfolio(runner.portfolio_id, live_positions)
     positions_dict = {}
     price_lookup = {}
-    positions_data = runner.db.get_positions(runner.session_id)
+    positions_data = runner.db.get_positions_for_portfolio(runner.portfolio_id)
     for pos in positions_data:
         sym = pos["symbol"]
         current_price = pos.get("avg_price") or 0
-        recent = runner.db.get_recent_market_data(runner.session_id, sym, limit=1)
+        recent = runner.db.get_recent_market_data_for_portfolio(runner.portfolio_id, sym, limit=1)
         if recent and recent[0].get("price"):
             current_price = recent[0]["price"]
         if market_data.get(sym) and market_data[sym].get("price"):
@@ -927,37 +908,37 @@ async def test_runner_handles_multi_symbol_exposure(monkeypatch, tmp_path):
 
 
 class DummyDB:
-    def log_equity_snapshot(self, *_, **__):
+    def log_equity_snapshot_for_portfolio(self, *_, **__):
         return None
 
-    def log_market_data(self, *_, **__):
+    def log_market_data_for_portfolio(self, *_, **__):
         return None
 
-    def prune_market_data(self, *_, **__):
+    def prune_market_data_for_portfolio(self, *_, **__):
         return None
 
-    def replace_positions(self, *_, **__):
+    def replace_positions_for_portfolio(self, *_, **__):
         return None
 
-    def replace_open_orders(self, *_, **__):
+    def replace_open_orders_for_portfolio(self, *_, **__):
         return None
 
-    def get_positions(self, *_, **__):
+    def get_positions_for_portfolio(self, *_, **__):
         return []
 
-    def get_open_orders(self, *_, **__):
+    def get_open_orders_for_portfolio(self, *_, **__):
         return []
 
-    def get_open_trade_plans(self, *_, **__):
+    def get_open_trade_plans_for_portfolio(self, *_, **__):
         return []
 
-    def get_recent_market_data(self, *_, **__):
+    def get_recent_market_data_for_portfolio(self, *_, **__):
         return []
 
-    def count_open_trade_plans_for_symbol(self, *_, **__):
+    def count_open_trade_plans_for_symbol_for_portfolio(self, *_, **__):
         return 0
 
-    def create_trade_plan(self, *_, **__):
+    def create_trade_plan_for_portfolio(self, *_, **__):
         return 1
 
     def log_estimated_fee(self, *_, **__):
@@ -966,17 +947,20 @@ class DummyDB:
     def set_health_state(self, *_, **__):
         return None
 
-    def get_trade_plan_reason_by_order(self, *_, **__):
+    def get_trade_plan_reason_by_order_for_portfolio(self, *_, **__):
         return None
 
-    def get_trade_count(self, *_, **__):
+    def get_trade_count_for_portfolio(self, *_, **__):
         return 0
 
     def update_llm_trace_execution(self, *_, **__):
         return None
 
-    def get_processed_trade_ids(self, *_, **__):
-        return []
+    def get_processed_trade_ids_for_portfolio(self, *_, **__):
+        return set()
+
+    def get_latest_trade_timestamp_for_portfolio(self, *_, **__):
+        return None
 
     def get_latest_trade_timestamp(self, *_, **__):
         return None
@@ -1160,7 +1144,6 @@ def _build_runner(signal: StrategySignal, *, risk_allowed=True, slippage_ok=True
     runner._liquidity_ok = lambda *_: True
     runner._stacking_block = lambda *_: False
     runner._slippage_within_limit = lambda *_args, **__: (slippage_ok, 0.0 if slippage_ok else 1.0)
-    runner.session_id = 1
     runner.exchange_name = "TEST"
     runner.strategy = DummyStrategy(signals=[signal])
     return runner
@@ -1219,14 +1202,13 @@ async def test_flatten_helper_requests_marketable_orders():
         def __init__(self):
             self.trades = []
 
-        def get_positions(self, session_id, portfolio_id=None):
+        def get_positions_for_portfolio(self, portfolio_id):
             return [{"symbol": "BHP/AUD", "quantity": 10.0}]
 
-        def log_trade(self, *args, **kwargs):
+        def log_trade_for_portfolio(self, *args, **kwargs):
             self.trades.append((args, kwargs))
 
     runner = StrategyRunner(execute_orders=False)
-    runner.session_id = 1
     runner.db = StubDB()
     runner.bot = AsyncMock()
     runner.bot.get_market_data_async = AsyncMock(return_value={"price": 100.0})

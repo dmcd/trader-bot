@@ -279,6 +279,8 @@ class StrategyRunner:
         self.resync_service.bot = self.bot
         self.resync_service.risk_manager = self.risk_manager
         self.resync_service.trade_sync_cutoff_minutes = TRADE_SYNC_CUTOFF_MINUTES
+        if hasattr(self.resync_service, "set_portfolio"):
+            self.resync_service.set_portfolio(self.portfolio_id)
 
     def _refresh_orchestrator_bindings(self):
         """Keep orchestrator dependencies in sync when tests swap stubs."""
@@ -424,12 +426,12 @@ class StrategyRunner:
             logger.debug(f"Could not emit risk metrics: {exc}")
 
         try:
-            session_started = None
-            if self.session:
-                session_started = self.session.get("created_at") or self.session.get("date")
+            portfolio_started = None
+            if self.portfolio:
+                portfolio_started = self.portfolio.get("created_at")
             burn_stats = self.cost_tracker.calculate_llm_burn(
                 total_llm_cost=llm_cost,
-                session_started=session_started,
+                session_started=portfolio_started,
                 budget=LLM_MAX_SESSION_COST,
             )
             budget_status = "ok"

@@ -46,7 +46,7 @@ Legacy session model (now removed):
 
 - [ ] Testing and rollout
   - [x] Expand unit tests for `PortfolioTracker`, `RiskManager`, `ResyncService`, and dashboard loaders to cover portfolio scoping and timezone config.
-  - [ ] Add integration tests for a position opened on day 1 and held on day 2 (trade sync, stop/target persistence, overnight widening, risk/exposure checks).
+  - [x] Add integration tests for a position opened on day 1 and held on day 2 (trade sync, stop/target persistence, overnight widening, risk/exposure checks).
   - [ ] Add tests for trade/order dedupe across runs/days using exchange ids.
 
 - [ ] Documentation and ops

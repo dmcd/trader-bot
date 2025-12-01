@@ -582,7 +582,7 @@ class TradingDatabase:
         trade_id: str | None = None,
         timestamp: str | None = None,
     ):
-        """Internal helper to log a trade without enforcing session usage."""
+        """Internal helper to log a trade without extra run/session context."""
         cursor = self.conn.cursor()
 
         if trade_id:

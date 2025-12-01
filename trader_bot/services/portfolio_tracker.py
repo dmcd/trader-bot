@@ -246,7 +246,7 @@ class PortfolioTracker:
             except Exception as exc:  # pragma: no cover - defensive
                 self.logger.warning(f"Skipping trade during stats rebuild due to error: {exc}")
 
-        # Pull LLM costs from session row
+        # Pull LLM costs from latest portfolio telemetry
         db_stats = {}
         if self.portfolio_id is not None and hasattr(self.db, "get_portfolio_stats_cache"):
             try:

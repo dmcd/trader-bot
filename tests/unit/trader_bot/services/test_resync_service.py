@@ -306,7 +306,7 @@ async def test_sync_trades_paginates_and_skips_duplicates():
 
 
 @pytest.mark.asyncio
-async def test_sync_trades_noop_when_session_missing():
+async def test_sync_trades_noop_when_portfolio_missing():
     db = SyncStubDB()
 
     def trades(_):

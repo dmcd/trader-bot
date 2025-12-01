@@ -402,9 +402,9 @@ def get_llm_burn_stats(portfolio_stats):
     if not portfolio_stats:
         return None
     try:
-        start = portfolio_stats.get("created_at") or portfolio_stats.get("date")
+        run_started = portfolio_stats.get("created_at") or portfolio_stats.get("date")
         total = portfolio_stats.get("total_llm_cost", 0.0) or 0.0
-        return cost_tracker.calculate_llm_burn(total, start, budget=LLM_MAX_PORTFOLIO_COST)
+        return cost_tracker.calculate_llm_burn(total, run_started, budget=LLM_MAX_PORTFOLIO_COST)
     except Exception:
         return None
 
@@ -641,7 +641,7 @@ with tab_live:
             st.info("Bot version started, waiting for trades...")
             st.metric("Starting Balance", f"${portfolio_stats.get('starting_balance', 0):,.2f}")
         else:
-            st.warning("No session stats available for this version.")
+            st.warning("No portfolio stats available for this version.")
         
         st.subheader("🧾 Trade History")
         if not df.empty:

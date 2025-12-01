@@ -444,7 +444,7 @@ class StrategyRunner:
                     logger.debug(f"Could not load equity baseline timestamp: {exc}")
             burn_stats = self.cost_tracker.calculate_llm_burn(
                 total_llm_cost=llm_cost,
-                session_started=portfolio_started,
+                run_started=portfolio_started,
                 budget=LLM_MAX_PORTFOLIO_COST,
             )
             budget_status = "ok"
@@ -782,7 +782,7 @@ class StrategyRunner:
             
         logger.info(f"{self.exchange_name} Equity: {initial_equity}")
         
-        # Seed trackers for this portfolio (no session wiring)
+        # Seed trackers for this portfolio (no legacy session wiring)
         self.starting_equity = self._seed_equity_baseline(initial_equity)
         self.risk_manager.set_baseline(self.starting_equity, timestamp=self._equity_baseline_ts)
         self.portfolio_tracker.set_portfolio(self.portfolio_id)

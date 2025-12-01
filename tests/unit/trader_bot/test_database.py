@@ -229,7 +229,7 @@ def test_trades_can_be_fetched_by_portfolio(tmp_path):
 
 
 
-def test_portfolio_first_helpers_do_not_require_session_rows(tmp_path):
+def test_portfolio_first_helpers_do_not_require_legacy_session_rows(tmp_path):
     db_path = tmp_path / "portfolio-first.db"
     db = TradingDatabase(str(db_path))
     portfolio = db.get_or_create_portfolio("pf", base_currency="usd", bot_version="v1")

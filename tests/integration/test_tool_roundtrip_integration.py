@@ -77,7 +77,7 @@ class StubCost:
     def calculate_llm_cost(self, *args, **kwargs):
         return 0.0
 
-    def calculate_llm_burn(self, total_llm_cost, session_started, budget, now=None, min_window_minutes=5.0):
+    def calculate_llm_burn(self, total_llm_cost, run_started, budget, now=None, min_window_minutes=5.0):
         return {
             "total_llm_cost": total_llm_cost,
             "budget": budget,

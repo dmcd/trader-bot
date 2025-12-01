@@ -124,12 +124,12 @@ class CostTracker:
     def calculate_llm_burn(
         self,
         total_llm_cost: float,
-        session_started: Optional[Union[str, datetime]],
+        run_started: Optional[Union[str, datetime]],
         budget: float,
         now: Optional[datetime] = None,
         min_window_minutes: float = 5.0,
     ) -> Dict[str, Any]:
-        """Compute burn rate vs budget using session start time.
+        """Compute burn rate vs budget using portfolio/run start time.
 
         Returns elapsed hours, burn rate per hour, percent of budget used,
         remaining budget, and projected hours to cap (None when idle).
@@ -138,14 +138,14 @@ class CostTracker:
         now_dt = now or datetime.now(timezone.utc)
 
         start_dt: Optional[datetime] = None
-        if isinstance(session_started, datetime):
-            start_dt = session_started
-        elif isinstance(session_started, str) and session_started:
+        if isinstance(run_started, datetime):
+            start_dt = run_started
+        elif isinstance(run_started, str) and run_started:
             try:
-                start_dt = datetime.fromisoformat(session_started)
+                start_dt = datetime.fromisoformat(run_started)
             except ValueError:
                 try:
-                    start_dt = datetime.fromisoformat(session_started.replace("Z", "+00:00"))
+                    start_dt = datetime.fromisoformat(run_started.replace("Z", "+00:00"))
                 except Exception:
                     start_dt = None
 

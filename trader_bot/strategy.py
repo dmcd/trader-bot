@@ -373,7 +373,7 @@ class LLMStrategy(BaseStrategy):
             if portfolio_stats is not None:
                 burn_stats = self.cost_tracker.calculate_llm_burn(
                     total_llm_cost=total_llm_cost,
-                    session_started=portfolio_stats.get('created_at') or portfolio_stats.get('date'),
+                    run_started=portfolio_stats.get('created_at') or portfolio_stats.get('date'),
                     budget=LLM_MAX_PORTFOLIO_COST,
                 )
         except Exception:

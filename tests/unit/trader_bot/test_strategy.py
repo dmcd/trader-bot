@@ -481,6 +481,28 @@ async def test_generate_signal_uses_decision_symbol(strategy_env, set_loop_time)
 
 
 @pytest.mark.asyncio
+async def test_generate_signal_logs_when_symbol_missing(strategy_env, set_loop_time, caplog):
+    strategy = strategy_env.strategy
+    set_loop_time(1000)
+    strategy.last_trade_ts = 0
+    strategy_env.db.get_recent_market_data_for_portfolio.return_value = [{"price": 1}] * 50
+    strategy_env.ta.calculate_indicators.return_value = {"bb_width": 2.0, "rsi": 50}
+    market_data = {"NVDA/USD": {"price": 100}}
+    raw_decision = json.dumps(
+        {"action": "HOLD", "symbol": "AUD/USD", "quantity": 0, "reason": "range bound"}
+    )
+    caplog.set_level("ERROR")
+
+    with patch.object(strategy, "_get_llm_decision", new_callable=AsyncMock) as mock_llm:
+        mock_llm.return_value = raw_decision
+        signal = await _run_generate(strategy, market_data=market_data)
+
+    assert signal is not None
+    assert signal.symbol == "NVDA/USD"  # fell back to first/only active symbol
+    assert any("not in active symbols" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_null_symbol_validation(strategy_env, set_loop_time):
     strategy = strategy_env.strategy
     set_loop_time(1000)

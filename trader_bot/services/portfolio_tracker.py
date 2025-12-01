@@ -8,9 +8,8 @@ class PortfolioTracker:
     Extracted from StrategyRunner so PnL math and cache updates can be unit tested in isolation.
     """
 
-    def __init__(self, db: Any, session_id: Optional[int] = None, portfolio_id: Optional[int] = None, logger: Optional[logging.Logger] = None):
+    def __init__(self, db: Any, portfolio_id: Optional[int] = None, logger: Optional[logging.Logger] = None):
         self.db = db
-        self.session_id = session_id
         self.portfolio_id = portfolio_id
         self.logger = logger or logging.getLogger(__name__)
         self.holdings: dict[str, dict[str, float]] = {}
@@ -22,24 +21,12 @@ class PortfolioTracker:
             "exposure_notional": 0.0,
         }
 
-    def set_session(self, session_id: int, portfolio_id: Optional[int] = None) -> None:
-        self.session_id = session_id
-        if portfolio_id is not None:
-            self.portfolio_id = portfolio_id
-        elif hasattr(self.db, "get_session_portfolio_id") and self.session_id is not None:
-            try:
-                self.portfolio_id = self.db.get_session_portfolio_id(self.session_id)
-            except Exception:
-                self.portfolio_id = None
+    def set_portfolio(self, portfolio_id: int) -> None:
+        """Update portfolio scope for downstream cache writes."""
+        self.portfolio_id = portfolio_id
 
     def load_cached_stats(self) -> tuple[dict, bool]:
         """Hydrate session stats from portfolio/session caches for restart resilience."""
-        if self.portfolio_id is None and self.session_id is not None and hasattr(self.db, "get_session_portfolio_id"):
-            try:
-                self.portfolio_id = self.db.get_session_portfolio_id(self.session_id)
-            except Exception:
-                self.portfolio_id = None
-
         stats = {}
         if self.portfolio_id is not None and hasattr(self.db, "get_portfolio_stats_cache"):
             try:
@@ -114,7 +101,7 @@ class PortfolioTracker:
 
     def load_holdings_from_db(self) -> None:
         """Rebuild holdings from historical trades for this session."""
-        trades = self.db.get_trades_for_session(self.session_id, portfolio_id=self.portfolio_id)
+        trades = self.db.get_trades_for_portfolio(self.portfolio_id)
         self.holdings = {}
         for trade in trades:
             self.apply_trade_to_holdings(
@@ -240,7 +227,7 @@ class PortfolioTracker:
 
     def rebuild_session_stats_from_trades(self, current_equity: float | None = None) -> dict:
         """Recompute session_stats from recorded trades and update cache."""
-        trades = self.db.get_trades_for_session(self.session_id, portfolio_id=self.portfolio_id)
+        trades = self.db.get_trades_for_portfolio(self.portfolio_id)
         self.reset_holdings()
         self.reset_stats()
         for trade in trades:
@@ -266,8 +253,6 @@ class PortfolioTracker:
                 db_stats = self.db.get_portfolio_stats_cache(self.portfolio_id) or {}
             except Exception:
                 db_stats = {}
-        if not db_stats and self.session_id is not None:
-            db_stats = self.db.get_session_stats(self.session_id, portfolio_id=self.portfolio_id)
         self.session_stats["total_llm_cost"] = db_stats.get("total_llm_cost", 0.0)
         self.session_stats["exposure_notional"] = db_stats.get("exposure_notional", self.session_stats.get("exposure_notional", 0.0) or 0.0)
         self._persist_stats_cache()
@@ -277,12 +262,6 @@ class PortfolioTracker:
         """Write stats aggregates to the appropriate cache scope."""
         try:
             portfolio_ref = self.portfolio_id
-            if portfolio_ref is None and self.session_id is not None and hasattr(self.db, "get_session_portfolio_id"):
-                try:
-                    portfolio_ref = self.db.get_session_portfolio_id(self.session_id)
-                    self.portfolio_id = portfolio_ref
-                except Exception:
-                    portfolio_ref = None
             if portfolio_ref is not None and hasattr(self.db, "set_portfolio_stats_cache"):
                 self.db.set_portfolio_stats_cache(portfolio_ref, self.session_stats)
         except Exception as exc:  # pragma: no cover - defensive

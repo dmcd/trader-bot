@@ -73,7 +73,6 @@ class PlanMonitor:
 
     async def monitor(
         self,
-        session_id: int | None,
         price_lookup: dict,
         open_orders: Iterable[dict],
         config: PlanMonitorConfig,
@@ -86,12 +85,12 @@ class PlanMonitor:
         price_lookup: symbol -> latest price
         open_orders: list of open orders from exchange
         """
-        if not session_id:
-            return
         if portfolio_id is not None:
             self.portfolio_id = portfolio_id
+        if not self.portfolio_id:
+            return
         try:
-            open_plans = self.db.get_open_trade_plans(session_id, portfolio_id=self.portfolio_id)
+            open_plans = self.db.get_open_trade_plans_for_portfolio(self.portfolio_id)
             now = now or datetime.now(timezone.utc)
             now_iso = now.isoformat()
             day_end_cutoff = None
@@ -225,8 +224,8 @@ class PlanMonitor:
                             plan["symbol"], size, price_now, action, liquidity=liquidity_tag
                         )
                         realized = self.holdings_updater(plan["symbol"], action, size, price_now, fee)
-                        self.db.log_trade(
-                            session_id,
+                        self.db.log_trade_for_portfolio(
+                            self.portfolio_id,
                             plan["symbol"],
                             action,
                             size,
@@ -235,7 +234,6 @@ class PlanMonitor:
                             reason,
                             liquidity=order_result.get("liquidity") if order_result else "taker",
                             realized_pnl=realized,
-                            portfolio_id=self.portfolio_id,
                         )
                         self.session_stats_applier(
                             order_result.get("order_id") if order_result else None,

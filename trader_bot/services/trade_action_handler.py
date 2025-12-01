@@ -211,7 +211,6 @@ class TradeActionHandler:
 
     async def handle_partial_close(
         self,
-        session_id: int,
         plan_id: Optional[int],
         close_fraction: float,
         symbol: str,
@@ -230,7 +229,7 @@ class TradeActionHandler:
             self.emit_telemetry(telemetry_record)
             return telemetry_record
         try:
-            open_plans = self.db.get_open_trade_plans(session_id)
+            open_plans = self.db.get_open_trade_plans_for_portfolio(self.portfolio_id)
             plan = next((p for p in open_plans if p.get("id") == plan_id), None)
         except Exception:
             plan = None
@@ -262,8 +261,8 @@ class TradeActionHandler:
             liquidity_tag = order_result.get("liquidity", "taker") if order_result else "taker"
             fee = self.cost_tracker.calculate_trade_fee(symbol, qty_for_risk, price or 0, flatten_action, liquidity=liquidity_tag)
             realized = self.portfolio_tracker.update_holdings_and_realized(symbol, flatten_action, qty_for_risk, price or 0, fee)
-            self.db.log_trade(
-                session_id,
+            self.db.log_trade_for_portfolio(
+                self.portfolio_id,
                 symbol,
                 flatten_action,
                 qty_for_risk,
@@ -272,7 +271,6 @@ class TradeActionHandler:
                 f"Partial close plan {plan_id} ({close_fraction*100:.0f}%)",
                 liquidity=order_result.get("liquidity") if order_result else "taker",
                 realized_pnl=realized,
-                portfolio_id=self.portfolio_id,
             )
             self.portfolio_tracker.apply_fill_to_session_stats(order_result.get("order_id") if order_result else None, fee, realized)
             remaining_size = max(plan_size - close_qty, 0.0)
@@ -302,7 +300,6 @@ class TradeActionHandler:
 
     async def handle_close_position(
         self,
-        session_id: int,
         symbol: str,
         price: float | None,
         trace_id: Any,
@@ -310,7 +307,7 @@ class TradeActionHandler:
         telemetry_record = {"status": "close_position_none", "symbol": symbol}
         qty = 0.0
         try:
-            positions = self.db.get_positions(session_id, portfolio_id=self.portfolio_id)
+            positions = self.db.get_positions_for_portfolio(self.portfolio_id)
             for pos in positions:
                 if pos.get("symbol") == symbol:
                     qty = pos.get("quantity", 0.0) or 0.0
@@ -339,8 +336,8 @@ class TradeActionHandler:
             liquidity_tag = order_result.get("liquidity", "taker") if order_result else "taker"
             fee = self.cost_tracker.calculate_trade_fee(symbol, qty_buffered, price or 0, action, liquidity=liquidity_tag)
             realized = self.portfolio_tracker.update_holdings_and_realized(symbol, action, qty_buffered, price or 0, fee)
-            self.db.log_trade(
-                session_id,
+            self.db.log_trade_for_portfolio(
+                self.portfolio_id,
                 symbol,
                 action,
                 qty_buffered,
@@ -349,7 +346,6 @@ class TradeActionHandler:
                 f"Close position request ({qty})",
                 liquidity=order_result.get("liquidity") if order_result else "taker",
                 realized_pnl=realized,
-                portfolio_id=self.portfolio_id,
             )
             self.portfolio_tracker.apply_fill_to_session_stats(order_result.get("order_id") if order_result else None, fee, realized)
             telemetry_record["status"] = "close_position_executed"

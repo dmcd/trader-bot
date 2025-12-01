@@ -14,6 +14,13 @@ Notes on the current session model:
 - Dashboard and MetricsDrift read/write via `session_id` (version → session lookup, session_stats_cache, equity snapshots), so UI/ops flows still depend on the legacy session row.
 - We can assume a **fresh DB** (no backfill/migration needed); sessions only remain to let us split refactors while tests still pass mid-flight.
 
+## Current state (handoff notes)
+
+- Runtime services (runner, strategy, trading_context, resync, plan monitor, trade action handler, market data service, portfolio tracker) have been converted to portfolio-first and no longer thread `session_id`; telemetry emits `portfolio_id`/`run_id`.
+- Strategy LLM prompt/trace logging now uses portfolio DAO helpers; TradingContext builds summaries off portfolio stats/market data.
+- Tests/fixtures are still session-centric and will fail until rewritten to provision portfolios and call portfolio-first DB helpers; `rg 'session_id' tests` shows hot spots (strategy runner tests, trade_sync integration, trading_context tests, resync/plan monitor/trade_action_handler unit tests, database fixture helpers).
+- Next step: sweep tests to remove `set_session` expectations, swap session-scoped helpers for portfolio variants, and update assertions that read session stats/equity snapshots to portfolio cache equivalents. Run `pytest` afterward and commit the code refactor + test updates.
+
 ## Cleanup tasks (blockers before further portfolio work)
 
 - [x] **Schema: make portfolio first-class, session optional**
@@ -87,9 +94,4 @@ Notes on the current session model:
   - [ ] Document operator flows: starting a new portfolio, rolling daily baselines, and troubleshooting mismatched day PnL vs equity.
   - [ ] Update risk documentation (AGENTS, architecture, research notes) to reflect portfolio-level risk and removal of daily-loss gates.
 
-## Current state (handoff notes)
 
-- Runtime services (runner, strategy, trading_context, resync, plan monitor, trade action handler, market data service, portfolio tracker) have been converted to portfolio-first and no longer thread `session_id`; telemetry emits `portfolio_id`/`run_id`.
-- Strategy LLM prompt/trace logging now uses portfolio DAO helpers; TradingContext builds summaries off portfolio stats/market data.
-- Tests/fixtures are still session-centric and will fail until rewritten to provision portfolios and call portfolio-first DB helpers; `rg 'session_id' tests` shows hot spots (strategy runner tests, trade_sync integration, trading_context tests, resync/plan monitor/trade_action_handler unit tests, database fixture helpers).
-- Next step: sweep tests to remove `set_session` expectations, swap session-scoped helpers for portfolio variants, and update assertions that read session stats/equity snapshots to portfolio cache equivalents. Run `pytest` afterward and commit the code refactor + test updates.

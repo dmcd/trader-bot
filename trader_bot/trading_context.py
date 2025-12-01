@@ -13,10 +13,10 @@ logger = logging.getLogger(__name__)
 class TradingContext:
     """Provides rich trading context for LLM decision-making."""
 
-    def __init__(self, db: TradingDatabase, session_id: int, portfolio_id: int | None = None):
+    def __init__(self, db: TradingDatabase, portfolio_id: int, run_id: str | None = None):
         self.db = db
-        self.session_id = session_id
         self.portfolio_id = portfolio_id
+        self.run_id = run_id
         self.position_baseline: Dict[str, float] = {}
 
     @staticmethod
@@ -37,7 +37,7 @@ class TradingContext:
             self.position_baseline[sym] = qty or 0.0
 
     @staticmethod
-    def _net_quantity_for_session(quantity: float, baseline_qty: float) -> float:
+    def _net_quantity_with_baseline(quantity: float, baseline_qty: float) -> float:
         """
         Remove baseline inventory so exposure reflects only positions opened/closed
         during the session. Baseline defines a neutral band between 0 and baseline.
@@ -63,12 +63,21 @@ class TradingContext:
         max_orders = 5
         max_trades = 5
 
-        session = self.db.get_session_stats(self.session_id, portfolio_id=self.portfolio_id)
-        recent_trades = list(reversed(self.db.get_recent_trades(self.session_id, limit=50, portfolio_id=self.portfolio_id)))  # chronological
+        portfolio_stats = self.db.get_portfolio_stats(self.portfolio_id) if self.portfolio_id is not None else {}
+        portfolio_meta = self.db.get_portfolio(self.portfolio_id) if self.portfolio_id is not None else {}
+        recent_trades = list(
+            reversed(self.db.get_recent_trades_for_portfolio(self.portfolio_id, limit=50))
+        ) if self.portfolio_id is not None else []
 
-        # Calculate session duration (hours, rounded) and win/loss counts
-        session_start = datetime.fromisoformat(session['created_at'])
-        duration_hours = (datetime.now() - session_start).total_seconds() / 3600
+        # Calculate portfolio duration (hours, rounded) and win/loss counts
+        duration_hours = 0.0
+        created_at = portfolio_meta.get("created_at")
+        if created_at:
+            try:
+                created_dt = datetime.fromisoformat(created_at)
+                duration_hours = (datetime.now() - created_dt).total_seconds() / 3600
+            except Exception:
+                duration_hours = 0.0
 
         wins = losses = 0
         open_position = None
@@ -101,7 +110,11 @@ class TradingContext:
         win_rate = (wins / total_closed * 100) if total_closed > 0 else 0.0
 
         # Recent market trend (quick delta)
-        market_data = self.db.get_recent_market_data(self.session_id, symbol, limit=20, portfolio_id=self.portfolio_id)
+        market_data = (
+            self.db.get_recent_market_data_for_portfolio(self.portfolio_id, symbol, limit=20)
+            if self.portfolio_id is not None
+            else []
+        )
         price_trend_pct = None
         if len(market_data) >= 2 and market_data[-1].get('price'):
             recent_price = market_data[0]['price']
@@ -109,9 +122,9 @@ class TradingContext:
             if older_price:
                 price_trend_pct = ((recent_price - older_price) / older_price) * 100
 
-        positions = self.db.get_positions(self.session_id, portfolio_id=self.portfolio_id)
+        positions = self.db.get_positions_for_portfolio(self.portfolio_id) if self.portfolio_id is not None else []
         if open_orders is None:
-            open_orders = self.db.get_open_orders(self.session_id, portfolio_id=self.portfolio_id)
+            open_orders = self.db.get_open_orders_for_portfolio(self.portfolio_id) if self.portfolio_id is not None else []
         open_orders = self._filter_our_orders(open_orders)
 
         positions_summary = []
@@ -123,7 +136,11 @@ class TradingContext:
             avg_price = pos.get('avg_price') or 0
 
             current_price = avg_price
-            recent_data = self.db.get_recent_market_data(self.session_id, sym, limit=1, portfolio_id=self.portfolio_id)
+            recent_data = (
+                self.db.get_recent_market_data_for_portfolio(self.portfolio_id, sym, limit=1)
+                if self.portfolio_id is not None
+                else []
+            )
             if recent_data and recent_data[0].get('price'):
                 current_price = recent_data[0]['price']
 
@@ -131,7 +148,7 @@ class TradingContext:
                 continue
 
             baseline_qty = baseline_map.get(sym, 0.0)
-            session_qty = self._net_quantity_for_session(qty, baseline_qty)
+            session_qty = self._net_quantity_with_baseline(qty, baseline_qty)
             if abs(session_qty) < 1e-9:
                 continue
 
@@ -177,20 +194,21 @@ class TradingContext:
                     }
                 )
 
-        venue_base_currency = session.get("base_currency") or (IB_BASE_CURRENCY if ACTIVE_EXCHANGE == "IB" else "USD")
+        venue_base_currency = portfolio_meta.get("base_currency") or (IB_BASE_CURRENCY if ACTIVE_EXCHANGE == "IB" else "USD")
         summary = {
             "session": {
-                "date": session.get('date'),
+                "portfolio_id": self.portfolio_id,
+                "created_at": created_at,
                 "hours": round(duration_hours, 1),
-                "starting_balance": session.get('starting_balance'),
-                "net_pnl": session.get('net_pnl'),
-                "fees": session.get('total_fees'),
-                "llm_cost": session.get('total_llm_cost'),
-                "total_trades": session.get('total_trades'),
+                "starting_balance": None,
+                "net_pnl": portfolio_stats.get('net_pnl'),
+                "fees": portfolio_stats.get('total_fees'),
+                "llm_cost": portfolio_stats.get('total_llm_cost'),
+                "total_trades": portfolio_stats.get('total_trades'),
                 "win_rate_pct": round(win_rate, 1),
                 "wins": wins,
                 "losses": losses,
-                "exposure_notional": session.get("exposure_notional"),
+                "exposure_notional": portfolio_stats.get("exposure_notional"),
             },
             "trend_pct": round(price_trend_pct, 2) if price_trend_pct is not None else None,
             "positions": positions_summary,
@@ -203,6 +221,7 @@ class TradingContext:
                 "instruments": "ASX equities/ETFs and FX (no crypto)" if ACTIVE_EXCHANGE == "IB" else "Crypto",
                 "market_hours_note": "ASX ~10:00-16:00 AEST; FX ~24/5" if ACTIVE_EXCHANGE == "IB" else "24/7 crypto",
             },
+            "run": {"id": self.run_id},
         }
 
         try:
@@ -224,7 +243,7 @@ class TradingContext:
         memory = {"open_plans": [], "recent_decisions": []}
 
         try:
-            plans = self.db.get_open_trade_plans(self.session_id, portfolio_id=self.portfolio_id)[:max_plans]
+            plans = self.db.get_open_trade_plans_for_portfolio(self.portfolio_id)[:max_plans]
             for plan in plans:
                 memory["open_plans"].append(
                     {
@@ -243,7 +262,7 @@ class TradingContext:
             logger.debug(f"Failed to fetch open plans for memory: {exc}")
 
         try:
-            traces = self.db.get_recent_llm_traces(self.session_id, limit=max_traces, portfolio_id=self.portfolio_id)
+            traces = self.db.get_recent_llm_traces_for_portfolio(self.portfolio_id, limit=max_traces)
             for trace in traces:
                 decision = trace.get("decision_json")
                 execution = trace.get("execution_result")
@@ -291,7 +310,9 @@ class TradingContext:
     
     def get_recent_performance(self) -> Dict[str, Any]:
         """Get recent performance metrics."""
-        recent_trades = list(reversed(self.db.get_recent_trades(self.session_id, limit=50, portfolio_id=self.portfolio_id)))  # chronological
+        recent_trades = list(
+            reversed(self.db.get_recent_trades_for_portfolio(self.portfolio_id, limit=50))
+        )  # chronological
         
         if not recent_trades:
             return {

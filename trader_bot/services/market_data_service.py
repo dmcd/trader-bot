@@ -12,7 +12,6 @@ class MarketDataService:
         self,
         db: Any,
         bot: Any,
-        session_id: Optional[int] = None,
         portfolio_id: Optional[int] = None,
         monotonic: Optional[Callable[[], float]] = None,
         logger: Optional[logging.Logger] = None,
@@ -21,7 +20,6 @@ class MarketDataService:
     ):
         self.db = db
         self.bot = bot
-        self.session_id = session_id
         self.portfolio_id = portfolio_id
         self.monotonic = monotonic
         self.logger = logger or logging.getLogger(__name__)
@@ -29,10 +27,9 @@ class MarketDataService:
         self.ohlcv_retention_limit = ohlcv_retention_limit
         self._last_ohlcv_capture: dict[tuple[str, str], float] = {}
 
-    def set_session(self, session_id: int, portfolio_id: Optional[int] = None) -> None:
-        self.session_id = session_id
-        if portfolio_id is not None:
-            self.portfolio_id = portfolio_id
+    def set_portfolio(self, portfolio_id: int) -> None:
+        """Update the active portfolio scope for persisted snapshots."""
+        self.portfolio_id = portfolio_id
 
     @staticmethod
     def timeframe_to_seconds(timeframe: str) -> int:
@@ -67,11 +64,11 @@ class MarketDataService:
                     continue
 
                 bars = await self.bot.fetch_ohlcv(symbol, timeframe=tf, limit=50)
-                if self.session_id is not None:
-                    self.db.log_ohlcv_batch(self.session_id, symbol, tf, bars, portfolio_id=self.portfolio_id)
+                if self.portfolio_id is not None:
+                    self.db.log_ohlcv_batch_for_portfolio(self.portfolio_id, symbol, tf, bars)
                     if self.ohlcv_retention_limit:
                         try:
-                            self.db.prune_ohlcv(self.session_id, symbol, tf, self.ohlcv_retention_limit, portfolio_id=self.portfolio_id)
+                            self.db.prune_ohlcv_for_portfolio(self.portfolio_id, symbol, tf, self.ohlcv_retention_limit)
                         except Exception as exc:
                             self.logger.debug(f"OHLCV prune failed for {symbol} {tf}: {exc}")
                 self._last_ohlcv_capture[last_key] = now

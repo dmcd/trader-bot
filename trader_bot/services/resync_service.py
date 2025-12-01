@@ -35,14 +35,12 @@ class ResyncService:
         self.session_stats_applier = session_stats_applier
         self.record_health_state = record_health_state or (lambda *_: None)
         self.logger = logger or logging.getLogger(__name__)
-        self.session_id: Optional[int] = None
         self.portfolio_id: Optional[int] = portfolio_id
         self.trade_sync_cutoff_minutes = trade_sync_cutoff_minutes
 
-    def set_session(self, session_id: int, portfolio_id: Optional[int] = None) -> None:
-        self.session_id = session_id
-        if portfolio_id is not None:
-            self.portfolio_id = portfolio_id
+    def set_portfolio(self, portfolio_id: int) -> None:
+        """Update active portfolio scope for reconciliation."""
+        self.portfolio_id = portfolio_id
 
     def filter_our_orders(self, orders: list) -> list:
         """Only keep open orders with our client id prefix."""
@@ -58,17 +56,17 @@ class ResyncService:
         Load persisted positions and open orders for this portfolio without wiping snapshots.
         Seeds the risk manager so exposure checks remain accurate across restarts.
         """
-        if not self.session_id:
+        if not self.portfolio_id:
             return {"positions": [], "open_orders": []}
 
         try:
-            positions = self.db.get_positions(self.session_id, portfolio_id=self.portfolio_id) or []
+            positions = self.db.get_positions_for_portfolio(self.portfolio_id) or []
         except Exception as exc:
             self.logger.debug(f"Could not load positions for bootstrap: {exc}")
             positions = []
 
         try:
-            open_orders = self.db.get_open_orders(self.session_id, portfolio_id=self.portfolio_id) or []
+            open_orders = self.db.get_open_orders_for_portfolio(self.portfolio_id) or []
         except Exception as exc:
             self.logger.debug(f"Could not load open orders for bootstrap: {exc}")
             open_orders = []
@@ -95,7 +93,7 @@ class ResyncService:
         Refresh open order snapshot using live exchange data and drop any DB orders
         that no longer exist on the venue.
         """
-        if not self.session_id:
+        if not self.portfolio_id:
             return
         try:
             exchange_orders = await self.bot.get_open_orders_async()
@@ -117,7 +115,7 @@ class ResyncService:
             self.logger.info(f"🧹 Removed {len(stale)} stale open orders not on exchange")
 
         try:
-            self.db.replace_open_orders(self.session_id, exchange_orders, portfolio_id=self.portfolio_id)
+            self.db.replace_open_orders_for_portfolio(self.portfolio_id, exchange_orders)
         except Exception as exc:
             self.logger.warning(f"Could not refresh open orders snapshot: {exc}")
 
@@ -126,7 +124,7 @@ class ResyncService:
         Reconcile positions and open orders against the live exchange at startup.
         Ensures DB snapshots and risk manager state reflect actual venue state.
         """
-        if not self.session_id:
+        if not self.portfolio_id:
             return
         try:
             live_positions = await self.bot.get_positions_async()
@@ -145,8 +143,8 @@ class ResyncService:
 
         # Load existing snapshots
         try:
-            db_positions = self.db.get_positions(self.session_id, portfolio_id=self.portfolio_id) or []
-            db_orders = self.db.get_open_orders(self.session_id, portfolio_id=self.portfolio_id) or []
+            db_positions = self.db.get_positions_for_portfolio(self.portfolio_id) or []
+            db_orders = self.db.get_open_orders_for_portfolio(self.portfolio_id) or []
         except Exception as exc:
             self.record_health_state("restart_recovery", "error", {"stage": "db_read", "error": str(exc)})
             self.logger.warning(f"Could not load DB snapshots during recovery: {exc}")
@@ -154,8 +152,8 @@ class ResyncService:
 
         # Replace snapshots with live state
         try:
-            self.db.replace_positions(self.session_id, live_positions, portfolio_id=self.portfolio_id)
-            self.db.replace_open_orders(self.session_id, live_orders, portfolio_id=self.portfolio_id)
+            self.db.replace_positions_for_portfolio(self.portfolio_id, live_positions)
+            self.db.replace_open_orders_for_portfolio(self.portfolio_id, live_orders)
         except Exception as exc:
             self.record_health_state("restart_recovery", "error", {"stage": "db_write", "error": str(exc)})
             self.logger.warning(f"Could not persist reconciled snapshots: {exc}")
@@ -189,36 +187,29 @@ class ResyncService:
 
     async def sync_trades_from_exchange(
         self,
-        session_id: int,
         processed_trade_ids: set[tuple[str, str | None]],
         order_reasons: dict,
         plan_reason_lookup: Callable[[int, str, str], Optional[str]],
         get_symbols: Callable[[], set],
     ):
         """Sync recent trades from exchange to DB."""
-        if not session_id:
+        if not self.portfolio_id:
             return
 
         new_processed: set[tuple[str, str | None]] = set()
         if not processed_trade_ids:
             try:
-                persisted_ids = self.db.get_processed_trade_ids(session_id, portfolio_id=self.portfolio_id)
+                persisted_ids = self.db.get_processed_trade_ids_for_portfolio(self.portfolio_id)
                 processed_trade_ids.update(persisted_ids or set())
             except Exception as exc:
                 self.logger.debug(f"Could not load processed trade ids: {exc}")
-        try:
-            if not processed_trade_ids:
-                persisted_ids = self.db.get_processed_trade_ids(session_id, portfolio_id=self.portfolio_id)
-                processed_trade_ids.update(persisted_ids or set())
-        except Exception as exc:
-            self.logger.debug(f"Could not load processed trade ids: {exc}")
 
         try:
             symbols = get_symbols()
             if not symbols:
                 symbols = {"BTC/USD"}
 
-            since_iso = self.db.get_latest_trade_timestamp(session_id, portfolio_id=self.portfolio_id)
+            since_iso = self.db.get_latest_trade_timestamp_for_portfolio(self.portfolio_id)
             since_ms = None
             if since_iso:
                 try:
@@ -253,16 +244,10 @@ class ResyncService:
                         if trade_id in processed_trade_ids:
                             continue
 
-                        if self.portfolio_id is not None:
-                            existing = self.db.conn.execute(
-                                "SELECT id FROM trades WHERE trade_id = ? AND portfolio_id = ?",
-                                (trade_id, self.portfolio_id),
-                            ).fetchone()
-                        else:
-                            existing = self.db.conn.execute(
-                                "SELECT id FROM trades WHERE trade_id = ? AND session_id = ?",
-                                (trade_id, session_id),
-                            ).fetchone()
+                        existing = self.db.conn.execute(
+                            "SELECT id FROM trades WHERE trade_id = ? AND portfolio_id = ?",
+                            (trade_id, self.portfolio_id),
+                        ).fetchone()
                         if existing:
                             processed_trade_ids.add(trade_id)
                             new_processed.add((trade_id, client_oid))
@@ -294,7 +279,7 @@ class ResyncService:
                             liquidity = str(liquidity).lower()
 
                         try:
-                            plan_reason = plan_reason_lookup(session_id, order_id, client_oid)
+                            plan_reason = plan_reason_lookup(self.portfolio_id, order_id, client_oid)
                         except Exception:
                             plan_reason = None
                         reason = order_reasons.get(str(order_id)) or plan_reason
@@ -305,8 +290,8 @@ class ResyncService:
 
                         realized_pnl = self.holdings_updater(symbol, side, quantity, price, fee)
 
-                        self.db.log_trade(
-                            session_id,
+                        self.db.log_trade_for_portfolio(
+                            self.portfolio_id,
                             symbol,
                             side,
                             quantity,
@@ -317,7 +302,6 @@ class ResyncService:
                             realized_pnl=realized_pnl,
                             trade_id=trade_id,
                             timestamp=trade.get("datetime"),
-                            portfolio_id=self.portfolio_id,
                         )
                         self.session_stats_applier(order_id, fee, realized_pnl)
                         processed_trade_ids.add(trade_id)
@@ -337,6 +321,6 @@ class ResyncService:
         finally:
             if new_processed:
                 try:
-                    self.db.record_processed_trade_ids(session_id, new_processed, portfolio_id=self.portfolio_id)
+                    self.db.record_processed_trade_ids_for_portfolio(self.portfolio_id, new_processed)
                 except Exception as exc:
                     self.logger.debug(f"Could not persist processed trade ids: {exc}")

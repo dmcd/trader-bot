@@ -83,7 +83,6 @@ class StrategyOrchestrator:
 
     async def monitor_trade_plans(
         self,
-        session_id: int,
         price_lookup: dict,
         open_orders: list,
         config: PlanMonitorConfig,
@@ -92,12 +91,12 @@ class StrategyOrchestrator:
     ):
         """Refresh bindings and run the plan monitor for the loop."""
         refresh_bindings_cb()
+        target_portfolio = portfolio_id if portfolio_id is not None else self.portfolio_id
         await self.plan_monitor.monitor(
-            session_id,
             price_lookup=price_lookup,
             open_orders=open_orders,
             config=config,
-            portfolio_id=portfolio_id if portfolio_id is not None else self.portfolio_id,
+            portfolio_id=target_portfolio,
         )
 
     def emit_market_health(self, primary_data: dict):

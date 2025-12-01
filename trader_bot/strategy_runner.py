@@ -5,7 +5,6 @@ import os
 import signal
 import sys
 import time
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -125,18 +124,17 @@ class StrategyRunner:
         
         # Professional trading infrastructure
         self.db = TradingDatabase()
-        self.portfolio = self.db.get_or_create_portfolio(
+        self.portfolio_id, self.run_id = self.db.ensure_active_portfolio(
             name=PORTFOLIO_NAME,
             base_currency=self.base_currency or PORTFOLIO_BASE_CURRENCY,
             bot_version=BOT_VERSION,
         )
-        self.portfolio_id = self.portfolio["id"] if self.portfolio else None
+        self.portfolio = self.db.get_portfolio(self.portfolio_id)
         self.risk_manager.set_portfolio(self.portfolio_id)
         self.cost_tracker = CostTracker(self.exchange_name, llm_provider=LLM_PROVIDER)
         self.technical_analysis = TechnicalAnalysis()
-        self.session_id = None
         self.context = None
-        self.session = None
+        self.starting_equity: float | None = None
         self.data_fetch_coordinator = None
         # Track estimated fees per order so we can reconcile with actual fills
         self._estimated_fees = {}  # order_id -> estimated fee
@@ -161,7 +159,6 @@ class StrategyRunner:
         )
         self.portfolio_tracker = PortfolioTracker(self.db, portfolio_id=self.portfolio_id, logger=logger)
         self.holdings = self.portfolio_tracker.holdings
-        self.run_id: str | None = f"{BOT_VERSION}-{uuid.uuid4().hex[:12]}"
         self.market_data_service = MarketDataService(
             db=self.db,
             bot=self.bot,
@@ -247,7 +244,6 @@ class StrategyRunner:
         try:
             record.setdefault("run_id", self.run_id)
             record.setdefault("portfolio_id", self.portfolio_id)
-            record.setdefault("session_id", self.session_id)
             self.telemetry_logger.info(json.dumps(record, default=str))
         except Exception as e:
             logger.debug(f"Telemetry emit failed: {e}")
@@ -282,7 +278,6 @@ class StrategyRunner:
         self.resync_service.db = self.db
         self.resync_service.bot = self.bot
         self.resync_service.risk_manager = self.risk_manager
-        self.resync_service.set_session(self.session_id, portfolio_id=self.portfolio_id)
         self.resync_service.trade_sync_cutoff_minutes = TRADE_SYNC_CUTOFF_MINUTES
 
     def _refresh_orchestrator_bindings(self):
@@ -301,17 +296,17 @@ class StrategyRunner:
         symbols.extend([s for s in ALLOWED_SYMBOLS if s])
         # 2) Live state from DB snapshots
         try:
-            positions = self.db.get_positions(self.session_id, portfolio_id=self.portfolio_id) if self.session_id else []
+            positions = self.db.get_positions_for_portfolio(self.portfolio_id) if self.portfolio_id else []
             symbols.extend([p.get("symbol") for p in positions or [] if p.get("symbol")])
         except Exception:
             pass
         try:
-            orders = self.db.get_open_orders(self.session_id, portfolio_id=self.portfolio_id) if self.session_id else []
+            orders = self.db.get_open_orders_for_portfolio(self.portfolio_id) if self.portfolio_id else []
             symbols.extend([o.get("symbol") for o in orders or [] if o.get("symbol")])
         except Exception:
             pass
         try:
-            plans = self.db.get_open_trade_plans(self.session_id, portfolio_id=self.portfolio_id) if self.session_id else []
+            plans = self.db.get_open_trade_plans_for_portfolio(self.portfolio_id) if self.portfolio_id else []
             symbols.extend([p.get("symbol") for p in plans or [] if p.get("symbol")])
         except Exception:
             pass
@@ -359,10 +354,10 @@ class StrategyRunner:
         """Collect symbols from DB state for trade sync."""
         symbols = set()
         try:
-            symbols.update(self.db.get_distinct_trade_symbols(self.session_id, portfolio_id=self.portfolio_id) or [])
-            symbols.update({p.get('symbol') for p in self.db.get_positions(self.session_id, portfolio_id=self.portfolio_id) or [] if p.get('symbol')})
-            symbols.update({p.get('symbol') for p in self.db.get_open_trade_plans(self.session_id, portfolio_id=self.portfolio_id) or [] if p.get('symbol')})
-            symbols.update({o.get('symbol') for o in self.db.get_open_orders(self.session_id, portfolio_id=self.portfolio_id) or [] if o.get('symbol')})
+            symbols.update(self.db.get_distinct_trade_symbols_for_portfolio(self.portfolio_id) or [])
+            symbols.update({p.get('symbol') for p in self.db.get_positions_for_portfolio(self.portfolio_id) or [] if p.get('symbol')})
+            symbols.update({p.get('symbol') for p in self.db.get_open_trade_plans_for_portfolio(self.portfolio_id) or [] if p.get('symbol')})
+            symbols.update({o.get('symbol') for o in self.db.get_open_orders_for_portfolio(self.portfolio_id) or [] if o.get('symbol')})
         except Exception:
             pass
         normalized = set()
@@ -396,7 +391,6 @@ class StrategyRunner:
             "status": value,
             "detail": detail,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "session_id": self.session_id,
             "portfolio_id": self.portfolio_id,
             "run_id": self.run_id,
         }
@@ -464,7 +458,6 @@ class StrategyRunner:
 
     def _apply_exchange_trades_for_rebuild(self, trades: list) -> dict:
         """Delegate trade replay to portfolio tracker (kept for compatibility)."""
-        self.portfolio_tracker.set_session(self.session_id, portfolio_id=self.portfolio_id)
         stats = self.portfolio_tracker.apply_exchange_trades_for_rebuild(trades)
         self.session_stats = self.portfolio_tracker.session_stats
         return stats
@@ -568,7 +561,6 @@ class StrategyRunner:
         symbol = signal.symbol
         price = market_data.get(symbol, {}).get('price') if market_data else None
         result = await self.action_handler.handle_partial_close(
-            session_id=self.session_id,
             plan_id=plan_id,
             close_fraction=close_fraction,
             symbol=symbol,
@@ -584,7 +576,6 @@ class StrategyRunner:
         symbol = signal.symbol
         price = market_data.get(symbol, {}).get('price') if market_data else None
         result = await self.action_handler.handle_close_position(
-            session_id=self.session_id,
             symbol=symbol,
             price=price,
             trace_id=trace_id,
@@ -598,7 +589,8 @@ class StrategyRunner:
         # Build a minimal telemetry record
         telemetry_record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "session_id": self.session_id,
+            "portfolio_id": self.portfolio_id,
+            "run_id": self.run_id,
             "symbol": signal.symbol,
             "action": signal.action,
             "plan_id": getattr(signal, 'plan_id', None),
@@ -630,7 +622,7 @@ class StrategyRunner:
         self.market_data_service.monotonic = self._monotonic
         self.market_data_service.ohlcv_min_capture_spacing_seconds = self.ohlcv_min_capture_spacing_seconds
         self.market_data_service.ohlcv_retention_limit = self.ohlcv_retention_limit
-        self.market_data_service.set_session(self.session_id, portfolio_id=self.portfolio_id)
+        self.market_data_service.set_portfolio(self.portfolio_id)
         await self.market_data_service.capture_ohlcv(symbol)
 
     def _apply_order_value_buffer(self, quantity: float, price: float, symbol: str | None = None):
@@ -706,7 +698,6 @@ class StrategyRunner:
             portfolio_id=self.portfolio_id,
         )
         await self.orchestrator.monitor_trade_plans(
-            self.session_id,
             price_lookup=price_lookup,
             open_orders=open_orders,
             config=config,
@@ -752,17 +743,11 @@ class StrategyRunner:
             
         logger.info(f"{self.exchange_name} Equity: {initial_equity}")
         
-        # Create or load the persistent session backing this portfolio (DB still used for logging/IDs)
-        self.session_id = self.db.get_or_create_portfolio_session(
-            portfolio_id=self.portfolio_id,
-            starting_balance=initial_equity,
-            bot_version=BOT_VERSION,
-            base_currency=self.base_currency,
-        )
-        self.session = self.db.get_session(self.session_id)
-        self.portfolio_tracker.set_session(self.session_id, portfolio_id=self.portfolio_id)
-        self.resync_service.set_session(self.session_id, portfolio_id=self.portfolio_id)
-        
+        # Seed trackers for this portfolio (no session wiring)
+        self.starting_equity = initial_equity
+        self.portfolio_tracker.set_portfolio(self.portfolio_id)
+        self.resync_service.set_portfolio(self.portfolio_id)
+
         # Clear any old pending commands from previous sessions
         self.db.clear_old_commands()
         try:
@@ -771,7 +756,7 @@ class StrategyRunner:
             logger.debug(f"Could not prune commands: {e}")
 
         # Initialize trading context
-        self.context = TradingContext(self.db, self.session_id, portfolio_id=self.portfolio_id)
+        self.context = TradingContext(self.db, self.portfolio_id, run_id=self.run_id)
         # Load persisted snapshots for restart resilience before hitting the exchange
         bootstrap_state = self.resync_service.bootstrap_snapshots()
         if bootstrap_state["positions"] or bootstrap_state["open_orders"]:
@@ -792,7 +777,7 @@ class StrategyRunner:
             logger.info("No cached portfolio stats found; rebuilding from exchange trades...")
             start_ts_ms = 0
             try:
-                latest_trade_ts = self.db.get_latest_trade_timestamp(self.session_id, portfolio_id=self.portfolio_id)
+                latest_trade_ts = self.db.get_latest_trade_timestamp_for_portfolio(self.portfolio_id)
                 if latest_trade_ts:
                     parsed = datetime.fromisoformat(latest_trade_ts)
                     start_ts_ms = int(parsed.timestamp() * 1000)
@@ -804,10 +789,10 @@ class StrategyRunner:
             for sym in symbols:
                 sym_trades = await self.bot.get_trades_from_timestamp(sym, start_ts_ms)
                 trades.extend(sym_trades)
-            
+
             self._apply_exchange_trades_for_rebuild(trades)
 
-            db_stats = self.db.get_session_stats(self.session_id, portfolio_id=self.portfolio_id)
+            db_stats = self.db.get_portfolio_stats(self.portfolio_id)
             self.session_stats['total_llm_cost'] = db_stats.get('total_llm_cost', 0.0)
             self.portfolio_tracker.session_stats = self.session_stats
             try:
@@ -823,7 +808,7 @@ class StrategyRunner:
         # But we might want to log initial positions to DB for debugging.
         live_positions = await self.bot.get_positions_async()
         self._capture_sandbox_position_baseline(live_positions)
-        self.db.replace_positions(self.session_id, live_positions, portfolio_id=self.portfolio_id)
+        self.db.replace_positions_for_portfolio(self.portfolio_id, live_positions)
         bot_actions_logger.info(f"💰 Starting Equity: ${initial_equity:,.2f}")
 
     # reconcile_exchange_state removed as we trust exchange data directly now
@@ -841,24 +826,22 @@ class StrategyRunner:
 
     def _load_holdings_from_db(self):
         """Rebuild holdings via portfolio tracker."""
-        self.portfolio_tracker.set_session(self.session_id, portfolio_id=self.portfolio_id)
+        self.portfolio_tracker.set_portfolio(self.portfolio_id)
         self.portfolio_tracker.load_holdings_from_db()
         self.session_stats = self.portfolio_tracker.session_stats
 
     def _apply_fill_to_session_stats(self, order_id: str, actual_fee: float, realized_pnl: float):
         """Delegate session accounting to portfolio tracker (kept for compatibility)."""
-        self.portfolio_tracker.set_session(self.session_id, portfolio_id=self.portfolio_id)
+        self.portfolio_tracker.set_portfolio(self.portfolio_id)
         self.portfolio_tracker.apply_fill_to_session_stats(order_id, actual_fee, realized_pnl, estimated_fee_map=self._estimated_fees)
         self.session_stats = self.portfolio_tracker.session_stats
 
     def _sanity_check_equity_vs_stats(self, current_equity: float):
         """Compare estimated net PnL vs equity delta; log if off by >10%."""
-        if current_equity is None or self.session is None:
+        if current_equity is None or self.starting_equity is None:
             return
         try:
-            starting = self.session.get('starting_balance')
-            if starting is None:
-                return
+            starting = self.starting_equity
             estimated_net = (
                 self.session_stats.get('gross_pnl', 0.0)
                 - self.session_stats.get('total_fees', 0.0)
@@ -887,7 +870,7 @@ class StrategyRunner:
 
     async def _rebuild_session_stats_from_trades(self, current_equity: float = None):
         """Recompute session_stats from recorded trades and update cache via portfolio tracker."""
-        self.portfolio_tracker.set_session(self.session_id, portfolio_id=self.portfolio_id)
+        self.portfolio_tracker.set_portfolio(self.portfolio_id)
         self.session_stats = self.portfolio_tracker.rebuild_session_stats_from_trades(current_equity)
         logger.info(f"Session stats rebuilt from trades: {self.session_stats}")
         if current_equity is not None:
@@ -901,7 +884,7 @@ class StrategyRunner:
     async def _close_all_positions_safely(self):
         """Attempt to flatten all positions using market-ish orders."""
         try:
-            positions = self.db.get_positions(self.session_id, portfolio_id=self.portfolio_id)
+            positions = self.db.get_positions_for_portfolio(self.portfolio_id)
             if not positions:
                 return
             for pos in positions:
@@ -922,8 +905,8 @@ class StrategyRunner:
                     if result:
                         fee = self.cost_tracker.calculate_trade_fee(symbol, quantity, price, 'SELL', liquidity=result.get('liquidity', 'taker'))
                         realized_pnl = self._update_holdings_and_realized(symbol, 'SELL', quantity, price, fee)
-                        self.db.log_trade(
-                            self.session_id,
+                        self.db.log_trade_for_portfolio(
+                            self.portfolio_id,
                             symbol,
                             'SELL',
                             quantity,
@@ -943,15 +926,14 @@ class StrategyRunner:
 
     async def sync_trades_from_exchange(self):
         """Sync recent trades from exchange to DB via resync service."""
-        if not self.session_id:
+        if not self.portfolio_id:
             return
         self._refresh_resync_bindings()
         await self.resync_service.sync_trades_from_exchange(
-            session_id=self.session_id,
             processed_trade_ids=self.processed_trade_ids,
             order_reasons=self.order_reasons,
-            plan_reason_lookup=lambda sid, order_id, client_oid: self.db.get_trade_plan_reason_by_order(
-                sid, order_id=order_id, client_order_id=client_oid, portfolio_id=self.portfolio_id
+            plan_reason_lookup=lambda portfolio_id, order_id, client_oid: self.db.get_trade_plan_reason_by_order_for_portfolio(
+                portfolio_id, order_id=order_id, client_order_id=client_oid
             ),
             get_symbols=lambda: self._get_sync_symbols(),
         )
@@ -962,30 +944,31 @@ class StrategyRunner:
         bot_actions_logger.info(f"🧹 Cleanup starting (reason: {self.shutdown_reason or 'unspecified'})")
         
         # Save final session statistics
-        if self.session_id:
+        if self.portfolio_id:
             try:
                 # Get final equity snapshot
                 final_equity = await self.bot.get_equity_async()
                 
                 # Get session stats and rebuild to ensure consistency
-                session_stats = self.db.get_session_stats(self.session_id, portfolio_id=self.portfolio_id)
+                session_stats = self.db.get_portfolio_stats(self.portfolio_id)
                 try:
                     await self._rebuild_session_stats_from_trades(final_equity)
-                    session_stats = self.db.get_session_stats(self.session_id, portfolio_id=self.portfolio_id)
+                    session_stats = self.db.get_portfolio_stats(self.portfolio_id)
                 except Exception as e:
                     logger.debug(f"Could not rebuild stats on cleanup: {e}")
                 
                 # Calculate PnL using fee-exclusive realized and separate fees
                 gross_pnl = session_stats.get('gross_pnl', 0.0) or 0.0
                 net_pnl = gross_pnl - (session_stats.get('total_fees', 0.0) or 0.0) - (session_stats.get('total_llm_cost', 0.0) or 0.0)
-                equity_delta = final_equity - session_stats['starting_balance']
-                
-                # Update database
-                self.db.update_session_balance(self.session_id, final_equity, net_pnl)
+                equity_delta = final_equity - (self.starting_equity or final_equity)
+                try:
+                    self.db.log_equity_snapshot_for_portfolio(self.portfolio_id, final_equity)
+                except Exception as exc:
+                    logger.debug(f"Could not persist final equity snapshot: {exc}")
                 
                 # Log summary to bot.log
                 bot_actions_logger.info("=" * 50)
-                bot_actions_logger.info("📊 SESSION SUMMARY")
+                bot_actions_logger.info("📊 PORTFOLIO SUMMARY")
                 bot_actions_logger.info("=" * 50)
                 bot_actions_logger.info(f"Total Trades: {session_stats['total_trades']}")
                 bot_actions_logger.info(f"Gross PnL (ex-fee): ${gross_pnl:,.2f}")
@@ -1076,9 +1059,9 @@ class StrategyRunner:
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
 
-                    if self.session_id is not None:
+                    if self.portfolio_id is not None:
                         try:
-                            self.db.log_equity_snapshot(self.session_id, current_equity, portfolio_id=self.portfolio_id)
+                            self.db.log_equity_snapshot_for_portfolio(self.portfolio_id, current_equity)
                         except Exception as e:
                             logger.warning(f"Could not log equity snapshot: {e}")
                     self.risk_manager.update_equity(current_equity)
@@ -1129,10 +1112,10 @@ class StrategyRunner:
                         market_data[sym] = md
 
                         # Log market data to database
-                        if md and self.session_id:
+                        if md and self.portfolio_id is not None:
                             try:
-                                self.db.log_market_data(
-                                    self.session_id,
+                                self.db.log_market_data_for_portfolio(
+                                    self.portfolio_id,
                                     sym,
                                     md.get('price'),
                                     md.get('bid'),
@@ -1142,13 +1125,12 @@ class StrategyRunner:
                                     bid_size=md.get('bid_size'),
                                     ask_size=md.get('ask_size'),
                                     ob_imbalance=md.get('ob_imbalance'),
-                                    portfolio_id=self.portfolio_id,
                                 )
                             except Exception as e:
                                 logger.warning(f"Could not log market data: {e}")
-                    if self.session_id:
+                    if self.portfolio_id is not None:
                         try:
-                            self.db.prune_market_data(self.session_id, MARKET_DATA_RETENTION_MINUTES, portfolio_id=self.portfolio_id)
+                            self.db.prune_market_data_for_portfolio(self.portfolio_id, MARKET_DATA_RETENTION_MINUTES)
                         except Exception as e:
                             logger.debug(f"Could not prune market data: {e}")
 
@@ -1179,7 +1161,7 @@ class StrategyRunner:
                     try:
                         live_positions = await self.bot.get_positions_async()
                         self._capture_sandbox_position_baseline(live_positions)
-                        self.db.replace_positions(self.session_id, live_positions, portfolio_id=self.portfolio_id)
+                        self.db.replace_positions_for_portfolio(self.portfolio_id, live_positions)
                     except Exception as e:
                         logger.warning(f"Could not refresh positions: {e}")
                         self.health_manager.record_exchange_failure("get_positions_async", e)
@@ -1189,7 +1171,7 @@ class StrategyRunner:
                     try:
                         open_orders = await self.bot.get_open_orders_async()
                         open_orders = self._filter_our_orders(open_orders)
-                        self.db.replace_open_orders(self.session_id, open_orders, portfolio_id=self.portfolio_id)
+                        self.db.replace_open_orders_for_portfolio(self.portfolio_id, open_orders)
                     except Exception as e:
                         logger.warning(f"Could not refresh open orders: {e}")
                         self.health_manager.record_exchange_failure("get_open_orders_async", e)
@@ -1208,13 +1190,13 @@ class StrategyRunner:
                     current_exposure = 0.0
                     price_lookup = {}
                     try:
-                        positions_data = self.db.get_positions(self.session_id, portfolio_id=self.portfolio_id)
+                        positions_data = self.db.get_positions_for_portfolio(self.portfolio_id)
                         for pos in positions_data:
                             sym = pos['symbol']
                             current_price = pos.get('current_price') or pos.get('avg_price') or 0
 
                             # Prefer most recent market tick
-                            recent_data = self.db.get_recent_market_data(self.session_id, sym, limit=1, portfolio_id=self.portfolio_id)
+                            recent_data = self.db.get_recent_market_data_for_portfolio(self.portfolio_id, sym, limit=1)
                             if recent_data and recent_data[0].get('price'):
                                 current_price = recent_data[0]['price']
 
@@ -1237,7 +1219,7 @@ class StrategyRunner:
                             sym = ord.get('symbol')
                             if sym and sym in price_lookup:
                                 continue
-                            latest = self.db.get_recent_market_data(self.session_id, sym, limit=1, portfolio_id=self.portfolio_id) if sym else None
+                            latest = self.db.get_recent_market_data_for_portfolio(self.portfolio_id, sym, limit=1) if sym else None
                             if latest and latest[0].get('price'):
                                 price_lookup[sym] = latest[0]['price']
                         self.risk_manager.update_pending_orders(open_orders, price_lookup=price_lookup)
@@ -1276,7 +1258,7 @@ class StrategyRunner:
                         exchange_error_seen = True
                     # Keep session stats cache fresh if DB trades grew
                     try:
-                        db_trade_count = self.db.get_trade_count(self.session_id, portfolio_id=self.portfolio_id)
+                        db_trade_count = self.db.get_trade_count_for_portfolio(self.portfolio_id)
                         if db_trade_count > self.session_stats.get('total_trades', 0):
                             await self._rebuild_session_stats_from_trades(current_equity)
                     except Exception as e:
@@ -1285,7 +1267,6 @@ class StrategyRunner:
                     # 3. Generate Signal via Strategy
                     # Pass session_stats explicitly
                     signal = await self.strategy.generate_signal(
-                        self.session_id,
                         market_data,
                         current_equity,
                         current_exposure,
@@ -1306,7 +1287,8 @@ class StrategyRunner:
                         regime_flags = getattr(signal, 'regime_flags', {}) or {}
                         telemetry_record = {
                             "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "session_id": self.session_id,
+                            "portfolio_id": self.portfolio_id,
+                            "run_id": self.run_id,
                             "exchange": self.exchange_name,
                             "symbol": symbol,
                             "action": action,
@@ -1356,7 +1338,7 @@ class StrategyRunner:
                                 # Refresh open orders snapshot so strategy context stays current
                                 try:
                                     open_orders = await self.bot.get_open_orders_async()
-                                    self.db.replace_open_orders(self.session_id, open_orders, portfolio_id=self.portfolio_id)
+                                    self.db.replace_open_orders_for_portfolio(self.portfolio_id, open_orders)
                                 except Exception as e:
                                     logger.warning(f"Could not refresh open orders after cancel: {e}")
                             except Exception as e:
@@ -1454,11 +1436,11 @@ class StrategyRunner:
 
                             # Enforce per-symbol plan cap before placing order
                             try:
-                                open_plan_count = self.db.count_open_trade_plans_for_symbol(self.session_id, symbol, portfolio_id=self.portfolio_id)
+                                open_plan_count = self.db.count_open_trade_plans_for_symbol_for_portfolio(self.portfolio_id, symbol)
                                 if open_plan_count >= self.max_plans_per_symbol:
                                     if AUTO_REPLACE_PLAN_ON_CAP:
                                         try:
-                                            plans = self.db.get_open_trade_plans(self.session_id, portfolio_id=self.portfolio_id)
+                                            plans = self.db.get_open_trade_plans_for_portfolio(self.portfolio_id)
                                             candidates = [p for p in plans if p.get('symbol') == symbol]
                                             if candidates:
                                                 victim = sorted(candidates, key=lambda p: p.get('opened_at'))[0]
@@ -1575,17 +1557,12 @@ class StrategyRunner:
                                 if order_result and order_result.get('order_id'):
                                     self.order_reasons[str(order_result['order_id'])] = reason
                                     self._estimated_fees[str(order_result['order_id'])] = estimated_fee
-                                    # Also persist estimated fee to DB for optional auditing
-                                    try:
-                                        self.db.log_estimated_fee(self.session_id, order_result['order_id'], estimated_fee, symbol, action)
-                                    except Exception as e:
-                                        logger.debug(f"Could not log estimated fee: {e}")
 
                             # Record trade plan so we can monitor stops/targets (only for new BUY/SELL)
                             if action in ['BUY', 'SELL'] and (stop_price or target_price):
                                 try:
-                                    plan_id = self.db.create_trade_plan(
-                                        self.session_id,
+                                    plan_id = self.db.create_trade_plan_for_portfolio(
+                                        self.portfolio_id,
                                         symbol,
                                         action,
                                         price,
@@ -1594,7 +1571,7 @@ class StrategyRunner:
                                         quantity,
                                         reason,
                                         entry_order_id=order_result.get('order_id') if order_result else None,
-                                        entry_client_order_id=order_result.get('client_order_id') if order_result else None
+                                        entry_client_order_id=order_result.get('client_order_id') if order_result else None,
                                     )
                                     self._open_trade_plans[plan_id] = {
                                         'symbol': symbol,
@@ -1610,7 +1587,7 @@ class StrategyRunner:
                                 # Snapshot open orders if any remain
                                 try:
                                     open_orders = await self.bot.get_open_orders_async()
-                                    self.db.replace_open_orders(self.session_id, open_orders, portfolio_id=self.portfolio_id)
+                                    self.db.replace_open_orders_for_portfolio(self.portfolio_id, open_orders)
                                 except Exception as e:
                                     logger.warning(f"Could not snapshot open orders: {e}")
 

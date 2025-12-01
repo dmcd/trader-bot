@@ -94,7 +94,7 @@ class BaseStrategy(ABC):
         self.cost_tracker = cost_tracker
 
     @abstractmethod
-    async def generate_signal(self, session_id: int, market_data: Dict[str, Any], current_equity: float, current_exposure: float, context: Any = None) -> Optional[StrategySignal]:
+    async def generate_signal(self, market_data: Dict[str, Any], current_equity: float, current_exposure: float, context: Any = None) -> Optional[StrategySignal]:
         """
         Analyze market data and return a trading signal.
         """
@@ -214,7 +214,7 @@ class LLMStrategy(BaseStrategy):
             logger.warning(f"Chop filter error: {e}")
         return False
 
-    def _priority_signal(self, session_id: int, symbol: str, context: Any = None) -> bool:
+    def _priority_signal(self, symbol: str, context: Any = None) -> bool:
         """
         Detect breakout move to allow a break-glass trade inside cooldown.
         """
@@ -225,7 +225,9 @@ class LLMStrategy(BaseStrategy):
             if context and hasattr(context, 'current_iso_time'):
                 before_ts = context.current_iso_time
                 
-            recent = self.db.get_recent_market_data(session_id, symbol, limit=max(lookback_points, 10), before_timestamp=before_ts)
+            recent = self.db.get_recent_market_data_for_portfolio(
+                self.portfolio_id, symbol, limit=max(lookback_points, 10), before_timestamp=before_ts
+            )
             if not recent or len(recent) < 2:
                 return False
             latest = recent[0]['price']
@@ -257,7 +259,7 @@ class LLMStrategy(BaseStrategy):
             logger.warning(f"Fee ratio check failed: {e}")
             return False
 
-    def _build_timeframe_summary(self, session_id: int, symbol: str) -> str:
+    def _build_timeframe_summary(self, symbol: str) -> str:
         """Summarize multi-timeframe OHLCV into a concise string for the prompt."""
         if not hasattr(self.db, "get_recent_ohlcv"):
             return ""
@@ -265,7 +267,7 @@ class LLMStrategy(BaseStrategy):
         lines = []
         for tf in timeframes:
             try:
-                bars = self.db.get_recent_ohlcv(session_id, symbol, tf, limit=50)
+                bars = self.db.get_recent_ohlcv_for_portfolio(self.portfolio_id, symbol, tf, limit=50)
                 if not bars or len(bars) < 2:
                     continue
                 closes = [b.get('close') for b in bars if b.get('close') is not None]
@@ -295,7 +297,7 @@ class LLMStrategy(BaseStrategy):
             return ""
         return "Multi-timeframe: " + " | ".join(lines)
 
-    def _compute_regime_flags(self, session_id: int, symbol: str, market_data_point: Dict[str, Any], recent_bars: Dict[str, list]) -> Dict[str, str]:
+    def _compute_regime_flags(self, symbol: str, market_data_point: Dict[str, Any], recent_bars: Dict[str, list]) -> Dict[str, str]:
         """Derive simple regime flags: volatility bucket, trend slope, liquidity."""
         flags = {}
 
@@ -353,7 +355,7 @@ class LLMStrategy(BaseStrategy):
 
         return flags
 
-    async def generate_signal(self, session_id: int, market_data: Dict[str, Any], current_equity: float, current_exposure: float, context: Any = None, session_stats: Dict[str, Any] = None) -> Optional[StrategySignal]:
+    async def generate_signal(self, market_data: Dict[str, Any], current_equity: float, current_exposure: float, context: Any = None, session_stats: Dict[str, Any] = None) -> Optional[StrategySignal]:
         if not market_data:
             return None
 
@@ -406,7 +408,7 @@ class LLMStrategy(BaseStrategy):
             before_ts = None
             if context and hasattr(context, 'current_iso_time'):
                 before_ts = context.current_iso_time
-            recent_data = self.db.get_recent_market_data(session_id, symbol, limit=50, before_timestamp=before_ts)
+            recent_data = self.db.get_recent_market_data_for_portfolio(self.portfolio_id, symbol, limit=50, before_timestamp=before_ts)
 
         if self._is_choppy(symbol, data, recent_data):
             logger.info("Skipping trade: market in chop")
@@ -418,7 +420,7 @@ class LLMStrategy(BaseStrategy):
             now_ts = context.current_time
             
         can_trade = not self.last_trade_ts or (now_ts - self.last_trade_ts) >= MIN_TRADE_INTERVAL_SECONDS
-        priority = self._priority_signal(session_id, symbol, context)
+        priority = self._priority_signal(symbol, context)
         allow_break_glass = priority and (now_ts - self._last_break_glass) >= (BREAK_GLASS_COOLDOWN_MIN * 60)
 
         if not can_trade and not allow_break_glass:
@@ -434,7 +436,7 @@ class LLMStrategy(BaseStrategy):
 
         if not open_orders:
             try:
-                open_orders = self.db.get_open_orders(session_id)
+                open_orders = self.db.get_open_orders_for_portfolio(self.portfolio_id)
             except Exception as e:
                 logger.warning(f"DB open order fetch failed: {e}")
                 open_orders = []
@@ -485,7 +487,7 @@ class LLMStrategy(BaseStrategy):
         # Per-symbol plan counts to expose cap usage to the LLM
         plan_counts = {}
         try:
-            open_plans = self.db.get_open_trade_plans(session_id)
+            open_plans = self.db.get_open_trade_plans_for_portfolio(self.portfolio_id)
             for plan in open_plans:
                 sym = plan.get('symbol')
                 if not sym:
@@ -518,7 +520,6 @@ class LLMStrategy(BaseStrategy):
             prompt_context += f"\n- LLM budget: {llm_cost_note}"
 
         decision_result = await self._get_llm_decision(
-            session_id,
             market_data,
             current_equity,
             prompt_context,
@@ -553,7 +554,9 @@ class LLMStrategy(BaseStrategy):
                 except Exception as e:
                     logger.error(f"LLM decision failed schema validation: {e}")
                     try:
-                        self.db.log_llm_call(session_id, 0, 0, 0.0, f"schema_error:{str(e)}", run_id=self.run_id, portfolio_id=self.portfolio_id)
+                        self.db.log_llm_call_for_portfolio(
+                            self.portfolio_id, 0, 0, 0.0, f"schema_error:{str(e)}", run_id=self.run_id
+                        )
                     except Exception:
                         pass
                     return None
@@ -603,13 +606,15 @@ class LLMStrategy(BaseStrategy):
                             if target_price is not None:
                                 target_price = max(min_target, min(target_price, price))  # target at/below entry
                         # Telemetry for clamping
-                        if decision.get('stop_price') != stop_price or decision.get('target_price') != target_price:
-                            clamp_msg = f"clamped: stop {decision.get('stop_price')} -> {stop_price}, target {decision.get('target_price')} -> {target_price}"
-                            logger.info(f"LLM stops/targets {clamp_msg}")
-                            try:
-                                self.db.log_llm_call(session_id, 0, 0, 0.0, clamp_msg, run_id=self.run_id, portfolio_id=self.portfolio_id)
-                            except Exception:
-                                pass
+                            if decision.get('stop_price') != stop_price or decision.get('target_price') != target_price:
+                                clamp_msg = f"clamped: stop {decision.get('stop_price')} -> {stop_price}, target {decision.get('target_price')} -> {target_price}"
+                                logger.info(f"LLM stops/targets {clamp_msg}")
+                                try:
+                                    self.db.log_llm_call_for_portfolio(
+                                        self.portfolio_id, 0, 0, 0.0, clamp_msg, run_id=self.run_id
+                                    )
+                                except Exception:
+                                    pass
 
                     # We don't update last_trade_ts here, we let the runner do it upon execution success? 
                     # Actually better to update it here to prevent double signaling if execution takes time, 
@@ -763,9 +768,9 @@ class LLMStrategy(BaseStrategy):
 
         return _LLMResponse(text, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
 
-    def _log_llm_usage(self, session_id: int, response: Any, response_text: str):
+    def _log_llm_usage(self, response: Any, response_text: str):
         """Record token usage (as reported by provider) and partial response to DB."""
-        if not session_id:
+        if self.portfolio_id is None:
             return
         try:
             usage = None
@@ -791,7 +796,7 @@ class LLMStrategy(BaseStrategy):
                             {
                                 "type": "llm_usage_missing",
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                                "session_id": session_id,
+                                "portfolio_id": self.portfolio_id,
                                 "note": "provider returned no token usage; cost not accrued",
                             }
                         )
@@ -801,14 +806,13 @@ class LLMStrategy(BaseStrategy):
                 return
 
             cost = self.cost_tracker.calculate_llm_cost(input_tokens, output_tokens)
-            self.db.log_llm_call(
-                session_id,
+            self.db.log_llm_call_for_portfolio(
+                self.portfolio_id,
                 input_tokens,
                 output_tokens,
                 cost,
                 response_text[:500],
                 run_id=self.run_id,
-                portfolio_id=self.portfolio_id,
             )
         except Exception as e:
             logger.warning(f"Error tracking LLM usage: {e}")
@@ -937,7 +941,7 @@ class LLMStrategy(BaseStrategy):
         except Exception:
             return trimmed[: max(0, budget // 2)]
 
-    async def _get_llm_decision(self, session_id, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0, can_trade: bool = True, spacing_flag: str = "", priority_flag: str = "false", plan_counts: dict = None, burn_stats: Dict[str, Any] | None = None):
+    async def _get_llm_decision(self, market_data, current_equity, prompt_context=None, trading_context=None, open_orders=None, headroom: float = 0.0, pending_buy_exposure: float = 0.0, can_trade: bool = True, spacing_flag: str = "", priority_flag: str = "false", plan_counts: dict = None, burn_stats: Dict[str, Any] | None = None):
         """Asks the configured LLM for a trading decision and logs full prompt/response; returns (decision_json, trace_id)."""
         if not self._llm_ready:
             return None, None
@@ -979,11 +983,11 @@ class LLMStrategy(BaseStrategy):
             try:
                 context_summary = trading_context.get_context_summary(symbol, open_orders=open_orders)
                 recent_bars = {
-                    tf: self.db.get_recent_ohlcv(session_id, symbol, tf, limit=50)
+                    tf: self.db.get_recent_ohlcv_for_portfolio(self.portfolio_id, symbol, tf, limit=50)
                     for tf in ['1m', '5m', '1h', '1d']
                     if hasattr(self.db, "get_recent_ohlcv")
                 }
-                regime_flags = self._compute_regime_flags(session_id, symbol, market_data.get(symbol, {}), recent_bars)
+                regime_flags = self._compute_regime_flags(symbol, market_data.get(symbol, {}), recent_bars)
                 if hasattr(trading_context, "get_memory_snapshot"):
                     mem = trading_context.get_memory_snapshot()
                     if mem:
@@ -1133,7 +1137,8 @@ class LLMStrategy(BaseStrategy):
                             "type": "llm_prompt",
                             "role": "planner",
                             "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "session_id": session_id,
+                            "portfolio_id": self.portfolio_id,
+                            "run_id": self.run_id,
                             "prompt": planner_prompt,
                         }
                     )
@@ -1143,7 +1148,7 @@ class LLMStrategy(BaseStrategy):
 
             try:
                 planner_response = await self._invoke_llm(planner_prompt)
-                self._log_llm_usage(session_id, planner_response, planner_response.text)
+                self._log_llm_usage(planner_response, planner_response.text)
                 planner_payload = self._extract_json_payload(planner_response.text)
                 tool_requests = self._parse_tool_requests(planner_payload)
                 if tool_requests:
@@ -1157,7 +1162,8 @@ class LLMStrategy(BaseStrategy):
                         {
                             "type": "llm_tool_requests",
                             "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "session_id": session_id,
+                            "portfolio_id": self.portfolio_id,
+                            "run_id": self.run_id,
                             "tool_requests": [tr.model_dump() for tr in tool_requests],
                         }
                     )
@@ -1173,7 +1179,8 @@ class LLMStrategy(BaseStrategy):
                             {
                                 "type": "llm_tool_responses",
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                                "session_id": session_id,
+                                "portfolio_id": self.portfolio_id,
+                                "run_id": self.run_id,
                                 "tool_responses": [tr.model_dump() for tr in tool_responses],
                             }
                         )
@@ -1231,7 +1238,8 @@ class LLMStrategy(BaseStrategy):
                 "type": "llm_prompt",
                 "role": "decision",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "session_id": session_id,
+                "portfolio_id": self.portfolio_id,
+                "run_id": self.run_id,
                 "prompt": decision_prompt
             }
             telemetry_logger.info(json.dumps(prompt_log, default=str))
@@ -1240,7 +1248,7 @@ class LLMStrategy(BaseStrategy):
 
         try:
             response = await self._invoke_llm(decision_prompt)
-            self._log_llm_usage(session_id, response, response.text)
+            self._log_llm_usage(response, response.text)
 
             text = self._extract_json_payload(response.text)
 
@@ -1253,17 +1261,16 @@ class LLMStrategy(BaseStrategy):
                     "tool_requests": [tr.model_dump() for tr in tool_requests],
                     "tool_responses": [tr.model_dump() for tr in tool_responses],
                 }
-                trace_id = self.db.log_llm_trace(
-                    session_id,
+                trace_id = self.db.log_llm_trace_for_portfolio(
+                    self.portfolio_id,
                     decision_prompt,
                     response.text,
                     decision_json=text,
                     market_context=market_context,
                     run_id=self.run_id,
-                    portfolio_id=self.portfolio_id,
                 )
                 try:
-                    self.db.prune_llm_traces(session_id, LLM_TRACE_RETENTION_DAYS)
+                    self.db.prune_llm_traces_for_portfolio(self.portfolio_id, LLM_TRACE_RETENTION_DAYS)
                 except Exception as e:
                     logger.debug(f"Could not prune llm_traces: {e}")
             except Exception as e:

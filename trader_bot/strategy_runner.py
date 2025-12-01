@@ -33,7 +33,7 @@ from trader_bot.config import (
     MIN_RR,
     MIN_TRADE_SIZE,
     MIN_TOP_OF_BOOK_NOTIONAL,
-    LLM_MAX_SESSION_COST,
+    LLM_MAX_PORTFOLIO_COST,
     ORDER_VALUE_BUFFER,
     LLM_PROVIDER,
     PLAN_MAX_AGE_MINUTES,
@@ -445,7 +445,7 @@ class StrategyRunner:
             burn_stats = self.cost_tracker.calculate_llm_burn(
                 total_llm_cost=llm_cost,
                 session_started=portfolio_started,
-                budget=LLM_MAX_SESSION_COST,
+                budget=LLM_MAX_PORTFOLIO_COST,
             )
             budget_status = "ok"
             if burn_stats.get("remaining_budget", 0.0) <= 0:

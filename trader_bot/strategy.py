@@ -25,7 +25,7 @@ from trader_bot.config import (
     GEMINI_API_KEY,
     LLM_MODEL,
     LLM_MAX_CONSECUTIVE_ERRORS,
-    LLM_MAX_SESSION_COST,
+    LLM_MAX_PORTFOLIO_COST,
     LLM_MIN_CALL_INTERVAL_SECONDS,
     LLM_PROVIDER,
     LOOP_INTERVAL_SECONDS,
@@ -374,12 +374,12 @@ class LLMStrategy(BaseStrategy):
                 burn_stats = self.cost_tracker.calculate_llm_burn(
                     total_llm_cost=total_llm_cost,
                     session_started=portfolio_stats.get('created_at') or portfolio_stats.get('date'),
-                    budget=LLM_MAX_SESSION_COST,
+                    budget=LLM_MAX_PORTFOLIO_COST,
                 )
         except Exception:
             burn_stats = None
-        if total_llm_cost >= LLM_MAX_SESSION_COST:
-            logger.info(f"Skipping LLM call: session LLM cost ${total_llm_cost:.4f} exceeds cap ${LLM_MAX_SESSION_COST:.2f}")
+        if total_llm_cost >= LLM_MAX_PORTFOLIO_COST:
+            logger.info(f"Skipping LLM call: portfolio LLM cost ${total_llm_cost:.4f} exceeds cap ${LLM_MAX_PORTFOLIO_COST:.2f}")
             return StrategySignal('HOLD', symbol, 0, 'LLM cost cap hit')
         if self._last_llm_call_ts and (now_ts - self._last_llm_call_ts) < LLM_MIN_CALL_INTERVAL_SECONDS:
             logger.info("Skipping LLM call: min call interval not met")

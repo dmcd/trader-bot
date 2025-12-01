@@ -14,7 +14,7 @@ from trader_bot.config import (
     BOT_VERSION,
     DASHBOARD_REFRESH_SECONDS,
     LOOP_INTERVAL_SECONDS,
-    LLM_MAX_SESSION_COST,
+    LLM_MAX_PORTFOLIO_COST,
     LLM_PROVIDER,
 )
 from trader_bot.cost_tracker import CostTracker
@@ -404,7 +404,7 @@ def get_llm_burn_stats(portfolio_stats):
     try:
         start = portfolio_stats.get("created_at") or portfolio_stats.get("date")
         total = portfolio_stats.get("total_llm_cost", 0.0) or 0.0
-        return cost_tracker.calculate_llm_burn(total, start, budget=LLM_MAX_SESSION_COST)
+        return cost_tracker.calculate_llm_burn(total, start, budget=LLM_MAX_PORTFOLIO_COST)
     except Exception:
         return None
 

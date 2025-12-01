@@ -42,7 +42,7 @@ BREAK_GLASS_COOLDOWN_MIN = int(os.getenv('BREAK_GLASS_COOLDOWN_MIN', '60'))  # m
 BREAK_GLASS_SIZE_FACTOR = float(os.getenv('BREAK_GLASS_SIZE_FACTOR', '0.6'))  # reduce size on break-glass trades
 OHLCV_MIN_CAPTURE_SPACING_SECONDS = int(os.getenv('OHLCV_MIN_CAPTURE_SPACING_SECONDS', '60'))  # min spacing per timeframe fetch
 OHLCV_MAX_ROWS_PER_TIMEFRAME = int(os.getenv('OHLCV_MAX_ROWS_PER_TIMEFRAME', '1000'))  # retention per symbol/timeframe
-MARKET_DATA_RETENTION_MINUTES = int(os.getenv('MARKET_DATA_RETENTION_MINUTES', '720'))  # minutes of market snapshots to keep per session
+MARKET_DATA_RETENTION_MINUTES = int(os.getenv('MARKET_DATA_RETENTION_MINUTES', '720'))  # minutes of market snapshots to keep per portfolio/run
 LLM_TRACE_RETENTION_DAYS = int(os.getenv('LLM_TRACE_RETENTION_DAYS', '7'))  # days of full prompt/response traces to retain
 COMMAND_RETENTION_DAYS = int(os.getenv('COMMAND_RETENTION_DAYS', '7'))  # days to keep executed/cancelled commands
 DASHBOARD_REFRESH_SECONDS = int(os.getenv('DASHBOARD_REFRESH_SECONDS', '5'))  # Streamlit auto-refresh cadence
@@ -125,7 +125,7 @@ OPENAI_INPUT_COST_PER_TOKEN = float(os.getenv('OPENAI_INPUT_COST_PER_TOKEN', '0.
 OPENAI_OUTPUT_COST_PER_TOKEN = float(os.getenv('OPENAI_OUTPUT_COST_PER_TOKEN', '0.000015'))  # $15.00 per 1M tokens
 
 # LLM cost/frequency guards
-LLM_MAX_SESSION_COST = float(os.getenv('LLM_MAX_SESSION_COST', '10.0'))  # USD cap per session before auto HOLD
+LLM_MAX_PORTFOLIO_COST = float(os.getenv('LLM_MAX_PORTFOLIO_COST', os.getenv('LLM_MAX_SESSION_COST', '10.0')))  # USD cap per portfolio before auto HOLD (LLM_MAX_SESSION_COST kept as fallback)
 LLM_MIN_CALL_INTERVAL_SECONDS = int(os.getenv('LLM_MIN_CALL_INTERVAL_SECONDS', '5'))  # min spacing between planner/decision calls
 LLM_MAX_CONSECUTIVE_ERRORS = int(os.getenv('LLM_MAX_CONSECUTIVE_ERRORS', '3'))  # errors before forcing HOLD
 AUTO_REPLACE_PLAN_ON_CAP = os.getenv('AUTO_REPLACE_PLAN_ON_CAP', 'false').lower() == 'true'  # replace oldest plan when cap hit

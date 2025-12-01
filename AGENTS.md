@@ -32,6 +32,6 @@
 - Link issues when applicable; note configuration changes or new env vars in the description.
 
 ## Security & Configuration Tips
-- Store secrets in `.env`; never commit API keys. Sample envs live in `.env.example`, `.env-ib`, `.env-gemini`, `.env-live`.
+- Store secrets in `.env`; never commit API keys.
 - Verify venue/env settings: `ACTIVE_EXCHANGE` (`GEMINI` or `IB`), `TRADING_MODE` (`PAPER`/`LIVE`), and `IB_ALLOWED_INSTRUMENT_TYPES` when enabling FX.
 - Review caps in `config.py` (loss limits, max order value, exposure, spread/tick guards) before running live. 

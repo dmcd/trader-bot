@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -205,3 +205,45 @@ async def test_handles_db_failure_gracefully(caplog):
         )
 
     assert any("Monitor trade plans failed" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_day_end_flatten_waits_for_cutoff():
+    opened = datetime(2024, 1, 1, 14, tzinfo=timezone.utc)
+    db = StubDB(
+        plans=[
+            {
+                "id": 21,
+                "symbol": "BTC/USD",
+                "side": "BUY",
+                "entry_price": 100.0,
+                "stop_price": 95.0,
+                "target_price": 120.0,
+                "size": 0.25,
+                "opened_at": opened.isoformat(),
+            }
+        ]
+    )
+    monitor, bot = _monitor_with(db, risk_manager=StubRiskManager({"BTC/USD": {"quantity": 0.25}}))
+    config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=20, trail_to_breakeven_pct=0.02)
+
+    before_cutoff = opened + timedelta(days=1)
+    before_cutoff = before_cutoff.replace(hour=10)
+    after_cutoff = before_cutoff.replace(hour=21)
+
+    await monitor.monitor(price_lookup={"BTC/USD": 101.0}, open_orders=[], config=config, now=before_cutoff, portfolio_id=1)
+    assert bot.place_order_async.await_count == 0
+    assert not db.closed
+
+    await monitor.monitor(price_lookup={"BTC/USD": 101.0}, open_orders=[], config=config, now=after_cutoff, portfolio_id=1)
+    assert bot.place_order_async.await_count == 1
+    assert db.closed
+
+
+@pytest.mark.asyncio
+async def test_monitor_requires_portfolio_id():
+    monitor, _ = _monitor_with(StubDB(plans=[]))
+    config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=None, trail_to_breakeven_pct=0.01)
+
+    with pytest.raises(ValueError):
+        await monitor.monitor(price_lookup={}, open_orders=[], config=config, now=datetime.now(timezone.utc), portfolio_id=None)

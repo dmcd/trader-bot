@@ -42,6 +42,12 @@ class ResyncService:
         """Update active portfolio scope for reconciliation."""
         self.portfolio_id = portfolio_id
 
+    def _require_portfolio(self) -> int:
+        """Raise when portfolio_id is missing to avoid silent skips."""
+        if not self.portfolio_id:
+            raise ValueError("portfolio_id is required for resync operations")
+        return self.portfolio_id
+
     def filter_our_orders(self, orders: list) -> list:
         """Only keep open orders with our client id prefix."""
         filtered = []
@@ -56,20 +62,29 @@ class ResyncService:
         Load persisted positions and open orders for this portfolio without wiping snapshots.
         Seeds the risk manager so exposure checks remain accurate across restarts.
         """
-        if not self.portfolio_id:
-            return {"positions": [], "open_orders": []}
+        portfolio_id = self._require_portfolio()
 
         try:
-            positions = self.db.get_positions_for_portfolio(self.portfolio_id) or []
+            positions = self.db.get_positions_for_portfolio(portfolio_id) or []
         except Exception as exc:
             self.logger.debug(f"Could not load positions for bootstrap: {exc}")
             positions = []
 
         try:
-            open_orders = self.db.get_open_orders_for_portfolio(self.portfolio_id) or []
+            open_orders = self.db.get_open_orders_for_portfolio(portfolio_id) or []
         except Exception as exc:
             self.logger.debug(f"Could not load open orders for bootstrap: {exc}")
             open_orders = []
+
+        try:
+            open_plans = (
+                self.db.get_open_trade_plans_for_portfolio(portfolio_id)
+                if hasattr(self.db, "get_open_trade_plans_for_portfolio")
+                else []
+            ) or []
+        except Exception as exc:
+            self.logger.debug(f"Could not load open plans for bootstrap: {exc}")
+            open_plans = []
 
         try:
             positions_dict = {}
@@ -86,15 +101,14 @@ class ResyncService:
         except Exception as exc:  # pragma: no cover - defensive
             self.logger.debug(f"Bootstrap risk update failed: {exc}")
 
-        return {"positions": positions, "open_orders": open_orders}
+        return {"positions": positions, "open_orders": open_orders, "open_plans": open_plans}
 
     async def reconcile_open_orders(self):
         """
         Refresh open order snapshot using live exchange data and drop any DB orders
         that no longer exist on the venue.
         """
-        if not self.portfolio_id:
-            return
+        portfolio_id = self._require_portfolio()
         try:
             exchange_orders = await self.bot.get_open_orders_async()
             exchange_orders = self.filter_our_orders(exchange_orders)
@@ -103,7 +117,7 @@ class ResyncService:
             return
 
         try:
-            db_orders = self.db.get_open_orders_for_portfolio(self.portfolio_id)
+            db_orders = self.db.get_open_orders_for_portfolio(portfolio_id)
         except Exception as exc:
             self.logger.warning(f"Could not load open orders from DB for reconciliation: {exc}")
             db_orders = []
@@ -115,7 +129,7 @@ class ResyncService:
             self.logger.info(f"🧹 Removed {len(stale)} stale open orders not on exchange")
 
         try:
-            self.db.replace_open_orders_for_portfolio(self.portfolio_id, exchange_orders)
+            self.db.replace_open_orders_for_portfolio(portfolio_id, exchange_orders)
         except Exception as exc:
             self.logger.warning(f"Could not refresh open orders snapshot: {exc}")
 
@@ -124,8 +138,7 @@ class ResyncService:
         Reconcile positions and open orders against the live exchange at startup.
         Ensures DB snapshots and risk manager state reflect actual venue state.
         """
-        if not self.portfolio_id:
-            return
+        portfolio_id = self._require_portfolio()
         try:
             live_positions = await self.bot.get_positions_async()
         except Exception as exc:
@@ -143,8 +156,8 @@ class ResyncService:
 
         # Load existing snapshots
         try:
-            db_positions = self.db.get_positions_for_portfolio(self.portfolio_id) or []
-            db_orders = self.db.get_open_orders_for_portfolio(self.portfolio_id) or []
+            db_positions = self.db.get_positions_for_portfolio(portfolio_id) or []
+            db_orders = self.db.get_open_orders_for_portfolio(portfolio_id) or []
         except Exception as exc:
             self.record_health_state("restart_recovery", "error", {"stage": "db_read", "error": str(exc)})
             self.logger.warning(f"Could not load DB snapshots during recovery: {exc}")
@@ -152,8 +165,8 @@ class ResyncService:
 
         # Replace snapshots with live state
         try:
-            self.db.replace_positions_for_portfolio(self.portfolio_id, live_positions)
-            self.db.replace_open_orders_for_portfolio(self.portfolio_id, live_orders)
+            self.db.replace_positions_for_portfolio(portfolio_id, live_positions)
+            self.db.replace_open_orders_for_portfolio(portfolio_id, live_orders)
         except Exception as exc:
             self.record_health_state("restart_recovery", "error", {"stage": "db_write", "error": str(exc)})
             self.logger.warning(f"Could not persist reconciled snapshots: {exc}")
@@ -193,13 +206,12 @@ class ResyncService:
         get_symbols: Callable[[], set],
     ):
         """Sync recent trades from exchange to DB."""
-        if not self.portfolio_id:
-            return
+        portfolio_id = self._require_portfolio()
 
         new_processed: set[tuple[str, str | None]] = set()
         if not processed_trade_ids:
             try:
-                persisted_ids = self.db.get_processed_trade_ids_for_portfolio(self.portfolio_id)
+                persisted_ids = self.db.get_processed_trade_ids_for_portfolio(portfolio_id)
                 processed_trade_ids.update(persisted_ids or set())
             except Exception as exc:
                 self.logger.debug(f"Could not load processed trade ids: {exc}")
@@ -209,7 +221,7 @@ class ResyncService:
             if not symbols:
                 symbols = {"BTC/USD"}
 
-            since_iso = self.db.get_latest_trade_timestamp_for_portfolio(self.portfolio_id)
+            since_iso = self.db.get_latest_trade_timestamp_for_portfolio(portfolio_id)
             since_ms = None
             if since_iso:
                 try:
@@ -246,7 +258,7 @@ class ResyncService:
 
                         existing = self.db.conn.execute(
                             "SELECT id FROM trades WHERE trade_id = ? AND portfolio_id = ?",
-                            (trade_id, self.portfolio_id),
+                            (trade_id, portfolio_id),
                         ).fetchone()
                         if existing:
                             processed_trade_ids.add(trade_id)
@@ -279,7 +291,7 @@ class ResyncService:
                             liquidity = str(liquidity).lower()
 
                         try:
-                            plan_reason = plan_reason_lookup(self.portfolio_id, order_id, client_oid)
+                            plan_reason = plan_reason_lookup(portfolio_id, order_id, client_oid)
                         except Exception:
                             plan_reason = None
                         reason = order_reasons.get(str(order_id)) or plan_reason
@@ -291,7 +303,7 @@ class ResyncService:
                         realized_pnl = self.holdings_updater(symbol, side, quantity, price, fee)
 
                         self.db.log_trade_for_portfolio(
-                            self.portfolio_id,
+                            portfolio_id,
                             symbol,
                             side,
                             quantity,
@@ -322,6 +334,6 @@ class ResyncService:
         finally:
             if new_processed:
                 try:
-                    self.db.record_processed_trade_ids_for_portfolio(self.portfolio_id, new_processed)
+                    self.db.record_processed_trade_ids_for_portfolio(portfolio_id, new_processed)
                 except Exception as exc:
                     self.logger.debug(f"Could not persist processed trade ids: {exc}")

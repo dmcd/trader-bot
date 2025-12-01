@@ -1,10 +1,12 @@
 import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from trader_bot.config import CLIENT_ORDER_PREFIX
+from trader_bot.services.plan_monitor import PlanMonitor, PlanMonitorConfig
 from trader_bot.services.resync_service import ResyncService
 from trader_bot.utils import get_client_order_id
 
@@ -13,17 +15,22 @@ class StubDB:
     def __init__(self):
         self.positions = []
         self.orders = []
+        self.open_plans = []
         self.replaced_positions = None
         self.replaced_orders = None
         self.health = {}
         self.replace_calls = 0
         self.replace_fail = False
+        self.closed_plans = []
 
     def get_positions_for_portfolio(self, portfolio_id):
         return self.positions
 
     def get_open_orders_for_portfolio(self, portfolio_id):
         return self.orders
+
+    def get_open_trade_plans_for_portfolio(self, portfolio_id):
+        return self.open_plans
 
     def replace_positions_for_portfolio(self, portfolio_id, positions):
         self.replaced_positions = positions
@@ -33,6 +40,15 @@ class StubDB:
         if self.replace_fail:
             raise RuntimeError("replace failed")
         self.replaced_orders = orders
+
+    def update_trade_plan_status(self, plan_id, *, status, closed_at=None, reason=None):
+        self.closed_plans.append((plan_id, status, closed_at, reason))
+
+    def log_trade_for_portfolio(self, *args, **kwargs):
+        return None
+
+    def update_trade_plan_prices(self, *args, **kwargs):
+        return None
 
     def set_health_state(self, key, value, detail_str=None):
         self.health[key] = value
@@ -60,6 +76,9 @@ class TrackingRisk:
 
     def update_pending_orders(self, orders, price_lookup=None):
         self.pending_orders = orders
+
+    def get_total_exposure(self):
+        return 0.0
 
 
 def test_filter_our_orders_only_keeps_prefixed():
@@ -118,6 +137,72 @@ def test_bootstrap_snapshots_restores_portfolio_state():
     assert risk.pending_orders == db.orders
     assert db.replaced_positions is None
     assert db.replaced_orders is None
+
+
+def test_bootstrap_snapshots_requires_portfolio():
+    resync = ResyncService(
+        db=StubDB(),
+        bot=None,
+        risk_manager=TrackingRisk(),
+        holdings_updater=lambda *args, **kwargs: 0.0,
+        portfolio_stats_applier=lambda *args, **kwargs: None,
+    )
+
+    with pytest.raises(ValueError):
+        resync.bootstrap_snapshots()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_carries_open_plans_and_preserves_monitor_state():
+    db = StubDB()
+    db.positions = [{"symbol": "ETH/USD", "quantity": 1.0, "avg_price": 1800.0}]
+    db.open_plans = [
+        {
+            "id": 5,
+            "symbol": "ETH/USD",
+            "side": "BUY",
+            "entry_price": 1800.0,
+            "stop_price": 1700.0,
+            "target_price": 2000.0,
+            "size": 1.0,
+            "opened_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ]
+    risk = TrackingRisk()
+    resync = ResyncService(
+        db=db,
+        bot=None,
+        risk_manager=risk,
+        holdings_updater=lambda *args, **kwargs: 0.0,
+        portfolio_stats_applier=lambda *args, **kwargs: None,
+        portfolio_id=3,
+    )
+
+    state = resync.bootstrap_snapshots()
+
+    assert state["open_plans"] == db.open_plans
+    bot = AsyncMock()
+    bot.place_order_async = AsyncMock(return_value={"order_id": "1", "liquidity": "taker"})
+    monitor = PlanMonitor(
+        db=db,
+        bot=bot,
+        cost_tracker=MagicMock(calculate_trade_fee=lambda *args, **kwargs: 0.0),
+        risk_manager=risk,
+        prefer_maker=lambda symbol: False,
+        holdings_updater=lambda *args, **kwargs: 0.0,
+        portfolio_stats_applier=lambda *args, **kwargs: None,
+        portfolio_id=3,
+    )
+    config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=None, trail_to_breakeven_pct=0.02)
+    await monitor.monitor(
+        price_lookup={"ETH/USD": 1810.0},
+        open_orders=[],
+        config=config,
+        now=datetime.now(timezone.utc),
+        portfolio_id=None,
+    )
+
+    assert db.closed_plans == []
 
 
 @pytest.mark.asyncio
@@ -306,13 +391,9 @@ async def test_sync_trades_paginates_and_skips_duplicates():
 
 
 @pytest.mark.asyncio
-async def test_sync_trades_noop_when_portfolio_missing():
+async def test_sync_trades_requires_portfolio():
     db = SyncStubDB()
-
-    def trades(_):
-        raise AssertionError("should not fetch trades")
-
-    bot = SyncStubBot(trades)
+    bot = SyncStubBot(lambda *_: [])
     resync = ResyncService(
         db=db,
         bot=bot,
@@ -320,13 +401,11 @@ async def test_sync_trades_noop_when_portfolio_missing():
         holdings_updater=lambda *args, **kwargs: 0.0,
         portfolio_stats_applier=lambda *args, **kwargs: None,
     )
-    resync.set_portfolio(0)
 
-    await resync.sync_trades_from_exchange(
-        processed_trade_ids=set(),
-        order_reasons={},
-        plan_reason_lookup=lambda *_: None,
-        get_symbols=lambda: set(),
-    )
-
-    assert db.logged == []
+    with pytest.raises(ValueError):
+        await resync.sync_trades_from_exchange(
+            processed_trade_ids=set(),
+            order_reasons={},
+            plan_reason_lookup=lambda *_: None,
+            get_symbols=lambda: set(),
+        )

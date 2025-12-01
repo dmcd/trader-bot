@@ -454,6 +454,7 @@ class TestActionHandling(unittest.IsolatedAsyncioTestCase):
             on_trade_rejected=self.runner.strategy.on_trade_rejected,
             actions_logger=self.runner.strategy.logger if hasattr(self.runner.strategy, "logger") else None,
             logger=None,
+            portfolio_id=self.runner.portfolio_id,
         )
 
     async def test_update_plan_handling(self):

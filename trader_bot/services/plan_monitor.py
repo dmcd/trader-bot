@@ -41,6 +41,12 @@ class PlanMonitor:
         self.max_total_exposure = max_total_exposure
         self.portfolio_id = portfolio_id
 
+    def _require_portfolio(self) -> int:
+        """Ensure monitoring only runs when scoped to a portfolio."""
+        if not self.portfolio_id:
+            raise ValueError("portfolio_id is required for plan monitoring")
+        return self.portfolio_id
+
     def refresh_bindings(
         self,
         *,
@@ -87,10 +93,9 @@ class PlanMonitor:
         """
         if portfolio_id is not None:
             self.portfolio_id = portfolio_id
-        if not self.portfolio_id:
-            return
+        portfolio_id = self._require_portfolio()
         try:
-            open_plans = self.db.get_open_trade_plans_for_portfolio(self.portfolio_id)
+            open_plans = self.db.get_open_trade_plans_for_portfolio(portfolio_id)
             now = now or datetime.now(timezone.utc)
             now_iso = now.isoformat()
             day_end_cutoff = None
@@ -153,10 +158,10 @@ class PlanMonitor:
                     except Exception:
                         pass
 
-                if not should_close and day_end_cutoff and opened_at:
+                if not should_close and day_end_cutoff and now >= day_end_cutoff and opened_at:
                     try:
                         opened_dt = datetime.fromisoformat(opened_at)
-                        if opened_dt < day_end_cutoff:
+                        if opened_dt <= day_end_cutoff:
                             should_close = True
                             reason = "Day-end flatten"
                     except Exception:

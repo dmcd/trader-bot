@@ -118,6 +118,21 @@ async def test_partial_close_zero_size_plan(handler):
 
 
 @pytest.mark.asyncio
+async def test_partial_close_requires_portfolio(handler):
+    handler.portfolio_id = None
+
+    with pytest.raises(ValueError):
+        await handler.handle_partial_close(
+            plan_id=1,
+            close_fraction=0.5,
+            symbol="BTC/USD",
+            price=100.0,
+            current_exposure=0.0,
+            trace_id=None,
+        )
+
+
+@pytest.mark.asyncio
 async def test_close_position_handles_missing_positions(handler):
     handler.db.get_positions_for_portfolio.return_value = []
 
@@ -148,6 +163,14 @@ async def test_close_position_emits_ib_metadata(handler):
     assert record["ib_contract_id"] == 12345
     assert record["ib_exchange"] == "ASX"
     assert record["ib_commission_source"] == "ib_order_status"
+
+
+@pytest.mark.asyncio
+async def test_close_position_requires_portfolio(handler):
+    handler.portfolio_id = None
+
+    with pytest.raises(ValueError):
+        await handler.handle_close_position(symbol="ETH/USD", price=2000.0, trace_id=None)
 
 
 def test_liquidity_filter_blocks_wide_spread(handler, caplog):

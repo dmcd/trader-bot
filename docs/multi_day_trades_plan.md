@@ -24,12 +24,12 @@ Legacy session model (now removed):
     - [x] Expose snapshot data to dashboard/context consumers for visibility (optional toggle).
 
 - [ ] Trading and monitoring flows
-  - [ ] Update `PlanMonitor`/`TradeActionHandler`/`ResyncService` to use `portfolio_id` and preserve open plans/positions across date rollovers.
-    - [ ] Require portfolio_id to be set for plan monitoring/action/resync paths and thread it from runner/services on restart.
-    - [ ] Preserve open plans/positions/open orders across rollovers by seeding from DB snapshots instead of day-specific clears.
-    - [ ] Add restart coverage for plan monitor/action/resync flows to prove plans/positions persist across days.
+  - [x] Update `PlanMonitor`/`TradeActionHandler`/`ResyncService` to use `portfolio_id` and preserve open plans/positions across date rollovers.
+    - [x] Require portfolio_id to be set for plan monitoring/action/resync paths and thread it from runner/services on restart.
+    - [x] Preserve open plans/positions/open orders across rollovers by seeding from DB snapshots instead of day-specific clears.
+    - [x] Add restart coverage for plan monitor/action/resync flows to prove plans/positions persist across days.
   - [ ] Implement overnight widening of stops/targets and auto-rearm of plan monitors on restart (configurable policy).
-  - [ ] Add portfolio aggregates (PnL, exposure, open positions, costs) to `TradingContext`; include per-bot-version slices if multiple versions share a portfolio.
+  - [ ] Add portfolio aggregates (PnL, exposure, open positions, costs) to `TradingContext`.
   - [ ] Dedupe processed trades across days/runs using exchange trade/order ids; add DB uniqueness guard on (portfolio_id, trade_id/client_order_id).
 
 - [ ] Dashboard and telemetry

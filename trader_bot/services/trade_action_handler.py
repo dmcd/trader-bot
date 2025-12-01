@@ -41,6 +41,12 @@ class TradeActionHandler:
         self.logger = logger or logging.getLogger(__name__)
         self.portfolio_id = portfolio_id
 
+    def _require_portfolio(self) -> int:
+        """Ensure trade actions are scoped to a portfolio."""
+        if not self.portfolio_id:
+            raise ValueError("portfolio_id is required for trade actions")
+        return self.portfolio_id
+
     @staticmethod
     def _merge_ib_order_metadata(telemetry_record: dict, order_result: dict | None):
         if not isinstance(order_result, dict):
@@ -225,6 +231,7 @@ class TradeActionHandler:
         current_exposure: float,
         trace_id: Any,
     ):
+        portfolio_id = self._require_portfolio()
         telemetry_record = {
             "status": "partial_close_invalid",
             "symbol": symbol,
@@ -236,7 +243,7 @@ class TradeActionHandler:
             self.emit_telemetry(telemetry_record)
             return telemetry_record
         try:
-            open_plans = self.db.get_open_trade_plans_for_portfolio(self.portfolio_id)
+            open_plans = self.db.get_open_trade_plans_for_portfolio(portfolio_id)
             plan = next((p for p in open_plans if p.get("id") == plan_id), None)
         except Exception:
             plan = None
@@ -269,7 +276,7 @@ class TradeActionHandler:
             fee = self.cost_tracker.calculate_trade_fee(symbol, qty_for_risk, price or 0, flatten_action, liquidity=liquidity_tag)
             realized = self.portfolio_tracker.update_holdings_and_realized(symbol, flatten_action, qty_for_risk, price or 0, fee)
             self.db.log_trade_for_portfolio(
-                self.portfolio_id,
+                portfolio_id,
                 symbol,
                 flatten_action,
                 qty_for_risk,
@@ -311,10 +318,11 @@ class TradeActionHandler:
         price: float | None,
         trace_id: Any,
     ):
+        portfolio_id = self._require_portfolio()
         telemetry_record = {"status": "close_position_none", "symbol": symbol}
         qty = 0.0
         try:
-            positions = self.db.get_positions_for_portfolio(self.portfolio_id)
+            positions = self.db.get_positions_for_portfolio(portfolio_id)
             for pos in positions:
                 if pos.get("symbol") == symbol:
                     qty = pos.get("quantity", 0.0) or 0.0
@@ -344,7 +352,7 @@ class TradeActionHandler:
             fee = self.cost_tracker.calculate_trade_fee(symbol, qty_buffered, price or 0, action, liquidity=liquidity_tag)
             realized = self.portfolio_tracker.update_holdings_and_realized(symbol, action, qty_buffered, price or 0, fee)
             self.db.log_trade_for_portfolio(
-                self.portfolio_id,
+                portfolio_id,
                 symbol,
                 action,
                 qty_buffered,

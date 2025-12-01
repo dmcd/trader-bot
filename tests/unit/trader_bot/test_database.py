@@ -1,4 +1,3 @@
-import logging
 from datetime import datetime, timedelta, timezone
 import sqlite3
 
@@ -240,51 +239,6 @@ def test_trades_can_be_fetched_by_portfolio(tmp_path):
     db.close()
 
 
-def test_session_portfolios_view_exists(tmp_path):
-    db_path = tmp_path / "session-portfolio-view.db"
-    db = TradingDatabase(str(db_path))
-    portfolio = db.get_or_create_portfolio("viewp", base_currency="usd", bot_version="v1")
-    # session_portfolios view remains for legacy lookup; ensure row exists when a session is created
-    session_id = db.get_or_create_portfolio_session(portfolio["id"], starting_balance=1000.0, bot_version="v1")
-    row = db.conn.execute("SELECT portfolio_id FROM session_portfolios WHERE session_id = ?", (session_id,)).fetchone()
-
-    assert row["portfolio_id"] == portfolio["id"]
-    db.close()
-
-
-def test_session_portfolio_backfill(tmp_path):
-    db_path = tmp_path / "session-backfill.db"
-    db = TradingDatabase(str(db_path))
-    cursor = db.conn.cursor()
-    cursor.execute(
-        "INSERT INTO sessions (date, bot_version, starting_balance, base_currency) VALUES (?, ?, ?, ?)",
-        ("2024-01-01", "v1", 1000.0, "USD"),
-    )
-    session_id = cursor.lastrowid
-    db.conn.commit()
-
-    updated = db.backfill_session_portfolios()
-    portfolio_id = db.get_session_portfolio_id(session_id)
-
-    assert updated == 1
-    assert portfolio_id is not None
-    portfolio = db.get_portfolio(portfolio_id)
-    assert portfolio["bot_version"] == "v1"
-    db.close()
-
-
-def test_log_trade_sets_portfolio_id(tmp_path):
-    db_path = tmp_path / "portfolio-trade.db"
-    db = TradingDatabase(str(db_path))
-    portfolio = db.get_or_create_portfolio("active", base_currency="usd", bot_version="v1")
-    session_id = db.get_or_create_session(starting_balance=1000.0, bot_version="v1", base_currency="usd", portfolio_id=portfolio["id"])
-
-    db.log_trade(session_id, "BTC/USD", "BUY", 0.1, 20000.0, fee=0.5, portfolio_id=portfolio["id"])
-    row = db.conn.execute("SELECT portfolio_id FROM trades WHERE session_id = ?", (session_id,)).fetchone()
-
-    assert row["portfolio_id"] == portfolio["id"]
-    db.close()
-
 
 def test_portfolio_first_helpers_do_not_require_session(tmp_path):
     db_path = tmp_path / "portfolio-first.db"
@@ -322,18 +276,6 @@ def test_portfolio_first_helpers_do_not_require_session(tmp_path):
     assert db.get_latest_equity_for_portfolio(portfolio["id"]) == pytest.approx(1500.0)
     assert db.get_positions_for_portfolio(portfolio["id"])[0]["symbol"] == "BTC/USD"
     assert db.get_open_orders_for_portfolio(portfolio["id"])[0]["order_id"] == "oid-1"
-    db.close()
-
-
-def test_session_shim_emits_warning(tmp_path, caplog):
-    db_path = tmp_path / "shim-warning.db"
-    db = TradingDatabase(str(db_path))
-    session_id = db.get_or_create_session(starting_balance=1000.0, bot_version="warn")
-
-    caplog.set_level(logging.WARNING, logger="trader_bot.database")
-    db.log_trade(session_id, "BTC/USD", "BUY", 0.1, 20000.0, fee=0.1)
-
-    assert any("session shim" in record.message for record in caplog.records)
     db.close()
 
 
@@ -539,26 +481,19 @@ def test_portfolio_day_updates_from_equity_snapshots(tmp_path):
     db_path = tmp_path / "portfolio-days.db"
     db = TradingDatabase(str(db_path))
     portfolio = db.get_or_create_portfolio(name="swing", base_currency="AUD", bot_version="v1")
-    session_id = db.get_or_create_portfolio_session(
-        portfolio_id=portfolio["id"],
-        starting_balance=1000.0,
-        bot_version="v1",
-    )
 
     tz_name = "Australia/Melbourne"
     first_ts = datetime(2024, 1, 1, 13, 0, tzinfo=timezone.utc)  # midnight local on Jan 2
-    db.log_equity_snapshot(
-        session_id,
+    db.log_equity_snapshot_for_portfolio(
+        portfolio["id"],
         equity=1000.0,
-        portfolio_id=portfolio["id"],
         timestamp=first_ts,
         timezone_name=tz_name,
     )
     second_ts = datetime(2024, 1, 1, 23, 0, tzinfo=timezone.utc)  # still Jan 2 locally
-    db.log_equity_snapshot(
-        session_id,
+    db.log_equity_snapshot_for_portfolio(
+        portfolio["id"],
         equity=1100.0,
-        portfolio_id=portfolio["id"],
         timestamp=second_ts,
         timezone_name=tz_name,
     )
@@ -581,10 +516,9 @@ def test_portfolio_day_updates_from_equity_snapshots(tmp_path):
     assert row["net_pnl"] == pytest.approx(100.0)
 
     third_ts = datetime(2024, 1, 2, 14, 0, tzinfo=timezone.utc)  # Jan 3 locally
-    db.log_equity_snapshot(
-        session_id,
+    db.log_equity_snapshot_for_portfolio(
+        portfolio["id"],
         equity=1050.0,
-        portfolio_id=portfolio["id"],
         timestamp=third_ts,
         timezone_name=tz_name,
     )
@@ -616,43 +550,29 @@ def test_get_open_orders_handles_empty_table(db_session):
 def test_replace_positions_removes_legacy_session_rows(tmp_path):
     db_path = tmp_path / "positions-clean.db"
     db = TradingDatabase(str(db_path))
-    session_id = db.get_or_create_session(starting_balance=5000.0, bot_version="legacy")
     portfolio = db.get_or_create_portfolio("swing", base_currency="USD", bot_version="v1")
 
-    db.replace_positions(session_id, [{"symbol": "ETH/USD", "quantity": 2.0, "avg_price": 2000.0}])
-    db.replace_positions(
-        session_id,
-        [{"symbol": "BTC/USD", "quantity": 1.0, "avg_price": 10000.0}],
-        portfolio_id=portfolio["id"],
-    )
+    db.replace_positions_for_portfolio(portfolio["id"], [{"symbol": "BTC/USD", "quantity": 1.0, "avg_price": 10000.0}])
 
-    positions = db.get_positions(session_id)
+    positions = db.get_positions_for_portfolio(portfolio["id"])
     assert len(positions) == 1
     assert positions[0]["symbol"] == "BTC/USD"
-    assert positions[0]["portfolio_id"] == portfolio["id"]
     db.close()
 
 
 def test_replace_open_orders_removes_legacy_session_rows(tmp_path):
     db_path = tmp_path / "orders-clean.db"
     db = TradingDatabase(str(db_path))
-    session_id = db.get_or_create_session(starting_balance=5000.0, bot_version="legacy")
     portfolio = db.get_or_create_portfolio("swing", base_currency="USD", bot_version="v1")
 
-    db.replace_open_orders(
-        session_id,
-        [{"order_id": "old", "symbol": "ETH/USD", "side": "sell", "price": 2100, "amount": 1, "remaining": 1}],
-    )
-    db.replace_open_orders(
-        session_id,
+    db.replace_open_orders_for_portfolio(
+        portfolio["id"],
         [{"order_id": "fresh", "symbol": "BTC/USD", "side": "buy", "price": 10100, "amount": 1, "remaining": 1}],
-        portfolio_id=portfolio["id"],
     )
 
-    orders = db.get_open_orders(session_id)
+    orders = db.get_open_orders_for_portfolio(portfolio["id"])
     assert len(orders) == 1
     assert orders[0]["order_id"] == "fresh"
-    assert orders[0]["portfolio_id"] == portfolio["id"]
     db.close()
 
 
@@ -667,16 +587,6 @@ def test_log_llm_trace_handles_bad_json(db_session):
     stored = cursor.fetchone()["market_context"]
 
     assert stored == str(cyclical)
-
-
-def test_multiple_sessions_created_per_version(db_session):
-    db, portfolio_id = db_session
-    session_id_1 = db.get_or_create_portfolio_session(portfolio_id, starting_balance=5000.0, bot_version="test-version")
-    session_id_2 = db.get_or_create_portfolio_session(portfolio_id, starting_balance=6000.0, bot_version="test-version")
-
-    # Portfolio sessions should reuse the latest for the portfolio/version combo
-    assert session_id_1 == session_id_2
-    assert db.get_session_id_by_version("test-version") == session_id_2
 
 
 def test_portfolio_version_helpers(tmp_path):
@@ -694,44 +604,19 @@ def test_portfolio_version_helpers(tmp_path):
     db.close()
 
 
-def test_session_creation_does_not_reuse_on_restart(tmp_path):
-    db_path = tmp_path / "restart.db"
-    original = TradingDatabase(str(db_path))
-    first_session = original.get_or_create_session(starting_balance=5000.0, bot_version="test-version")
-    original.close()
-
-    reopened = TradingDatabase(str(db_path))
-    new_session = reopened.get_or_create_session(starting_balance=7000.0, bot_version="test-version")
-    reopened.close()
-
-    assert first_session != new_session
-
-
-def test_get_or_create_portfolio_session_reuses_latest(tmp_path):
-    db_path = tmp_path / "portfolio.db"
-    db = TradingDatabase(str(db_path))
-    portfolio = db.get_or_create_portfolio(name="swing", base_currency="usd", bot_version="v1")
-
-    first = db.get_or_create_portfolio_session(portfolio_id=portfolio["id"], starting_balance=1200.0, bot_version="v1")
-    second = db.get_or_create_portfolio_session(portfolio_id=portfolio["id"], starting_balance=3300.0, bot_version="v1")
-
-    cursor = db.conn.cursor()
-    row = cursor.execute("SELECT COUNT(*) AS cnt FROM sessions WHERE portfolio_id = ?", (portfolio["id"],)).fetchone()
-
-    assert first == second
-    assert row["cnt"] == 1
-    db.close()
-
-
 def test_log_estimated_fee_persists_row(db_session):
-    db, session_id = db_session
-    db.log_estimated_fee(session_id, order_id="abc", estimated_fee=1.23, symbol="BTC/USD", action="BUY")
+    db, portfolio_id = db_session
+    db.log_estimated_fee_for_portfolio(portfolio_id, order_id="abc", estimated_fee=1.23, symbol="BTC/USD", action="BUY")
 
     cursor = db.conn.cursor()
-    row = cursor.execute("SELECT estimated_fee, action, order_id FROM estimated_fees WHERE session_id = ?", (session_id,)).fetchone()
+    row = cursor.execute(
+        "SELECT estimated_fee, action, order_id, portfolio_id FROM estimated_fees WHERE order_id = ?",
+        ("abc",),
+    ).fetchone()
     assert row["estimated_fee"] == pytest.approx(1.23)
     assert row["action"] == "BUY"
     assert row["order_id"] == "abc"
+    assert row["portfolio_id"] == portfolio_id
 
 
 def test_llm_trace_roundtrip_and_prune(db_session):

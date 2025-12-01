@@ -984,7 +984,7 @@ class DummyDB:
     def create_trade_plan_for_portfolio(self, *_, **__):
         return 1
 
-    def log_estimated_fee(self, *_, **__):
+    def log_estimated_fee_for_portfolio(self, *_, **__):
         return None
 
     def set_health_state(self, *_, **__):

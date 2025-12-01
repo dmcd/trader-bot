@@ -30,7 +30,7 @@ Legacy session model (now removed):
   - [ ] Dedupe processed trades across days/runs using exchange trade/order ids; add DB uniqueness guard on (portfolio_id, trade_id/client_order_id).
 
 - [ ] Dashboard and telemetry
-  - [ ] Add portfolio selector and optional day filter to `dashboard.py`; surface open positions/plans regardless of run.
+  - [ ] surface open positions/plans regardless of run.
   - [ ] Tag telemetry/log messages with `portfolio_id` and `run_id` for traceability.
 
 - [ ] Testing and rollout
@@ -41,5 +41,3 @@ Legacy session model (now removed):
 
 - [ ] Documentation and ops
   - [ ] Update `README`/`architecture.md` to describe the new portfolio/daily model and operational scripts.
-  - [ ] Document operator flows: starting a new portfolio, rolling daily baselines, and troubleshooting mismatched day PnL vs equity.
-  - [ ] Update risk documentation (AGENTS, architecture, research notes) to reflect portfolio-level risk and removal of daily-loss gates.

@@ -76,27 +76,33 @@ sequenceDiagram
 ```
 
 ## Delegation Boundaries
-- `StrategyRunner` owns the loop clock and portfolio/run lifecycle, but defers command handling and stop logic to `StrategyOrchestrator`.
+- `StrategyRunner` owns the loop clock and portfolio/run lifecycle, writes end-of-day snapshots, and defers command handling/stop logic to `StrategyOrchestrator`.
 - `StrategyOrchestrator` fans out to `CommandProcessor`, `HealthCircuitManager`, `PlanMonitor`, and `RiskManager` so the loop body stays thin.
 - Market capture and pruning run through `MarketDataService`; trade executions/plan updates route via `TradeActionHandler`.
-- Holdings, PnL, and fee/LLM cost accounting live in `PortfolioTracker`, while `ResyncService` handles state reconciliation on startup and trade sync inside the loop.
+- Holdings, PnL, and fee/LLM cost accounting live in `PortfolioTracker`, while `ResyncService` handles portfolio-scoped reconciliation on startup and trade sync inside the loop (deduping by trade/client ids).
 
 ## Components (one-liners)
-- `strategy_runner.py`: Thin orchestrator loop that wires services, hands telemetry/risk gating to `StrategyOrchestrator`, and owns the trading lifecycle.
+- `strategy_runner.py`: Thin orchestrator loop that wires services, hands telemetry/risk gating to `StrategyOrchestrator`, and owns the portfolio/run lifecycle including EOD snapshot writes.
 - `services/strategy_orchestrator.py`: Lifecycle harness for start/stop/cleanup, command processing, budget gates, plan monitor coordination, and market-data health checks.
 - `services/command_processor.py`: Executes dashboard-issued commands (stop bot, close positions) ahead of each loop.
-- `services/plan_monitor.py`: Manages open plan stops/targets, trailing rules, and auto-flatten windows.
+- `services/plan_monitor.py`: Manages open plan stops/targets, trailing rules, overnight widening, auto-rearm on restart, and max-age enforcement.
 - `services/health_manager.py`: Circuit breaker for exchange/tool streaks plus market-data staleness/latency gating.
 - `services/market_data_service.py`: OHLCV capture/pruning helpers and timeframe parsing for cadence guards.
-- `services/portfolio_tracker.py`: Tracks holdings and portfolio stats, rebuilds from exchange trades, and persists caches.
-- `services/trade_action_handler.py`: Executes plan actions (update/partial/close/pause), RR filters, slippage checks, and liquidity guards.
-- `services/resync_service.py`: Reconciles DB snapshots with exchange state and syncs recent trades on startup and during loops.
+- `services/portfolio_tracker.py`: Tracks holdings and portfolio stats (PnL, fees, exposure) at the portfolio scope, rebuilds from exchange trades, and persists caches for restarts.
+- `services/trade_action_handler.py`: Executes plan actions (update/partial/close/pause), RR filters, slippage checks, liquidity guards, and pushes fee estimates.
+- `services/resync_service.py`: Reconciles DB snapshots with exchange state, preserves open plans/positions across rollovers, and syncs recent trades (deduping by trade/client ids) on startup and during loops.
 - `strategy.py` (`LLMStrategy`): Builds planner/decision prompts, normalizes tool hints, sizes trades, and handles cooldowns.
 - `trading_context.py`: Packages positions, orders, summaries, and regime flags for the LLM.
 - `technical_analysis.py`: Computes RSI, MACD, Bollinger Bands, SMAs, and simple signal summaries.
-- `risk_manager.py`: Enforces order value, exposure caps, position count, and daily loss guardrails.
+- `risk_manager.py`: Enforces order value, exposure caps, position count, correlation buckets, and FX-aware exposure in the configured portfolio base currency (no daily loss gating).
 - `gemini_trader.py`: ccxt adapter for Gemini with precision fixes, post-only handling, and order/trade sync.
 - `cost_tracker.py`: Estimates exchange fees and LLM token costs for net PnL.
-- `database.py`: SQLite schema/helpers for portfolios, trades, prompts/traces, OHLCV, equity, positions, open orders, commands, and trade plans.
-- `dashboard.py`: Streamlit UI for performance, costs, health, history, logs, and control commands.
+- `database.py`: SQLite schema/helpers for portfolios, trades, portfolio_days, EOD snapshots, prompts/traces, OHLCV, equity, positions, open orders, commands, trade plans, and processed trade dedupe.
+- `dashboard.py`: Streamlit UI for performance, costs, health, history, logs, open plans/positions (portfolio-scoped), and control commands.
 - `config.py`: Central tunables for API keys, limits, cadence, and modes.
+
+## Portfolio & Rollover Notes
+- All state is keyed by portfolio id/name; restarts reuse the same portfolio to keep positions, open plans, and processed trade ids intact across days.
+- `PORTFOLIO_DAY_TIMEZONE` defines day boundaries for reporting rows (`portfolio_days`) and overnight widen guards; defaults to `Australia/Sydney`.
+- The runner writes end-of-day snapshots (equity, positions, open plans) on shutdown/rollover; `ResyncService` seeds from snapshots and live venue state on restart.
+- No automatic day-end flattening is performed; risk/exposure checks operate at the portfolio level instead of daily loss gates.

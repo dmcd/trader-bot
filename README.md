@@ -68,6 +68,9 @@ MAX_DAILY_LOSS=500.0          # Stop trading if loss exceeds this amount
 MAX_DAILY_LOSS_PERCENT=3.0    # Stop trading if loss exceeds this % of equity
 MAX_ORDER_VALUE=500.0         # Max value per order
 MAX_TOTAL_EXPOSURE=1000.0     # Max total portfolio exposure
+PORTFOLIO_NAME=default        # Portfolio/run scope for multi-day trades (keeps positions/plans across restarts)
+PORTFOLIO_BASE_CURRENCY=USD   # Base currency for risk/pnl
+PORTFOLIO_DAY_TIMEZONE=Australia/Sydney  # Day boundary for reporting + overnight widening
 ```
 
 *See `config.py` for a full list of configurable options.*
@@ -96,7 +99,7 @@ If you prefer to run components individually:
 
 ### Project Layout
 
-- `trader_bot/`: Core package (strategy runner, LLM strategy, risk manager, exchange adapter, dashboard, prompts).
+- `trader_bot/`: Core package (strategy runner, LLM strategy, risk manager, exchange adapter, dashboard, prompts). Portfolio-aware services persist positions/plans/trades to SQLite for multi-day continuity.
 - `tests/`: Pytest suite and shared fixtures.
 - `docs/`: Single architecture overview.
 - `run.sh`: Helper launcher that starts the runner and dashboard together.
@@ -111,6 +114,14 @@ python -m pytest
 ```
 
 This will emit a terminal coverage summary and write `coverage.xml` for tooling.
+
+## 🗂️ Portfolio & Multi-day Ops
+
+- **Portfolios are the unit of state**: trades, plans, positions, telemetry, and processed trade ids are keyed by `PORTFOLIO_NAME` (or the `bot_version` fallback). Keep this stable across restarts to continue managing open positions/plans.
+- **Day boundaries are configurable**: `PORTFOLIO_DAY_TIMEZONE` drives reporting rows (`portfolio_days`) and overnight stop/target widening rules.
+- **Restart continuity**: the runner writes end-of-day snapshots (equity, open positions, open plans) and resyncs on startup so open inventory persists across days. No daily flattening is performed.
+- **Deduping**: trades are deduped per-portfolio by exchange trade id and client order id; processed ids are cached in DB to avoid double-booking across runs/days.
+- **Base currency**: `PORTFOLIO_BASE_CURRENCY` feeds risk sizing and exposure calculations (with optional FX provider when trading cross-currency symbols).
 
 ## 📚 Documentation
 

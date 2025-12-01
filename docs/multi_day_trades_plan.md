@@ -50,4 +50,4 @@ Legacy session model (now removed):
   - [x] Add tests for trade/order dedupe across runs/days using exchange ids.
 
 - [ ] Documentation and ops
-  - [ ] Update `README`/`architecture.md` to describe the new portfolio/daily model and operational scripts.
+  - [x] Update `README`/`architecture.md` to describe the new portfolio/daily model and operational scripts.

@@ -67,7 +67,7 @@ def setup_logging():
         logger.handlers.clear()
 
     # Formatters
-    simple_formatter = logging.Formatter('%(asctime)s - portfolio=%(portfolio_id)s run=%(run_id)s - %(message)s')
+    simple_formatter = logging.Formatter('%(asctime)s - %(message)s')
     detailed_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - portfolio=%(portfolio_id)s run=%(run_id)s - %(message)s')
 
     test_mode = (

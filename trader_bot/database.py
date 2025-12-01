@@ -1588,6 +1588,18 @@ class TradingDatabase:
             )
         except Exception as exc:
             logger.debug(f"Could not create trade_plans index: {exc}")
+        optional_columns = {
+            "overnight_widened_at": "TEXT",
+            "overnight_widen_version": "INTEGER",
+            "last_widened_stop_price": "REAL",
+            "last_widened_target_price": "REAL",
+        }
+        for column, col_type in optional_columns.items():
+            if not self._column_exists(cursor, "trade_plans", column):
+                try:
+                    cursor.execute(f"ALTER TABLE trade_plans ADD COLUMN {column} {col_type}")
+                except Exception as exc:
+                    logger.debug(f"Could not add column {column} to trade_plans: {exc}")
         self.conn.commit()
 
     def create_trade_plan_for_portfolio(self, portfolio_id: int, symbol: str, side: str, entry_price: float, stop_price: float, target_price: float, size: float, reason: str = "", entry_order_id: str = None, entry_client_order_id: str = None) -> int:
@@ -1600,18 +1612,48 @@ class TradingDatabase:
         self.conn.commit()
         return cursor.lastrowid
 
-    def update_trade_plan_prices(self, plan_id: int, stop_price: float = None, target_price: float = None, reason: str = None):
+    def update_trade_plan_prices(
+        self,
+        plan_id: int,
+        stop_price: float = None,
+        target_price: float = None,
+        reason: str = None,
+        widened_at: str | None = None,
+        widen_stop_price: float | None = None,
+        widen_target_price: float | None = None,
+        widen_version: int | None = None,
+    ):
         """Update stop/target and bump version."""
         self.ensure_trade_plans_table()
         cursor = self.conn.cursor()
-        cursor.execute("""
+        set_clauses = [
+            "stop_price = COALESCE(?, stop_price)",
+            "target_price = COALESCE(?, target_price)",
+            "version = version + 1",
+            "reason = COALESCE(?, reason)",
+        ]
+        params: list[Any] = [stop_price, target_price, reason]
+        if widened_at is not None:
+            set_clauses.append("overnight_widened_at = ?")
+            params.append(widened_at)
+        if widen_stop_price is not None:
+            set_clauses.append("last_widened_stop_price = ?")
+            params.append(widen_stop_price)
+        if widen_target_price is not None:
+            set_clauses.append("last_widened_target_price = ?")
+            params.append(widen_target_price)
+        if widen_version is not None:
+            set_clauses.append("overnight_widen_version = ?")
+            params.append(widen_version)
+        set_expr = ",\n                ".join(set_clauses)
+        cursor.execute(
+            f"""
             UPDATE trade_plans
-            SET stop_price = COALESCE(?, stop_price),
-                target_price = COALESCE(?, target_price),
-                version = version + 1,
-                reason = COALESCE(?, reason)
+            SET {set_expr}
             WHERE id = ?
-        """, (stop_price, target_price, reason, plan_id))
+        """,
+            (*params, plan_id),
+        )
         self.conn.commit()
 
     def update_trade_plan_size(self, plan_id: int, size: float, reason: str = None):

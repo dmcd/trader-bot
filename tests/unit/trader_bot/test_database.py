@@ -150,6 +150,10 @@ def test_trade_plan_portfolio_column_and_index(tmp_path):
     db.ensure_trade_plans_table()
     cols = {row["name"] for row in db.conn.execute("PRAGMA table_info(trade_plans)")}
     assert "portfolio_id" in cols
+    assert "overnight_widened_at" in cols
+    assert "overnight_widen_version" in cols
+    assert "last_widened_stop_price" in cols
+    assert "last_widened_target_price" in cols
     indexes = {row["name"] for row in db.conn.execute("PRAGMA index_list(trade_plans)")}
     assert "idx_trade_plans_portfolio_symbol_status" in indexes
     db.close()
@@ -428,7 +432,17 @@ def test_trade_plan_crud_and_versioning(db_session):
         reason="entry",
         entry_client_order_id="cid-1",
     )
-    db.update_trade_plan_prices(plan_id, stop_price=95.0, target_price=125.0, reason="tighten")
+    widened_at = "2024-01-02T00:00:00Z"
+    db.update_trade_plan_prices(
+        plan_id,
+        stop_price=95.0,
+        target_price=125.0,
+        reason="tighten",
+        widened_at=widened_at,
+        widen_stop_price=95.0,
+        widen_target_price=125.0,
+        widen_version=2,
+    )
     db.update_trade_plan_size(plan_id, size=0.5, reason="partial")
 
     open_plans = db.get_open_trade_plans_for_portfolio(portfolio_id)
@@ -436,6 +450,10 @@ def test_trade_plan_crud_and_versioning(db_session):
     assert open_plans[0]["version"] == 3
     assert open_plans[0]["size"] == 0.5
     assert open_plans[0]["reason"] == "partial"
+    assert open_plans[0]["overnight_widened_at"] == widened_at
+    assert open_plans[0]["overnight_widen_version"] == 2
+    assert open_plans[0]["last_widened_stop_price"] == 95.0
+    assert open_plans[0]["last_widened_target_price"] == 125.0
 
     db.update_trade_plan_status(plan_id, "closed", closed_at="2024-01-01T00:00:00Z", reason="exit")
     assert db.get_open_trade_plans_for_portfolio(portfolio_id) == []

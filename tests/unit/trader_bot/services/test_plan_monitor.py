@@ -17,8 +17,15 @@ class StubDB:
     def get_open_trade_plans_for_portfolio(self, portfolio_id):
         return self.plans
 
-    def update_trade_plan_prices(self, plan_id, *, stop_price, reason):
-        self.updated_prices.append((plan_id, stop_price, reason))
+    def update_trade_plan_prices(self, plan_id, *, stop_price=None, target_price=None, reason=None, **kwargs):
+        record = {
+            "plan_id": plan_id,
+            "stop_price": stop_price,
+            "target_price": target_price,
+            "reason": reason,
+        }
+        record.update(kwargs)
+        self.updated_prices.append(record)
 
     def update_trade_plan_status(self, plan_id, *, status, closed_at, reason):
         self.closed.append((plan_id, status, closed_at, reason))
@@ -80,7 +87,14 @@ async def test_trails_sell_stop_to_breakeven_without_closing():
         portfolio_id=1,
     )
 
-    assert db.updated_prices == [(10, 100.0, "Trailed stop to breakeven")]
+    assert db.updated_prices == [
+        {
+            "plan_id": 10,
+            "stop_price": 100.0,
+            "target_price": None,
+            "reason": "Trailed stop to breakeven",
+        }
+    ]
     bot.place_order_async.assert_not_awaited()
 
 
@@ -238,6 +252,146 @@ async def test_day_end_flatten_waits_for_cutoff():
     await monitor.monitor(price_lookup={"BTC/USD": 101.0}, open_orders=[], config=config, now=after_cutoff, portfolio_id=1)
     assert bot.place_order_async.await_count == 1
     assert db.closed
+
+
+@pytest.mark.asyncio
+async def test_overnight_widen_applies_once_with_restart_metadata():
+    opened = datetime(2024, 1, 1, 22, tzinfo=timezone.utc)
+    now = opened + timedelta(days=1, hours=1)
+    db = StubDB(
+        plans=[
+            {
+                "id": 30,
+                "symbol": "BTC/USD",
+                "side": "BUY",
+                "entry_price": 100.0,
+                "stop_price": 95.0,
+                "target_price": 110.0,
+                "size": 0.5,
+                "opened_at": opened.isoformat(),
+                "version": 1,
+            }
+        ]
+    )
+    monitor, _ = _monitor_with(db, risk_manager=StubRiskManager({"BTC/USD": {"quantity": 0.5}}))
+    config = PlanMonitorConfig(
+        max_plan_age_minutes=None,
+        day_end_flatten_hour_utc=None,
+        trail_to_breakeven_pct=0.02,
+        overnight_widen_enabled=True,
+        overnight_widen_pct=0.02,
+        overnight_widen_abs=0.0,
+        overnight_widen_max_pct=0.1,
+        portfolio_day_timezone="UTC",
+    )
+
+    await monitor.monitor(
+        price_lookup={"BTC/USD": 100.0},
+        open_orders=[],
+        config=config,
+        now=now,
+        portfolio_id=1,
+    )
+
+    assert len(db.updated_prices) == 1
+    record = db.updated_prices[0]
+    assert record["stop_price"] == pytest.approx(93.0)
+    assert record["target_price"] == pytest.approx(110.0)  # clamped by max widen pct
+    assert record["widen_version"] == 2
+    assert record.get("widened_at", "").startswith(now.date().isoformat())
+
+    # Persist metadata for the next monitor run and ensure widen is only applied once per day
+    db.plans[0]["stop_price"] = record["stop_price"]
+    db.plans[0]["target_price"] = record["target_price"]
+    db.plans[0]["version"] = record["widen_version"]
+    db.plans[0]["overnight_widened_at"] = record["widened_at"]
+    db.updated_prices = []
+
+    await monitor.monitor(
+        price_lookup={"BTC/USD": 101.0},
+        open_orders=[],
+        config=config,
+        now=now,
+        portfolio_id=1,
+    )
+
+    assert db.updated_prices == []
+
+
+@pytest.mark.asyncio
+async def test_overnight_widen_respects_opt_out():
+    opened = datetime(2024, 2, 1, 23, tzinfo=timezone.utc)
+    db = StubDB(
+        plans=[
+            {
+                "id": 31,
+                "symbol": "ETH/USD",
+                "side": "SELL",
+                "entry_price": 2000.0,
+                "stop_price": 2100.0,
+                "target_price": 1800.0,
+                "size": 0.2,
+                "opened_at": opened.isoformat(),
+            }
+        ]
+    )
+    monitor, _ = _monitor_with(db, risk_manager=StubRiskManager({"ETH/USD": {"quantity": -0.2}}))
+    config = PlanMonitorConfig(
+        max_plan_age_minutes=None,
+        day_end_flatten_hour_utc=None,
+        trail_to_breakeven_pct=0.02,
+        overnight_widen_enabled=False,
+        overnight_widen_pct=0.05,
+        overnight_widen_abs=5.0,
+        overnight_widen_max_pct=0.2,
+        portfolio_day_timezone="UTC",
+    )
+
+    await monitor.monitor(
+        price_lookup={"ETH/USD": 1990.0},
+        open_orders=[],
+        config=config,
+        now=opened + timedelta(days=1),
+        portfolio_id=1,
+    )
+
+    assert db.updated_prices == []
+
+
+def test_rearm_after_restart_applies_widen_policy():
+    opened = datetime(2024, 3, 1, 21, tzinfo=timezone.utc)
+    plan = {
+        "id": 40,
+        "symbol": "SOL/USD",
+        "side": "BUY",
+        "entry_price": 100.0,
+        "stop_price": 92.0,
+        "target_price": 120.0,
+        "size": 1.0,
+        "opened_at": opened.isoformat(),
+        "version": 1,
+    }
+    db = StubDB(plans=[plan])
+    monitor, _ = _monitor_with(db, risk_manager=StubRiskManager({"SOL/USD": {"quantity": 1.0}}))
+    monitor.portfolio_id = 5
+    config = PlanMonitorConfig(
+        max_plan_age_minutes=None,
+        day_end_flatten_hour_utc=None,
+        trail_to_breakeven_pct=0.02,
+        overnight_widen_enabled=True,
+        overnight_widen_pct=0.01,
+        overnight_widen_abs=0.5,
+        overnight_widen_max_pct=0.1,
+        auto_rearm_on_restart=True,
+        portfolio_day_timezone="UTC",
+    )
+
+    updated = monitor.rearm_after_restart([plan], config=config, now=opened + timedelta(days=1))
+
+    assert len(db.updated_prices) == 1
+    widened = db.updated_prices[0]
+    assert widened["stop_price"] < plan["stop_price"]
+    assert updated[0]["stop_price"] == widened["stop_price"]
 
 
 @pytest.mark.asyncio

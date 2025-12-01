@@ -38,6 +38,11 @@ from trader_bot.config import (
     LLM_PROVIDER,
     PLAN_MAX_AGE_MINUTES,
     PLAN_MAX_PER_SYMBOL,
+    PLAN_OVERNIGHT_MAX_WIDEN_PCT,
+    PLAN_OVERNIGHT_WIDEN_ABS,
+    PLAN_OVERNIGHT_WIDEN_ENABLED,
+    PLAN_OVERNIGHT_WIDEN_PCT,
+    PLAN_AUTO_REARM_ON_RESTART,
     PLAN_TRAIL_TO_BREAKEVEN_PCT,
     PRIORITY_LOOKBACK_MIN,
     PRIORITY_MOVE_PCT,
@@ -45,6 +50,7 @@ from trader_bot.config import (
     IB_BASE_CURRENCY,
     BOT_VERSION,
     PORTFOLIO_BASE_CURRENCY,
+    PORTFOLIO_DAY_TIMEZONE,
     PORTFOLIO_NAME,
     TRADE_SYNC_CUTOFF_MINUTES,
     TRADING_MODE,
@@ -226,6 +232,11 @@ class StrategyRunner:
         self.max_plans_per_symbol = PLAN_MAX_PER_SYMBOL
         self.telemetry_logger = telemetry_logger
         self._apply_plan_trailing_pct = PLAN_TRAIL_TO_BREAKEVEN_PCT  # move stop to entry after move in favor
+        self.plan_overnight_widen_enabled = PLAN_OVERNIGHT_WIDEN_ENABLED
+        self.plan_overnight_widen_pct = PLAN_OVERNIGHT_WIDEN_PCT
+        self.plan_overnight_widen_abs = PLAN_OVERNIGHT_WIDEN_ABS
+        self.plan_overnight_max_widen_pct = PLAN_OVERNIGHT_MAX_WIDEN_PCT
+        self.plan_auto_rearm_on_restart = PLAN_AUTO_REARM_ON_RESTART
         self.shutdown_reason: str | None = None  # track why we stop
         self.ohlcv_min_capture_spacing_seconds = OHLCV_MIN_CAPTURE_SPACING_SECONDS
         self.ohlcv_retention_limit = OHLCV_MAX_ROWS_PER_TIMEFRAME
@@ -277,6 +288,20 @@ class StrategyRunner:
             portfolio_stats_applier=self._apply_fill_to_portfolio_stats,
             max_total_exposure=MAX_TOTAL_EXPOSURE,
             portfolio_id=self.portfolio_id,
+        )
+
+    def _plan_monitor_config(self) -> PlanMonitorConfig:
+        """Build plan monitor config from runner settings."""
+        return PlanMonitorConfig(
+            max_plan_age_minutes=self.max_plan_age_minutes,
+            day_end_flatten_hour_utc=self.day_end_flatten_hour_utc,
+            trail_to_breakeven_pct=self._apply_plan_trailing_pct,
+            overnight_widen_enabled=self.plan_overnight_widen_enabled,
+            overnight_widen_pct=self.plan_overnight_widen_pct,
+            overnight_widen_abs=self.plan_overnight_widen_abs,
+            overnight_widen_max_pct=self.plan_overnight_max_widen_pct,
+            auto_rearm_on_restart=self.plan_auto_rearm_on_restart,
+            portfolio_day_timezone=PORTFOLIO_DAY_TIMEZONE,
         )
 
     def _refresh_resync_bindings(self):
@@ -754,11 +779,7 @@ class StrategyRunner:
 
     async def _monitor_trade_plans(self, price_lookup: dict, open_orders: list):
         """Delegate to the standalone PlanMonitor service."""
-        config = PlanMonitorConfig(
-            max_plan_age_minutes=self.max_plan_age_minutes,
-            day_end_flatten_hour_utc=self.day_end_flatten_hour_utc,
-            trail_to_breakeven_pct=self._apply_plan_trailing_pct,
-        )
+        config = self._plan_monitor_config()
         refresh_bindings = lambda: self.plan_monitor.refresh_bindings(  # noqa: E731
             bot=self.bot,
             db=self.db,
@@ -832,6 +853,17 @@ class StrategyRunner:
         self.context = TradingContext(self.db, self.portfolio_id, run_id=self.run_id)
         # Load persisted snapshots for restart resilience before hitting the exchange
         bootstrap_state = self.resync_service.bootstrap_snapshots()
+        try:
+            open_plans = (bootstrap_state or {}).get("open_plans") if bootstrap_state is not None else []
+            if open_plans:
+                refreshed_plans = self.plan_monitor.rearm_after_restart(
+                    open_plans=open_plans,
+                    config=self._plan_monitor_config(),
+                    now=datetime.now(timezone.utc),
+                )
+                bootstrap_state["open_plans"] = refreshed_plans
+        except Exception as exc:
+            logger.debug(f"Could not auto-rearm plan monitors on restart: {exc}")
         if bootstrap_state["positions"] or bootstrap_state["open_orders"]:
             logger.info(
                 f"Restored {len(bootstrap_state['positions'])} positions and "

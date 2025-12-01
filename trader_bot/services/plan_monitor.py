@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Iterable
+from zoneinfo import ZoneInfo
 
 from trader_bot.config import MAX_TOTAL_EXPOSURE
 
@@ -14,6 +15,12 @@ class PlanMonitorConfig:
     max_plan_age_minutes: int | None
     day_end_flatten_hour_utc: int | None
     trail_to_breakeven_pct: float
+    overnight_widen_enabled: bool = False
+    overnight_widen_pct: float = 0.0
+    overnight_widen_abs: float = 0.0
+    overnight_widen_max_pct: float | None = None
+    auto_rearm_on_restart: bool = True
+    portfolio_day_timezone: str | None = None
 
 
 class PlanMonitor:
@@ -46,6 +53,167 @@ class PlanMonitor:
         if not self.portfolio_id:
             raise ValueError("portfolio_id is required for plan monitoring")
         return self.portfolio_id
+
+    @staticmethod
+    def _resolve_timezone(timezone_name: str | None) -> timezone:
+        """Resolve timezone for overnight widen guards."""
+        if not timezone_name:
+            return timezone.utc
+        aliases = {
+            "AEST": "Australia/Sydney",
+            "AEDT": "Australia/Sydney",
+            "UTC": "UTC",
+        }
+        normalized = aliases.get(timezone_name.upper(), timezone_name)
+        try:
+            return ZoneInfo(normalized)
+        except Exception:
+            logger.debug(f"Unknown timezone '{timezone_name}' for plan monitor; defaulting to UTC")
+            return timezone.utc
+
+    def _apply_overnight_widening(
+        self,
+        plans: list[dict],
+        config: PlanMonitorConfig,
+        now: datetime,
+    ) -> list[dict]:
+        """Optionally widen stops/targets when crossing a portfolio day boundary."""
+        if not config.overnight_widen_enabled:
+            return list(plans or [])
+
+        tzinfo = self._resolve_timezone(config.portfolio_day_timezone)
+        current_day = now.astimezone(tzinfo).date()
+        widened: list[dict] = []
+
+        for plan in plans or []:
+            updated_plan = dict(plan)
+            plan_id = plan.get("id")
+            opened_at = plan.get("opened_at")
+            try:
+                opened_dt = datetime.fromisoformat(opened_at) if opened_at else None
+            except Exception:
+                opened_dt = None
+
+            if not plan_id or not opened_dt:
+                widened.append(updated_plan)
+                continue
+
+            opened_day = opened_dt.astimezone(tzinfo).date()
+            if opened_day >= current_day:
+                widened.append(updated_plan)
+                continue
+
+            last_widened_at = plan.get("overnight_widened_at")
+            try:
+                last_widened_day = (
+                    datetime.fromisoformat(last_widened_at).astimezone(tzinfo).date() if last_widened_at else None
+                )
+            except Exception:
+                last_widened_day = None
+
+            if last_widened_day == current_day:
+                widened.append(updated_plan)
+                continue
+
+            entry = plan.get("entry_price") or 0.0
+            stop = plan.get("stop_price")
+            target = plan.get("target_price")
+            widen_delta = max(config.overnight_widen_abs or 0.0, entry * (config.overnight_widen_pct or 0.0))
+            if widen_delta <= 0 or (stop is None and target is None):
+                widened.append(updated_plan)
+                continue
+
+            cap_pct = config.overnight_widen_max_pct
+            max_above = entry * (1 + cap_pct) if cap_pct and entry else None
+            max_below = entry * (1 - cap_pct) if cap_pct and entry else None
+            side = (plan.get("side") or "").upper()
+            updated_stop = stop
+            updated_target = target
+
+            if side == "SELL":
+                if stop is not None:
+                    candidate = stop + widen_delta
+                    if max_above is not None:
+                        candidate = min(candidate, max_above)
+                    updated_stop = candidate
+                if target is not None:
+                    candidate = target - widen_delta
+                    if max_below is not None:
+                        candidate = max(candidate, max_below)
+                    updated_target = candidate
+            else:  # BUY plan
+                if stop is not None:
+                    candidate = stop - widen_delta
+                    if max_below is not None:
+                        candidate = max(candidate, max_below)
+                    updated_stop = candidate
+                if target is not None:
+                    candidate = target + widen_delta
+                    if max_above is not None:
+                        candidate = min(candidate, max_above)
+                    updated_target = candidate
+
+            if updated_stop == stop and updated_target == target:
+                widened.append(updated_plan)
+                continue
+
+            widened_at_iso = now.isoformat()
+            new_version = (plan.get("version") or 1) + 1
+            try:
+                self.db.update_trade_plan_prices(
+                    plan_id,
+                    stop_price=updated_stop,
+                    target_price=updated_target,
+                    reason="Overnight widen applied",
+                    widened_at=widened_at_iso,
+                    widen_stop_price=updated_stop,
+                    widen_target_price=updated_target,
+                    widen_version=new_version,
+                )
+                bot_actions_logger.info(
+                    f"🌙 Widened plan {plan_id} stops/targets for overnight risk (v{plan.get('version', 1)}→v{new_version})"
+                )
+            except Exception as exc:
+                logger.debug(f"Could not apply overnight widen for plan {plan_id}: {exc}")
+                widened.append(updated_plan)
+                continue
+
+            updated_plan.update(
+                {
+                    "stop_price": updated_stop,
+                    "target_price": updated_target,
+                    "version": new_version,
+                    "overnight_widened_at": widened_at_iso,
+                    "overnight_widen_version": new_version,
+                    "last_widened_stop_price": updated_stop,
+                    "last_widened_target_price": updated_target,
+                }
+            )
+            widened.append(updated_plan)
+
+        return widened
+
+    def rearm_after_restart(
+        self,
+        open_plans: Iterable[dict],
+        config: PlanMonitorConfig,
+        *,
+        now: datetime | None = None,
+    ) -> list[dict]:
+        """Apply overnight policy to persisted plans when restarting."""
+        portfolio_id = self._require_portfolio()
+        if not config.auto_rearm_on_restart:
+            return list(open_plans or [])
+        now = now or datetime.now(timezone.utc)
+        updated = self._apply_overnight_widening(list(open_plans or []), config, now)
+        if updated != list(open_plans or []):
+            try:
+                bot_actions_logger.info(
+                    f"🔁 Auto-rearmed {len(updated)} plans for portfolio {portfolio_id} after restart"
+                )
+            except Exception:
+                pass
+        return updated
 
     def refresh_bindings(
         self,
@@ -97,6 +265,7 @@ class PlanMonitor:
         try:
             open_plans = self.db.get_open_trade_plans_for_portfolio(portfolio_id)
             now = now or datetime.now(timezone.utc)
+            open_plans = self._apply_overnight_widening(open_plans, config, now)
             now_iso = now.isoformat()
             day_end_cutoff = None
             if config.day_end_flatten_hour_utc is not None:

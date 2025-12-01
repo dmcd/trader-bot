@@ -133,6 +133,11 @@ AUTO_REPLACE_PLAN_ON_CAP = os.getenv('AUTO_REPLACE_PLAN_ON_CAP', 'false').lower(
 PLAN_MAX_PER_SYMBOL = int(os.getenv('PLAN_MAX_PER_SYMBOL', '2'))
 PLAN_MAX_AGE_MINUTES = int(os.getenv('PLAN_MAX_AGE_MINUTES', '60'))
 PLAN_TRAIL_TO_BREAKEVEN_PCT = float(os.getenv('PLAN_TRAIL_TO_BREAKEVEN_PCT', '0.01'))  # e.g., 0.01 = 1%
+PLAN_OVERNIGHT_WIDEN_ENABLED = os.getenv('PLAN_OVERNIGHT_WIDEN_ENABLED', 'true').lower() == 'true'
+PLAN_OVERNIGHT_WIDEN_PCT = float(os.getenv('PLAN_OVERNIGHT_WIDEN_PCT', '0.01'))  # widen stops/targets by this % of entry
+PLAN_OVERNIGHT_WIDEN_ABS = float(os.getenv('PLAN_OVERNIGHT_WIDEN_ABS', '0.0'))  # absolute widen add-on
+PLAN_OVERNIGHT_MAX_WIDEN_PCT = float(os.getenv('PLAN_OVERNIGHT_MAX_WIDEN_PCT', '0.05'))  # cap total widen distance from entry
+PLAN_AUTO_REARM_ON_RESTART = os.getenv('PLAN_AUTO_REARM_ON_RESTART', 'true').lower() == 'true'
 LLM_DECISION_BYTE_BUDGET = int(os.getenv('LLM_DECISION_BYTE_BUDGET', '16000'))  # clamp decision prompts to this many bytes
 
 # Bot versioning

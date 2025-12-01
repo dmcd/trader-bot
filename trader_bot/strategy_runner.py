@@ -130,6 +130,7 @@ class StrategyRunner:
             fx_rate_provider=fx_rate_provider,
         )
         self.running = False
+        self._stop_event = asyncio.Event()
         self.execute_orders = execute_orders
         
         # Professional trading infrastructure
@@ -883,10 +884,15 @@ class StrategyRunner:
         
         # Get initial equity (full account value)
         initial_equity = await self.bot.get_equity_async()
-        while initial_equity is None:
+        while initial_equity is None and not self._stop_event.is_set():
             logger.warning("Could not fetch initial equity; retrying in 5s...")
-            await asyncio.sleep(5)
+            await self._sleep_with_stop(5)
+            if self._stop_event.is_set():
+                return
             initial_equity = await self.bot.get_equity_async()
+
+        if initial_equity is None:
+            return
             
         logger.info(f"{self.exchange_name} Equity: {initial_equity}")
         
@@ -1049,6 +1055,33 @@ class StrategyRunner:
         if not self.shutdown_reason:
             self.shutdown_reason = reason
 
+    def _request_stop(self, reason: str | None = None):
+        """Mark the runner for shutdown and wake any waiting sleeps."""
+        if reason:
+            self._set_shutdown_reason(reason)
+        self.running = False
+        try:
+            self.orchestrator.request_stop(self.shutdown_reason)
+        except Exception:
+            pass
+        try:
+            self._stop_event.set()
+        except Exception:
+            pass
+
+    async def _sleep_with_stop(self, seconds: float) -> bool:
+        """
+        Sleep up to `seconds`, but return early if a stop was requested.
+        Returns True if the full interval elapsed, False if interrupted.
+        """
+        if self._stop_event.is_set():
+            return False
+        try:
+            await asyncio.wait_for(self._stop_event.wait(), timeout=seconds)
+            return False
+        except asyncio.TimeoutError:
+            return True
+
     async def _close_all_positions_safely(self):
         """Attempt to flatten all positions using market-ish orders."""
         try:
@@ -1178,8 +1211,11 @@ class StrategyRunner:
     async def run_loop(self, max_loops: int | None = None):
         """Main autonomous loop."""
         try:
+            self._stop_event.clear()
             self._refresh_orchestrator_bindings()
             await self.orchestrator.start(self.initialize)
+            if self._stop_event.is_set():
+                return
             self.running = True
             loops = 0
 
@@ -1187,16 +1223,17 @@ class StrategyRunner:
                 """Sleep for the configured interval and bump loop counter."""
                 nonlocal loops
                 logger.info(f"Sleeping for {LOOP_INTERVAL_SECONDS} seconds...")
-                await asyncio.sleep(LOOP_INTERVAL_SECONDS)
-                loops += 1
+                full_interval = await self._sleep_with_stop(LOOP_INTERVAL_SECONDS)
+                if full_interval:
+                    loops += 1
+                return full_interval
             
             while self.running and self.orchestrator.running:
                 if self._kill_switch:
                     if not self.shutdown_reason:
                         self._set_shutdown_reason("kill switch")
                     bot_actions_logger.info("🛑 Kill switch active; exiting main loop.")
-                    self.orchestrator.request_stop(self.shutdown_reason)
-                    self.running = False
+                    self._request_stop(self.shutdown_reason)
                     break
                 try:
                     if max_loops is not None and loops >= max_loops:
@@ -1208,10 +1245,9 @@ class StrategyRunner:
                         stop_cb=self._set_shutdown_reason,
                     )
                     if command_result.stop_requested:
-                        self.orchestrator.request_stop(command_result.shutdown_reason)
-                        self.running = False
                         if command_result.shutdown_reason and not self.shutdown_reason:
                             self.shutdown_reason = command_result.shutdown_reason
+                        self._request_stop(self.shutdown_reason)
                         break
                     
                     # 1. Update Equity / PnL
@@ -1221,14 +1257,18 @@ class StrategyRunner:
                         logger.warning(f"Could not fetch equity: {e}; skipping loop iteration.")
                         self.health_manager.record_exchange_failure("get_equity_async", e)
                         exchange_error_seen = True
-                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        full_interval = await self._sleep_with_stop(LOOP_INTERVAL_SECONDS)
+                        if not full_interval and not self.running:
+                            break
                         continue
                     
                     if current_equity is None:
                         logger.warning("Could not fetch equity; skipping loop iteration to avoid false loss triggers.")
                         self.health_manager.record_exchange_failure("get_equity_async", "none")
                         exchange_error_seen = True
-                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        full_interval = await self._sleep_with_stop(LOOP_INTERVAL_SECONDS)
+                        if not full_interval and not self.running:
+                            break
                         continue
 
                     if self.portfolio_id is not None:
@@ -1247,8 +1287,7 @@ class StrategyRunner:
                         self._kill_switch = risk_result.kill_switch
                         if risk_result.shutdown_reason and not self.shutdown_reason:
                             self.shutdown_reason = risk_result.shutdown_reason
-                        self.orchestrator.request_stop(self.shutdown_reason)
-                        self.running = False
+                        self._request_stop(self.shutdown_reason)
                         break
 
                     # 2. Fetch Market Data
@@ -1256,7 +1295,9 @@ class StrategyRunner:
                     if self.health_manager.should_pause(now_monotonic):
                         remaining = self.health_manager.pause_remaining(now_monotonic)
                         bot_actions_logger.info(f"⏸️ Trading paused for {remaining:.0f}s")
-                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        full_interval = await self._sleep_with_stop(LOOP_INTERVAL_SECONDS)
+                        if not full_interval and not self.running:
+                            break
                         continue
 
                     symbols = self._get_active_symbols()
@@ -1302,14 +1343,18 @@ class StrategyRunner:
                         except Exception as e:
                             logger.debug(f"Could not prune market data: {e}")
                     if not market_data:
-                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        full_interval = await self._sleep_with_stop(LOOP_INTERVAL_SECONDS)
+                        if not full_interval and not self.running:
+                            break
                         continue
 
                     fresh_market, stale_market = self.orchestrator.evaluate_market_health(market_data)
                     if not fresh_market:
                         stale_list = ", ".join(sorted(stale_market.keys())) or "all symbols"
                         bot_actions_logger.info(f"⏸️ Skipping loop: market data stale or missing for {stale_list}")
-                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        full_interval = await self._sleep_with_stop(LOOP_INTERVAL_SECONDS)
+                        if not full_interval and not self.running:
+                            break
                         continue
                     symbols = [sym for sym in symbols if sym in fresh_market]
                     market_data = {sym: market_data[sym] for sym in symbols if sym in fresh_market}
@@ -1325,7 +1370,9 @@ class StrategyRunner:
                     if illiquid_symbols:
                         bot_actions_logger.info(f"💧 Skipping illiquid symbols: {', '.join(sorted(illiquid_symbols))}")
                     if not liquid_symbols:
-                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        full_interval = await self._sleep_with_stop(LOOP_INTERVAL_SECONDS)
+                        if not full_interval and not self.running:
+                            break
                         continue
                     symbols = liquid_symbols
                     market_data = {sym: market_data[sym] for sym in symbols}
@@ -1334,7 +1381,9 @@ class StrategyRunner:
                     if closed_markets:
                         bot_actions_logger.info(f"⏸️ Skipping closed session symbols: {', '.join(sorted(closed_markets))}")
                     if not symbols:
-                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        full_interval = await self._sleep_with_stop(LOOP_INTERVAL_SECONDS)
+                        if not full_interval and not self.running:
+                            break
                         continue
                     market_data = {sym: market_data[sym] for sym in symbols}
 
@@ -1434,8 +1483,7 @@ class StrategyRunner:
                         if not self.shutdown_reason:
                             self._set_shutdown_reason("kill switch")
                         bot_actions_logger.info("🛑 Kill switch active; exiting main loop.")
-                        self.orchestrator.request_stop(self.shutdown_reason)
-                        self.running = False
+                        self._request_stop(self.shutdown_reason)
                         break
 
                     # 2.5 Sync Trades from Exchange (for logging only)
@@ -1808,17 +1856,19 @@ class StrategyRunner:
                     if not exchange_error_seen:
                         self.health_manager.reset_exchange_errors()
                     # 5. Sleep
-                    await sleep_loop()
+                    slept_full = await sleep_loop()
+                    if not slept_full and not self.running:
+                        break
 
                 except KeyboardInterrupt:
                     logger.info("Stopping loop...")
-                    self._set_shutdown_reason("KeyboardInterrupt")
-                    self.orchestrator.request_stop(self.shutdown_reason)
-                    self.running = False
+                    self._request_stop("KeyboardInterrupt")
                     break
                 except Exception as e:
                     logger.exception(f"Loop Error: {e}")
-                    await asyncio.sleep(5)
+                    full_interval = await self._sleep_with_stop(5)
+                    if not full_interval and not self.running:
+                        break
         finally:
             # Always cleanup, even if there's an exception or break
             await self.orchestrator.cleanup(self.cleanup)
@@ -1833,8 +1883,7 @@ async def main():
         """Handle Ctrl+C gracefully"""
         logger.info("Received shutdown signal, stopping bot...")
         bot_actions_logger.info("🛑 Bot shutting down...")
-        runner._set_shutdown_reason(f"signal {sig.name if hasattr(sig, 'name') else sig}")
-        runner.running = False
+        runner._request_stop(f"signal {sig.name if hasattr(sig, 'name') else sig}")
     
     # Register signal handlers
     signal.signal(signal.SIGINT, signal_handler)

@@ -229,22 +229,22 @@ def get_timezone_label(tzinfo):
     return "Local"
 
 
-def load_history(session_id, user_timezone):
-    """Load trade history from the SQLite database for a session."""
-    if not session_id:
+def load_history(portfolio_id, user_timezone):
+    """Load trade history from the SQLite database for a portfolio."""
+    if not portfolio_id:
         return pd.DataFrame()
     try:
         user_timezone = user_timezone or ZoneInfo("UTC")
         db = TradingDatabase()
-        cursor = db.conn.cursor()
-        cursor.execute(
-            "SELECT timestamp, symbol, action, price, quantity, fee, liquidity, realized_pnl, reason FROM trades WHERE session_id = ?",
-            (session_id,)
-        )
-        rows = cursor.fetchall()
+        trades = db.get_trades_for_portfolio(portfolio_id)
         db.close()
-        if rows:
-            df = pd.DataFrame(rows, columns=["timestamp", "symbol", "action", "price", "quantity", "fee", "liquidity", "realized_pnl", "reason"])
+        if trades:
+            df = pd.DataFrame(trades)
+            keep_cols = ["timestamp", "symbol", "action", "price", "quantity", "fee", "liquidity", "realized_pnl", "reason"]
+            for col in keep_cols:
+                if col not in df.columns:
+                    df[col] = None
+            df = df[keep_cols]
             df["trade_value"] = df["price"] * df["quantity"]
             df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, format="ISO8601").dt.tz_convert(user_timezone)
             return df
@@ -253,20 +253,17 @@ def load_history(session_id, user_timezone):
         st.error(f"Error loading trade history from DB: {e}")
         return pd.DataFrame()
 
-def get_latest_prices(session_id, symbols):
-    """Fetch the latest market price for each symbol in the session."""
+def get_latest_prices(portfolio_id, symbols):
+    """Fetch the latest market price for each symbol in the portfolio."""
     prices = {}
+    if not portfolio_id:
+        return prices
     try:
         db = TradingDatabase()
-        cursor = db.conn.cursor()
         for symbol in symbols:
-            cursor.execute(
-                "SELECT price FROM market_data WHERE session_id = ? AND symbol = ? ORDER BY timestamp DESC LIMIT 1",
-                (session_id, symbol)
-            )
-            row = cursor.fetchone()
-            if row:
-                prices[symbol] = row['price']
+            rows = db.get_recent_market_data_for_portfolio(portfolio_id, symbol, limit=1)
+            if rows:
+                prices[symbol] = rows[0].get("price")
         db.close()
     except Exception as e:
         st.error(f"Error fetching prices: {e}")
@@ -354,37 +351,47 @@ def load_logs():
             return lines[::-1]
     return []
 
-def load_session_stats(session_id):
-    if not session_id:
+def load_portfolio_stats(portfolio_id):
+    if not portfolio_id:
         return None, None
     try:
         db = TradingDatabase()
-        stats = db.get_session_stats(session_id)
+        stats = db.get_portfolio_stats(portfolio_id)
+        portfolio = db.get_portfolio(portfolio_id) or {}
+        run_meta = db.get_latest_run_metadata_for_portfolio(portfolio_id)
         db.close()
-        return stats, session_id
+        stats["portfolio_id"] = portfolio_id
+        stats.setdefault("bot_version", portfolio.get("bot_version"))
+        stats.setdefault("base_currency", portfolio.get("base_currency"))
+        stats["portfolio_name"] = portfolio.get("name")
+        stats.setdefault("created_at", portfolio.get("created_at"))
+        if run_meta:
+            stats["run_id"] = run_meta.get("run_id")
+            stats["run_updated_at"] = run_meta.get("last_seen")
+        return stats, portfolio_id
     except Exception as e:
-        st.error(f"Error loading session stats: {e}")
+        st.error(f"Error loading portfolio stats: {e}")
         return None, None
 
-def load_llm_stats(session_id):
+def load_llm_stats(portfolio_id):
     db = TradingDatabase()
     try:
-        return db.get_recent_llm_stats(session_id)
+        return db.get_recent_llm_stats_for_portfolio(portfolio_id)
     finally:
         db.close()
 
-def load_open_orders(session_id):
+def load_open_orders(portfolio_id):
     db = TradingDatabase()
     try:
-        orders = db.get_open_orders(session_id)
+        orders = db.get_open_orders_for_portfolio(portfolio_id)
         return orders
     finally:
         db.close()
 
-def load_trade_plans(session_id):
+def load_trade_plans(portfolio_id):
     db = TradingDatabase()
     try:
-        plans = db.get_open_trade_plans(session_id)
+        plans = db.get_open_trade_plans_for_portfolio(portfolio_id)
         # Defensive filter in case stale rows sneak in
         return [p for p in plans if (p.get("status", "open") == "open")]
     finally:
@@ -442,18 +449,28 @@ st.markdown("""
 user_timezone = get_user_timezone()
 timezone_label = get_timezone_label(user_timezone)
 db_version_lookup = TradingDatabase()
-current_session_id = db_version_lookup.get_session_id_by_version(BOT_VERSION)
+available_portfolios = db_version_lookup.list_portfolios()
 available_versions = db_version_lookup.list_bot_versions()
+current_portfolio_id = db_version_lookup.get_portfolio_id_by_version(BOT_VERSION)
+if current_portfolio_id is None and available_portfolios:
+    current_portfolio_id = available_portfolios[0]["id"]
 db_version_lookup.close()
 health_states = load_health_state()
-session_stats, session_id = load_session_stats(current_session_id)
-current_trades_df = load_history(session_id, user_timezone)
+session_stats, portfolio_id = load_portfolio_stats(current_portfolio_id)
+current_trades_df = load_history(portfolio_id, user_timezone)
 venue_status = build_venue_status_payload(ACTIVE_EXCHANGE, session_stats, health_states=health_states)
 base_currency_label = venue_status.get("base_currency") or "USD"
 
 col_header, col_status = st.columns([3, 1])
 with col_header:
     st.title("🤖 Dennis-Day Trading Bot")
+    if session_stats:
+        if session_stats.get("portfolio_name"):
+            st.caption(f"Portfolio: {session_stats['portfolio_name']} (id {portfolio_id})")
+        if session_stats.get("run_id"):
+            last_seen = session_stats.get("run_updated_at")
+            suffix = f" · last seen {last_seen}" if last_seen else ""
+            st.caption(f"Run ID: {session_stats['run_id']}{suffix}")
 with col_status:
     st.markdown(f"<div style='padding-top: 20px;'>{format_venue_badge(venue_status.get('venue'), base_currency_label)}</div>", unsafe_allow_html=True)
 
@@ -519,9 +536,9 @@ with tab_live:
         
         if session_stats and not df.empty:
             symbols = df['symbol'].unique()
-            current_prices = get_latest_prices(session_id, symbols)
+            current_prices = get_latest_prices(portfolio_id, symbols)
             realized_pnl, unrealized_pnl, active_positions, df, exposure, trade_spacing = calculate_pnl(df, current_prices)
-            open_orders = load_open_orders(session_id)
+            open_orders = load_open_orders(portfolio_id)
             pending_exposure = 0.0
             if open_orders:
                 for o in open_orders:
@@ -646,9 +663,9 @@ with tab_live:
             st.info("No trade history for this version yet.")
 
     with col2:
-        if session_stats and session_id:
+        if session_stats and portfolio_id:
             st.subheader("📌 Open Orders")
-            open_orders = load_open_orders(session_id)
+            open_orders = load_open_orders(portfolio_id)
             if open_orders:
                 oo_df = pd.DataFrame(open_orders)
                 oo_df = oo_df.rename(columns={"amount": "quantity"})
@@ -667,7 +684,7 @@ with tab_live:
                 st.info("No open orders")
 
             st.subheader("🎯 Trade Plans")
-            plans = load_trade_plans(session_id)
+            plans = load_trade_plans(portfolio_id)
             if plans:
                 tp_df = pd.DataFrame(plans)
                 st.dataframe(
@@ -691,9 +708,9 @@ with tab_live:
         st.text_area("Log Output", log_text, height=900, disabled=True)
 
 with tab_costs:
-    st.subheader("💵 Costs This Session")
+    st.subheader("💵 Portfolio Costs")
     if not session_stats:
-        st.info("No session data available yet.")
+        st.info("No portfolio data available yet.")
     else:
         total_fees = session_stats.get('total_fees', 0.0) or 0.0
         total_llm_cost = session_stats.get('total_llm_cost', 0.0) or 0.0
@@ -778,33 +795,48 @@ with tab_health:
         st.info("No health data available yet.")
 
 with tab_history:
-    st.subheader("📚 Historical Versions")
-    if not available_versions:
-        st.info("No historical versions found yet.")
+    st.subheader("📚 Historical Portfolios")
+    if not available_portfolios:
+        st.info("No historical portfolios found yet.")
     else:
-        selected_version = st.selectbox("Select bot version", options=available_versions, index=0)
-        db_hist = TradingDatabase()
-        hist_session_id = db_hist.get_session_id_by_version(selected_version)
-        db_hist.close()
-        hist_df = load_history(hist_session_id, user_timezone)
-        if hist_df.empty:
-            st.info("No trades logged for this version.")
+        version_filter_options = ["All"] + available_versions
+        default_index = 1 if len(version_filter_options) > 1 else 0
+        selected_version = st.selectbox("Filter by bot version", options=version_filter_options, index=default_index)
+        filtered = [
+            p for p in available_portfolios
+            if selected_version == "All" or p.get("bot_version") == selected_version
+        ]
+        if not filtered:
+            st.info("No portfolios match this version filter.")
         else:
-            hist_df = hist_df.sort_values('timestamp', ascending=False)
-            st.dataframe(
-                hist_df[['timestamp', 'symbol', 'action', 'price', 'quantity', 'fee', 'realized_pnl', 'reason']],
-                hide_index=True,
-                column_config={
-                    "timestamp": st.column_config.DatetimeColumn(f"Date/Time ({timezone_label})", format="YYYY-MM-DD HH:mm:ss"),
-                    "price": st.column_config.NumberColumn("Price", format="$%.2f"),
-                    "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
-                    "realized_pnl": st.column_config.NumberColumn("Realized PnL", format="$%.2f"),
-                    "fee": st.column_config.NumberColumn("Fee", format="$%.4f"),
-                    "reason": st.column_config.TextColumn("Reason", width="large"),
-                },
-                width="stretch",
-                height=600
-            )
+            options = []
+            for p in filtered:
+                label = f"{p.get('name') or 'portfolio'} (v{p.get('bot_version') or 'n/a'})"
+                created_at = p.get("created_at")
+                if created_at:
+                    label += f" — {created_at}"
+                options.append((p.get("id"), label))
+            selected = st.selectbox("Select portfolio", options=options, index=0, format_func=lambda opt: opt[1] if isinstance(opt, tuple) else str(opt))
+            selected_portfolio_id = selected[0] if isinstance(selected, tuple) else selected
+            hist_df = load_history(selected_portfolio_id, user_timezone)
+            if hist_df.empty:
+                st.info("No trades logged for this portfolio.")
+            else:
+                hist_df = hist_df.sort_values('timestamp', ascending=False)
+                st.dataframe(
+                    hist_df[['timestamp', 'symbol', 'action', 'price', 'quantity', 'fee', 'realized_pnl', 'reason']],
+                    hide_index=True,
+                    column_config={
+                        "timestamp": st.column_config.DatetimeColumn(f"Date/Time ({timezone_label})", format="YYYY-MM-DD HH:mm:ss"),
+                        "price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                        "quantity": st.column_config.NumberColumn("Qty", format="%.4f"),
+                        "realized_pnl": st.column_config.NumberColumn("Realized PnL", format="$%.2f"),
+                        "fee": st.column_config.NumberColumn("Fee", format="$%.4f"),
+                        "reason": st.column_config.TextColumn("Reason", width="large"),
+                    },
+                    width="stretch",
+                    height=600
+                )
 
 # Auto-refresh by sleeping then rerunning the app
 time.sleep(DASHBOARD_REFRESH_SECONDS)

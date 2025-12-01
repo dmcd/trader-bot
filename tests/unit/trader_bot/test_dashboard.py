@@ -36,6 +36,21 @@ class DummyContext:
     def columns(self, labels):
         return [self for _ in labels]
 
+    def selectbox(self, _label=None, options=None, index=0, format_func=None):
+        options = options or []
+        if not options:
+            return None
+        try:
+            choice = options[index]
+        except Exception:
+            choice = options[0]
+        if format_func:
+            try:
+                format_func(choice)
+            except Exception:
+                pass
+        return choice
+
     def button(self, *args, **kwargs):
         return False
 
@@ -80,10 +95,13 @@ class FakeDB:
     def __init__(self):
         self.conn = None
 
-    def get_session_id_by_version(self, _version):
+    def get_portfolio_id_by_version(self, _version):
         return None
 
     def list_bot_versions(self):
+        return []
+
+    def list_portfolios(self, bot_version=None):
         return []
 
     def close(self):
@@ -92,8 +110,17 @@ class FakeDB:
     def get_health_state(self):
         return []
 
-    def get_session_stats(self, _session_id, portfolio_id=None):
+    def get_portfolio_stats(self, _portfolio_id):
         return {}
+
+    def get_portfolio(self, _portfolio_id):
+        return {}
+
+    def get_latest_run_metadata_for_portfolio(self, _portfolio_id):
+        return {}
+
+    def get_trades_for_portfolio(self, _portfolio_id):
+        return []
 
 
 @pytest.fixture(scope="module")
@@ -308,39 +335,35 @@ def test_load_history_and_prices_handle_empty_and_errors(monkeypatch, dashboard_
 def test_load_history_and_prices_success(monkeypatch, dashboard_module):
     dashboard = dashboard_module
 
-    class StubConn:
-        def __init__(self, rows, prices):
-            self._rows = rows
-            self._prices = prices
-            self.last_symbol = None
-
-        def cursor(self):
-            return self
-
-        def execute(self, _query, params):
-            if len(params) > 1:
-                self.last_symbol = params[1]
-
-        def fetchall(self):
-            return self._rows
-
-        def fetchone(self):
-            if self.last_symbol and self.last_symbol in self._prices:
-                return {"price": self._prices[self.last_symbol]}
-            return None
-
     class StubDB:
         def __init__(self):
-            self.conn = StubConn(
-                [
-                    ("2024-01-01T00:00:00+00:00", "BTC/USD", "BUY", 100.0, 1.0, 0.1, "maker", 5.0, "test"),
-                ],
-                {"BTC/USD": 105.0},
-            )
             self.closed = False
+            self._trades = [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "symbol": "BTC/USD",
+                    "action": "BUY",
+                    "price": 100.0,
+                    "quantity": 1.0,
+                    "fee": 0.1,
+                    "liquidity": "maker",
+                    "realized_pnl": 5.0,
+                    "reason": "test",
+                }
+            ]
+            self._prices = {"BTC/USD": 105.0}
 
         def close(self):
             self.closed = True
+
+        def get_trades_for_portfolio(self, _portfolio_id):
+            return self._trades
+
+        def get_recent_market_data_for_portfolio(self, _portfolio_id, symbol, limit=1):
+            price = self._prices.get(symbol)
+            if price is None:
+                return []
+            return [{"price": price}]
 
     monkeypatch.setattr(dashboard, "TradingDatabase", StubDB)
     df = dashboard.load_history(1, ZoneInfo("UTC"))

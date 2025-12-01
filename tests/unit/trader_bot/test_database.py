@@ -191,6 +191,17 @@ def test_run_id_columns_and_indexes(tmp_path):
     db.close()
 
 
+def test_latest_run_metadata_for_portfolio(db_session):
+    db, portfolio_id = db_session
+    db.log_llm_call_for_portfolio(portfolio_id, input_tokens=1, output_tokens=1, cost=0.1, decision="ok", run_id="run-1")
+    first = db.get_latest_run_metadata_for_portfolio(portfolio_id)
+    assert first["run_id"] == "run-1"
+    db.log_llm_call_for_portfolio(portfolio_id, input_tokens=1, output_tokens=1, cost=0.1, decision="ok", run_id="run-2")
+    latest = db.get_latest_run_metadata_for_portfolio(portfolio_id)
+    assert latest["run_id"] == "run-2"
+    assert latest["source"] == "llm_calls"
+
+
 def test_portfolio_stats_cache_roundtrip(tmp_path):
     db_path = tmp_path / "portfolio-stats.db"
     db = TradingDatabase(str(db_path))
@@ -666,6 +677,21 @@ def test_multiple_sessions_created_per_version(db_session):
     # Portfolio sessions should reuse the latest for the portfolio/version combo
     assert session_id_1 == session_id_2
     assert db.get_session_id_by_version("test-version") == session_id_2
+
+
+def test_portfolio_version_helpers(tmp_path):
+    db_path = tmp_path / "portfolios.db"
+    db = TradingDatabase(str(db_path))
+    first_id, _ = db.ensure_active_portfolio(name="swing-v1", bot_version="v1")
+    second_id, _ = db.ensure_active_portfolio(name="swing-v1-b", bot_version="v1")
+    other_id, _ = db.ensure_active_portfolio(name="swing-v2", bot_version="v2")
+
+    assert db.get_portfolio_id_by_version("v1") == second_id
+    portfolios_v1 = db.list_portfolios(bot_version="v1")
+    assert [p["id"] for p in portfolios_v1] == [second_id, first_id]
+    all_portfolios = db.list_portfolios()
+    assert {p["id"] for p in all_portfolios} == {first_id, second_id, other_id}
+    db.close()
 
 
 def test_session_creation_does_not_reuse_on_restart(tmp_path):

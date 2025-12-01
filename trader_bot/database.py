@@ -658,10 +658,48 @@ class TradingDatabase:
         row = cursor.fetchone()
         return row['id'] if row else None
 
+    def get_portfolio_id_by_version(self, bot_version: str) -> Optional[int]:
+        """Return the most recent portfolio id for a bot version."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT id FROM portfolios
+            WHERE bot_version = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (bot_version,),
+        )
+        row = cursor.fetchone()
+        return row["id"] if row else None
+
+    def list_portfolios(self, bot_version: str | None = None) -> List[Dict[str, Any]]:
+        """List portfolios with optional bot_version filter."""
+        cursor = self.conn.cursor()
+        query = "SELECT id, name, bot_version, base_currency, created_at FROM portfolios"
+        params: list[Any] = []
+        if bot_version:
+            query += " WHERE bot_version = ?"
+            params.append(bot_version)
+        query += " ORDER BY created_at DESC, id DESC"
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
     def list_bot_versions(self) -> List[str]:
         cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT DISTINCT bot_version
+            FROM portfolios
+            WHERE bot_version IS NOT NULL
+            ORDER BY created_at DESC, id DESC
+            """
+        )
+        versions = [row["bot_version"] for row in cursor.fetchall()]
+        if versions:
+            return versions
         cursor.execute("SELECT DISTINCT bot_version FROM sessions WHERE bot_version IS NOT NULL ORDER BY created_at DESC")
-        return [row['bot_version'] for row in cursor.fetchall()]
+        return [row["bot_version"] for row in cursor.fetchall()]
 
     def get_portfolio_stats_cache(self, portfolio_id: int) -> Optional[Dict[str, Any]]:
         """Return persisted portfolio stats aggregates if present."""
@@ -1128,6 +1166,38 @@ class TradingDatabase:
             if "clamped" in d.lower():
                 stats["clamped"] += 1
         return stats
+
+    def get_latest_run_metadata_for_portfolio(self, portfolio_id: int) -> Dict[str, Any]:
+        """Return latest run_id and timestamp for the portfolio (from LLM telemetry)."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT run_id, timestamp
+            FROM llm_calls
+            WHERE portfolio_id = ? AND run_id IS NOT NULL
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (portfolio_id,),
+        )
+        row = cursor.fetchone()
+        if row and row["run_id"]:
+            return {"run_id": row["run_id"], "last_seen": row["timestamp"], "source": "llm_calls"}
+
+        cursor.execute(
+            """
+            SELECT run_id, timestamp
+            FROM llm_traces
+            WHERE portfolio_id = ? AND run_id IS NOT NULL
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (portfolio_id,),
+        )
+        row = cursor.fetchone()
+        if row and row["run_id"]:
+            return {"run_id": row["run_id"], "last_seen": row["timestamp"], "source": "llm_traces"}
+        return {}
 
     def get_recent_llm_traces(self, session_id: int, limit: int = 5, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
         """Return recent LLM traces (decision + execution) for memory/context."""

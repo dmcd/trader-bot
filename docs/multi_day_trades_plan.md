@@ -7,15 +7,6 @@ Legacy session model (now removed):
 
 ## Work Plan
 
-- [ ] Session ➜ Portfolio cleanup
-  - [x] Rename `session_stats`/helpers to `portfolio_stats` across `StrategyRunner`, `PortfolioTracker`, `ResyncService`, `TradeActionHandler`, `TradingContext`, telemetry emitters, and tests; update log/telemetry strings to stop calling runs "sessions."
-  - [x] Update LLM context and dashboard consumers to emit/read a `portfolio` block (not `session`), drop `start_new_session` wiring, and ensure baseline math no longer assumes day resets.
-  - [x] Replace session-scoped config flags (`LLM_MAX_SESSION_COST`, `MARKET_DATA_RETENTION_MINUTES` comments, etc.) with portfolio-level names/env vars and update docs/consumers.
-  - [x] Update docs (architecture, README/ops/AGENTS) to describe the portfolio + run_id lifecycle and remove remaining session terminology.
-  - [x] Delete session-first DB APIs and shims (`get_or_create_session`, session_id params on CRUD/prune helpers, Deprecation warnings) in favor of portfolio/run-only methods; migrate all call sites and tests.
-  - [x] Design and apply a migration that removes `sessions` table dependencies and `session_id` columns/indexes (or formalizes them as optional `run_id` metadata), including `session_portfolios` view teardown/backfill strategy for legacy data.
-  - [ ] Add regression coverage for portfolio-only flows (stats rebuilds, trade sync, plan monitors, market data retention, LLM traces) with no session_id fallback.
-
 - [x] Accounting and risk
   - [x] Make `PortfolioTracker` portfolio-scoped: load/apply trades by portfolio_id; persist stats cache keyed by portfolio.
     - [x] Add unit coverage for portfolio-scoped rebuild/apply flows (stats cache read/write, restart restore).
@@ -43,6 +34,7 @@ Legacy session model (now removed):
   - [ ] Write a bootstrap/migration script that creates the new schema and seeds an initial portfolio (fresh DB path).
 
 - [ ] Testing and rollout
+  - [ ] Add regression coverage for portfolio-only flows (stats rebuilds, trade sync, plan monitors, market data retention, LLM traces) with no session_id fallback.
   - [ ] Expand unit tests for `PortfolioTracker`, `RiskManager`, `ResyncService`, and dashboard loaders to cover portfolio scoping and timezone config.
   - [ ] Add integration tests for a position opened on day 1 and held on day 2 (trade sync, stop/target persistence, overnight widening, risk/exposure checks).
   - [ ] Add tests for trade/order dedupe across runs/days using exchange ids.

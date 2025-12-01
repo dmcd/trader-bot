@@ -97,6 +97,6 @@ sequenceDiagram
 - `risk_manager.py`: Enforces order value, exposure caps, position count, and daily loss guardrails.
 - `gemini_trader.py`: ccxt adapter for Gemini with precision fixes, post-only handling, and order/trade sync.
 - `cost_tracker.py`: Estimates exchange fees and LLM token costs for net PnL.
-- `database.py`: SQLite schema/helpers for portfolios, trades, prompts/traces, OHLCV, equity, positions, open orders, commands, and trade plans (session-first APIs deprecated).
+- `database.py`: SQLite schema/helpers for portfolios, trades, prompts/traces, OHLCV, equity, positions, open orders, commands, and trade plans.
 - `dashboard.py`: Streamlit UI for performance, costs, health, history, logs, and control commands.
 - `config.py`: Central tunables for API keys, limits, cadence, and modes.

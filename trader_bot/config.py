@@ -125,7 +125,7 @@ OPENAI_INPUT_COST_PER_TOKEN = float(os.getenv('OPENAI_INPUT_COST_PER_TOKEN', '0.
 OPENAI_OUTPUT_COST_PER_TOKEN = float(os.getenv('OPENAI_OUTPUT_COST_PER_TOKEN', '0.000015'))  # $15.00 per 1M tokens
 
 # LLM cost/frequency guards
-LLM_MAX_PORTFOLIO_COST = float(os.getenv('LLM_MAX_PORTFOLIO_COST', os.getenv('LLM_MAX_SESSION_COST', '10.0')))  # USD cap per portfolio before auto HOLD (LLM_MAX_SESSION_COST kept as fallback)
+LLM_MAX_PORTFOLIO_COST = float(os.getenv('LLM_MAX_PORTFOLIO_COST', '10.0'))  # USD cap per portfolio before auto HOLD
 LLM_MIN_CALL_INTERVAL_SECONDS = int(os.getenv('LLM_MIN_CALL_INTERVAL_SECONDS', '5'))  # min spacing between planner/decision calls
 LLM_MAX_CONSECUTIVE_ERRORS = int(os.getenv('LLM_MAX_CONSECUTIVE_ERRORS', '3'))  # errors before forcing HOLD
 AUTO_REPLACE_PLAN_ON_CAP = os.getenv('AUTO_REPLACE_PLAN_ON_CAP', 'false').lower() == 'true'  # replace oldest plan when cap hit

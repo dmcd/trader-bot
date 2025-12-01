@@ -8,6 +8,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 from trader_bot.services.command_processor import CommandResult
 from trader_bot.services.strategy_orchestrator import RiskCheckResult
 from trader_bot.strategy_runner import StrategyRunner
+import trader_bot.strategy_runner as strategy_runner
 from tests.fakes import FakeBot
 
 pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("test_db_path")]
@@ -348,6 +349,8 @@ async def test_runner_handles_nonprimary_symbol_signal(monkeypatch):
     runner._capture_ohlcv = AsyncMock()
     runner._liquidity_ok = lambda _md: True
     captured_market = {}
+    mock_actions_logger = MagicMock()
+    monkeypatch.setattr(strategy_runner, "bot_actions_logger", mock_actions_logger)
 
     async def fake_generate(market_data, *_args, **__):
         captured_market.update(market_data)
@@ -369,6 +372,8 @@ async def test_runner_handles_nonprimary_symbol_signal(monkeypatch):
 
     assert set(captured_market.keys()) == {"AAA/USD", "BBB/USD"}
     assert runner._capture_ohlcv.await_count == 2
+    hold_logs = [c.args[0] for c in mock_actions_logger.info.call_args_list if "Decision: HOLD" in c.args[0]]
+    assert any("BBB/USD @ $20.0000" in msg for msg in hold_logs)
 
 
 @pytest.mark.asyncio

@@ -1419,6 +1419,13 @@ class StrategyRunner:
                         target_price = getattr(signal, 'target_price', None)
                         trace_id = getattr(signal, 'trace_id', None)
                         regime_flags = getattr(signal, 'regime_flags', {}) or {}
+                        md_for_symbol = market_data.get(symbol) if market_data else None
+                        latest_price = None
+                        if md_for_symbol and md_for_symbol.get('price') is not None:
+                            latest_price = md_for_symbol.get('price')
+                        elif price_lookup.get(symbol) is not None:
+                            latest_price = price_lookup.get(symbol)
+                        price_note = f" @ ${latest_price:,.4f}" if latest_price is not None else ""
                         telemetry_record = {
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                             "portfolio_id": self.portfolio_id,
@@ -1427,6 +1434,7 @@ class StrategyRunner:
                             "symbol": symbol,
                             "action": action,
                             "quantity": quantity,
+                            "price": latest_price,
                             "reason": reason,
                             "stop_price": stop_price,
                             "target_price": target_price,
@@ -1442,7 +1450,7 @@ class StrategyRunner:
                         
                         # Log decision to user-friendly log
                         if action == 'HOLD':
-                            bot_actions_logger.info(f"📊 Decision: HOLD - {reason}")
+                            bot_actions_logger.info(f"📊 Decision: HOLD {symbol}{price_note} - {reason}")
                             telemetry_record["status"] = "hold"
                             self._log_execution_trace(trace_id, {"status": "hold", "reason": reason})
                             self._emit_telemetry(telemetry_record)
@@ -1522,6 +1530,7 @@ class StrategyRunner:
                                 logger.warning("Skipped trade: missing price data")
                                 await sleep_loop()
                                 continue
+                            telemetry_record["price"] = price
 
                         # Volatility sizing adjustment
                         adjusted_quantity = self._apply_volatility_sizing(quantity, regime_flags)
@@ -1540,7 +1549,8 @@ class StrategyRunner:
                             qty_str = f"{quantity:.6f}".rstrip('0').rstrip('.')
                         else:
                             qty_str = f"{quantity:.4f}".rstrip('0').rstrip('.')
-                        bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol} - {reason}")
+                            price_note = f" @ ${price:,.4f}" if price is not None else price_note
+                            bot_actions_logger.info(f"📊 Decision: {action} {qty_str} {symbol}{price_note} - {reason}")
 
                         prefer_maker = self._prefer_maker(symbol)
                         telemetry_record["prefer_maker"] = prefer_maker

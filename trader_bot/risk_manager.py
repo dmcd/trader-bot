@@ -380,10 +380,10 @@ class RiskManager:
             return min(0.0, quantity - baseline_qty)
         return quantity
 
-    def get_total_exposure(self, price_overrides: dict = None) -> float:
-        """Return total notional exposure using marked prices."""
+    def _compute_exposure(self, price_overrides: dict | None = None) -> tuple[float, dict[str, float]]:
+        """Return (total_exposure, per_symbol_notional) using marked prices."""
         exposure = 0.0
-        per_symbol_notional = {}
+        per_symbol_notional: dict[str, float] = {}
         for sym, data in self.positions.items():
             qty = data.get('quantity', 0) or 0.0
             curr_price = 0.0
@@ -416,4 +416,18 @@ class RiskManager:
             if remainder > 0:
                 exposure += remainder
 
-        return max(0.0, exposure)
+        return max(0.0, exposure), per_symbol_notional
+
+    def get_total_exposure(self, price_overrides: dict = None) -> float:
+        """Return total notional exposure using marked prices."""
+        exposure, _ = self._compute_exposure(price_overrides)
+        return exposure
+
+    def compute_exposure(self, price_overrides: dict = None) -> tuple[float, dict[str, float]]:
+        """Public helper to return (total_exposure, per_symbol_notional)."""
+        return self._compute_exposure(price_overrides)
+
+    def get_exposure_breakdown(self, price_overrides: dict = None) -> dict[str, float]:
+        """Return per-symbol notional exposure using marked prices."""
+        _, per_symbol_notional = self._compute_exposure(price_overrides)
+        return per_symbol_notional

@@ -130,6 +130,35 @@ def test_get_total_exposure_respects_overrides(risk_manager):
     assert exposure == pytest.approx(100000.0)
 
 
+def test_compute_exposure_returns_breakdown(risk_manager):
+    risk_manager.update_positions(
+        {
+            "BTC/USD": {"quantity": 1.0, "current_price": 100.0},
+            "ETH/USD": {"quantity": 2.0, "current_price": 50.0},
+        }
+    )
+    risk_manager.pending_buy_exposure = 25.0
+
+    total, per_symbol = risk_manager.compute_exposure()
+
+    assert total == pytest.approx(225.0)
+    assert per_symbol == {"BTC/USD": 100.0, "ETH/USD": 100.0}
+
+
+def test_exposure_breakdown_respects_pending_sells(risk_manager):
+    risk_manager.update_positions({"BTC/USD": {"quantity": 1.0, "current_price": 100.0}})
+    risk_manager.update_pending_orders(
+        [{"symbol": "BTC/USD", "side": "sell", "price": 100.0, "amount": 1.0, "remaining": 1.0}]
+    )
+
+    total, per_symbol = risk_manager.compute_exposure()
+    breakdown = risk_manager.get_exposure_breakdown()
+
+    assert per_symbol == {"BTC/USD": 100.0}
+    assert breakdown == {"BTC/USD": 100.0}
+    assert total == pytest.approx(0.0)
+
+
 def test_pending_buy_orders_reduce_headroom(risk_manager):
     risk_manager.update_positions({"ETH/USD": {"quantity": 20.0, "current_price": 20.0}})
     pending = [

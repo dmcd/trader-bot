@@ -172,13 +172,17 @@ async def test_process_commands_passthrough_and_stop_request(fake_logger):
     command_processor.process.assert_awaited_once()
 
 
-def test_emit_health_and_operational_metrics(fake_logger):
+def test_evaluate_health_and_operational_metrics(fake_logger):
     health_manager = MagicMock()
-    health_manager.is_stale_market_data.return_value = (False, {"latency_ms": 10})
+    health_manager.is_stale_market_data.side_effect = [
+        (False, {"latency_ms": 10}),
+        (True, {"reason": "age"}),
+    ]
+    health_manager.record_health_state = MagicMock()
     metrics = []
 
-    def record_metrics(exposure, equity):
-        metrics.append((exposure, equity))
+    def record_metrics(exposure, equity, per_symbol):
+        metrics.append((exposure, equity, per_symbol))
 
     orchestrator = _build_orchestrator(
         record_cb=record_metrics,
@@ -186,9 +190,11 @@ def test_emit_health_and_operational_metrics(fake_logger):
         logger=fake_logger,
         actions_logger=fake_logger,
     )
-    ok, detail = orchestrator.emit_market_health({"price": 100})
-    orchestrator.emit_operational_metrics(5.0, 10.0)
+    fresh, stale = orchestrator.evaluate_market_health({"AAA": {"price": 100}, "BBB": {"price": 101}})
+    orchestrator.emit_operational_metrics(5.0, 10.0, {"AAA": 3.0})
 
-    assert ok is True
-    assert detail == {"latency_ms": 10}
-    assert metrics == [(5.0, 10.0)]
+    assert fresh == {"AAA": {"latency_ms": 10, "symbol": "AAA"}}
+    assert stale == {"BBB": {"reason": "age", "symbol": "BBB"}}
+    health_manager.record_health_state.assert_any_call("market_data", "ok", {"latency_ms": 10, "symbol": "AAA"})
+    health_manager.record_health_state.assert_any_call("market_data", "stale", {"reason": "age", "symbol": "BBB"})
+    assert metrics == [(5.0, 10.0, {"AAA": 3.0})]

@@ -428,7 +428,12 @@ class StrategyRunner:
         }
         self._emit_telemetry(record)
 
-    def _record_operational_metrics(self, current_exposure: float, current_equity: float):
+    def _record_operational_metrics(
+        self,
+        current_exposure: float,
+        current_equity: float,
+        per_symbol_exposure: dict | None = None,
+    ):
         """Emit health metrics for risk counters and LLM budget."""
         llm_cost = (self.portfolio_stats or {}).get("total_llm_cost", 0.0) or 0.0
         try:
@@ -444,6 +449,7 @@ class StrategyRunner:
                 "exposure": current_exposure,
                 "exposure_limit": MAX_TOTAL_EXPOSURE,
                 "exposure_headroom": max(0.0, MAX_TOTAL_EXPOSURE - current_exposure),
+                "per_symbol_exposure": per_symbol_exposure or {},
                 "fee_ratio": fee_ratio,
                 "gross_pnl": gross,
                 "total_fees": fees,
@@ -1208,8 +1214,6 @@ class StrategyRunner:
 
                     symbols = self._get_active_symbols()
                     market_data = {}
-                    primary_symbol = symbols[0]
-                    primary_fetch_failed = False
 
                     for sym in symbols:
                         ticker_started = self._monotonic()
@@ -1219,9 +1223,7 @@ class StrategyRunner:
                             logger.warning(f"Market data fetch failed for {sym}: {e}")
                             self.health_manager.record_exchange_failure("get_market_data_async", e)
                             exchange_error_seen = True
-                            if sym == primary_symbol:
-                                primary_fetch_failed = True
-                                break
+                            market_data[sym] = None
                             continue
                         ticker_ended = self._monotonic()
                         if md is not None:
@@ -1252,18 +1254,25 @@ class StrategyRunner:
                             self.db.prune_market_data_for_portfolio(self.portfolio_id, MARKET_DATA_RETENTION_MINUTES)
                         except Exception as e:
                             logger.debug(f"Could not prune market data: {e}")
+                    if not market_data:
+                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        continue
 
-                    if primary_fetch_failed or not market_data.get(primary_symbol):
+                    fresh_market, stale_market = self.orchestrator.evaluate_market_health(market_data)
+                    if not fresh_market:
+                        stale_list = ", ".join(sorted(stale_market.keys())) or "all symbols"
+                        bot_actions_logger.info(f"⏸️ Skipping loop: market data stale or missing for {stale_list}")
+                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
+                        continue
+                    symbols = [sym for sym in symbols if sym in fresh_market]
+                    market_data = {sym: market_data[sym] for sym in symbols if sym in fresh_market}
+
+                    primary_symbol = symbols[0] if symbols else None
+                    if not primary_symbol:
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
 
                     primary_data = market_data.get(primary_symbol)
-                    market_ok, freshness_detail = self.orchestrator.emit_market_health(primary_data)
-                    if not market_ok:
-                        self._record_health_state("market_data", "stale", freshness_detail)
-                        await asyncio.sleep(LOOP_INTERVAL_SECONDS)
-                        continue
-                    self._record_health_state("market_data", "ok", freshness_detail)
 
                     # Capture multi-timeframe OHLCV for richer context (primary symbol only)
                     try:
@@ -1345,8 +1354,12 @@ class StrategyRunner:
 
                         price_overrides = {sym: md.get('price') for sym, md in market_data.items() if md and md.get('price')}
                         price_overrides = price_overrides or None
-                        current_exposure = self.risk_manager.get_total_exposure(price_overrides=price_overrides)
-                        self.orchestrator.emit_operational_metrics(current_exposure, current_equity)
+                        current_exposure, per_symbol_exposure = self.risk_manager.compute_exposure(price_overrides=price_overrides)
+                        self.orchestrator.emit_operational_metrics(
+                            current_exposure,
+                            current_equity,
+                            per_symbol_exposure=per_symbol_exposure,
+                        )
                     except Exception as e:
                         logger.warning(f"Could not build positions for exposure: {e}")
 

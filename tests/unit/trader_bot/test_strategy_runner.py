@@ -1054,8 +1054,8 @@ class DummyOrchestrator:
     async def enforce_risk_budget(self, *_, **__):
         return self.risk_result
 
-    def emit_market_health(self, *_args, **__):
-        return True, {}
+    def evaluate_market_health(self, market_data):
+        return market_data or {}, {}
 
     def emit_operational_metrics(self, *_args, **__):
         return None

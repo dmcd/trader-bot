@@ -37,11 +37,15 @@ class DummyOrchestrator:
     async def enforce_risk_budget(self, *_args, **_kwargs):
         return self.risk_result
 
-    def emit_market_health(self, primary_data):
-        return True, {"age": primary_data.get("_latency_ms", 0) if primary_data else 0}
+    def evaluate_market_health(self, market_data):
+        fresh = {}
+        for sym, md in (market_data or {}).items():
+            detail = {"age": md.get("_latency_ms", 0) if md else 0, "symbol": sym}
+            fresh[sym] = detail
+        return fresh, {}
 
-    def emit_operational_metrics(self, current_exposure, current_equity):
-        self.metrics.append((current_exposure, current_equity))
+    def emit_operational_metrics(self, current_exposure, current_equity, per_symbol_exposure=None):
+        self.metrics.append((current_exposure, current_equity, per_symbol_exposure))
 
     async def monitor_trade_plans(self, *_args, **_kwargs):
         return None
@@ -115,6 +119,9 @@ class DummyRiskManager:
 
     def get_total_exposure(self, *_args, **_kwargs):
         return 0.0
+
+    def compute_exposure(self, *_args, **_kwargs):
+        return 0.0, {}
 
     def check_trade_allowed(self, *_args, **_kwargs):
         return SimpleNamespace(allowed=True, reason=None)
@@ -225,13 +232,18 @@ async def test_market_health_gating_records_stale(monkeypatch):
     runner.risk_manager = DummyRiskManager()
     runner.portfolio_id = 1
     runner._record_health_state = MagicMock()
+    runner.health_manager.record_health_state = runner._record_health_state
     runner._capture_ohlcv = AsyncMock()
     runner._get_active_symbols = lambda: ["BTC/USD"]
     runner.health_manager.should_pause = MagicMock(return_value=False)
     runner.health_manager.pause_remaining = MagicMock(return_value=0)
     runner.health_manager.record_exchange_failure = MagicMock()
     runner.orchestrator = DummyOrchestrator()
-    runner.orchestrator.emit_market_health = MagicMock(return_value=(False, {"age": 999}))
+    runner.orchestrator.evaluate_market_health = MagicMock(
+        side_effect=lambda _md: (
+            runner._record_health_state("market_data", "stale", {"age": 999, "symbol": "BTC/USD"}) or ({}, {"BTC/USD": {"age": 999, "symbol": "BTC/USD"}})
+        )
+    )
     runner.cleanup = AsyncMock()
 
     async def fast_sleep(_seconds):
@@ -242,7 +254,7 @@ async def test_market_health_gating_records_stale(monkeypatch):
 
     await runner.run_loop(max_loops=1)
 
-    runner._record_health_state.assert_any_call("market_data", "stale", {"age": 999})
+    runner._record_health_state.assert_any_call("market_data", "stale", {"age": 999, "symbol": "BTC/USD"})
 
 
 @pytest.mark.asyncio
@@ -258,7 +270,7 @@ async def test_cancel_action_refreshes_open_orders(monkeypatch):
     runner.health_manager.should_pause = MagicMock(return_value=False)
     runner.health_manager.pause_remaining = MagicMock(return_value=0)
     runner.orchestrator = DummyOrchestrator()
-    runner.orchestrator.emit_market_health = MagicMock(return_value=(True, {}))
+    runner.orchestrator.evaluate_market_health = MagicMock(return_value=({"BTC/USD": {"symbol": "BTC/USD"}}, {}))
     runner.sync_trades_from_exchange = AsyncMock()
     runner._record_health_state = MagicMock()
     runner.strategy = MagicMock()

@@ -27,7 +27,7 @@ class StrategyOrchestrator:
         plan_monitor: PlanMonitor,
         risk_manager: RiskManager,
         health_manager: HealthCircuitManager,
-        record_operational_metrics: Callable[[float, float], None],
+        record_operational_metrics: Callable[[float, float, dict | None], None],
         loop_interval_seconds: float,
         logger: logging.Logger,
         actions_logger: logging.Logger,
@@ -77,9 +77,14 @@ class StrategyOrchestrator:
         """
         return RiskCheckResult(should_stop=False, kill_switch=False)
 
-    def emit_operational_metrics(self, current_exposure: float, current_equity: float):
+    def emit_operational_metrics(
+        self,
+        current_exposure: float,
+        current_equity: float,
+        per_symbol_exposure: dict | None = None,
+    ):
         """Emit telemetry metrics for risk and cost tracking."""
-        self.record_operational_metrics(current_exposure, current_equity)
+        self.record_operational_metrics(current_exposure, current_equity, per_symbol_exposure)
 
     async def monitor_trade_plans(
         self,
@@ -99,13 +104,31 @@ class StrategyOrchestrator:
             portfolio_id=target_portfolio,
         )
 
-    def emit_market_health(self, primary_data: dict):
-        """Emit health state for primary market data freshness."""
-        stale, freshness_detail = self.health_manager.is_stale_market_data(primary_data)
-        if stale:
-            self.actions_logger.info("⏸️ Skipping loop: market data stale or too latent")
-            return False, freshness_detail
-        return True, freshness_detail
+    def evaluate_market_health(self, market_data: dict) -> tuple[dict, dict]:
+        """
+        Evaluate market data freshness per symbol and return (fresh, stale) maps.
+        Each entry contains the health detail plus symbol for logging/telemetry.
+        """
+        fresh: dict[str, dict] = {}
+        stale: dict[str, dict] = {}
+
+        for symbol, data in (market_data or {}).items():
+            is_stale, detail = self.health_manager.is_stale_market_data(data or {})
+            detail = detail or {}
+            detail["symbol"] = symbol
+            status = "stale" if is_stale else "ok"
+            try:
+                self.health_manager.record_health_state("market_data", status, detail)
+            except Exception:
+                # Telemetry failures should not break the loop
+                pass
+
+            if is_stale:
+                stale[symbol] = detail
+            else:
+                fresh[symbol] = detail
+
+        return fresh, stale
 
     async def cleanup(self, cleanup_cb: Callable[[], Awaitable[None]]):
         """Run cleanup and reset running flag."""

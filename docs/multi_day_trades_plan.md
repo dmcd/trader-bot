@@ -40,7 +40,7 @@ Legacy session model (now removed):
     - [x] Ensure resync/runner dedupes via exchange trade/order ids across days/runs without session scoping (persist + hydrate).
     - [x] Add restart/day-rollover coverage for deduping + constraint handling.
 
-- [ ] Dashboard and telemetry
+- [x] Dashboard and telemetry
   - [x] surface open positions/plans regardless of run.
   - [x] Tag telemetry/log messages with `portfolio_id` and `run_id` for traceability.
 

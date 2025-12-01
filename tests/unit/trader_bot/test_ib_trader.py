@@ -539,7 +539,28 @@ async def test_fetch_ohlcv_maps_bars_and_clamps_limit():
 
     assert fake_ib.hist_calls[0]["params"]["barSizeSetting"] == "1 min"
     assert fake_ib.hist_calls[0]["params"]["durationStr"] == "60 S"
+    assert fake_ib.hist_calls[0]["params"]["whatToShow"] == "TRADES"
     assert ohlcv == [[1_700_000_060_000, 101, 102, 100, 101.5, 900]]
+
+
+@pytest.mark.asyncio
+async def test_fetch_ohlcv_fx_requests_midpoint():
+    bars = [
+        FakeBar(1_700_000_000_000, 0.65, 0.651, 0.649, 0.6505, 1_000_000),
+        FakeBar(1_700_000_060_000, 0.651, 0.652, 0.65, 0.6515, 900_000),
+    ]
+    fake_ib = FakeIB(
+        connected=True,
+        historical_data={"AUDUSD": bars},
+    )
+    trader = IBTrader(ib_client=fake_ib)
+    trader.connected = True
+
+    ohlcv = await trader.fetch_ohlcv("AUD/USD", timeframe="1m", limit=2)
+
+    assert fake_ib.hist_calls[0]["params"]["whatToShow"] == "MIDPOINT"
+    assert fake_ib.hist_calls[0]["params"]["barSizeSetting"] == "1 min"
+    assert ohlcv[-1] == [1_700_000_060_000, 0.651, 0.652, 0.65, 0.6515, 900_000]
 
 
 def test_timeframe_to_ib_uses_seconds_for_intraday_windows():

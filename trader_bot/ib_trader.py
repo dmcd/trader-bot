@@ -647,9 +647,11 @@ class IBTrader(BaseTrader):
             logger.error(str(exc))
             raise
 
+        what_to_show = "MIDPOINT" if spec.instrument_type == "FX" else "TRADES"
+
         self._throttle_hist_requests()
         try:
-            bars = await self._fetch_historical_data(contract, bar_size, duration)
+            bars = await self._fetch_historical_data(contract, bar_size, duration, what_to_show)
         except Exception as exc:
             logger.error(f"Error fetching IB OHLCV for {symbol}: {exc}")
             return []
@@ -911,13 +913,13 @@ class IBTrader(BaseTrader):
             return await asyncio.wait_for(fetch_fn(), timeout=self.connect_timeout)
         return await asyncio.wait_for(asyncio.to_thread(self.ib.trades), timeout=self.connect_timeout)
 
-    async def _fetch_historical_data(self, contract, bar_size: str, duration: str):
+    async def _fetch_historical_data(self, contract, bar_size: str, duration: str, what_to_show: str):
         fetch_fn = getattr(self.ib, "reqHistoricalDataAsync", None)
         params = {
             "endDateTime": "",
             "durationStr": duration,
             "barSizeSetting": bar_size,
-            "whatToShow": "TRADES",
+            "whatToShow": what_to_show,
             "useRTH": False,
             "formatDate": 1,
         }

@@ -294,6 +294,49 @@ async def test_initialize_reuses_portfolio_and_threads_run_metadata(monkeypatch,
     runner_restart.db.close()
 
 
+@pytest.mark.asyncio
+async def test_initialize_logs_equity_baseline(monkeypatch, tmp_path):
+    db_path = tmp_path / "baseline.db"
+    monkeypatch.setenv("TRADING_DB_PATH", str(db_path))
+    monkeypatch.setattr("trader_bot.strategy_runner.GeminiTrader", FakeBot)
+    monkeypatch.setattr("trader_bot.strategy_runner.IBTrader", FakeBot)
+
+    runner = StrategyRunner(execute_orders=False)
+    runner.telemetry_logger = MagicMock()
+    await runner.initialize()
+
+    assert runner.starting_equity == pytest.approx(runner.bot.equity)
+    cursor = runner.db.conn.cursor()
+    rows = cursor.execute(
+        "SELECT equity FROM equity_snapshots WHERE portfolio_id = ?",
+        (runner.portfolio_id,),
+    ).fetchall()
+    assert len(rows) >= 1
+    assert any(row["equity"] == pytest.approx(runner.bot.equity) for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_initialize_reuses_first_equity_snapshot(monkeypatch, tmp_path):
+    db_path = tmp_path / "baseline-existing.db"
+    monkeypatch.setenv("TRADING_DB_PATH", str(db_path))
+    monkeypatch.setattr("trader_bot.strategy_runner.GeminiTrader", FakeBot)
+    monkeypatch.setattr("trader_bot.strategy_runner.IBTrader", FakeBot)
+
+    runner = StrategyRunner(execute_orders=False)
+    runner.db.log_equity_snapshot_for_portfolio(runner.portfolio_id, 1500.0, timestamp="2024-01-01T00:00:00Z")
+    runner.db.log_equity_snapshot_for_portfolio(runner.portfolio_id, 1750.0, timestamp="2024-01-02T00:00:00Z")
+    runner.bot.equity = 2000.0
+    await runner.initialize()
+
+    assert runner.starting_equity == pytest.approx(1500.0)
+    cursor = runner.db.conn.cursor()
+    snapshot_count = cursor.execute(
+        "SELECT COUNT(*) as cnt FROM equity_snapshots WHERE portfolio_id = ?",
+        (runner.portfolio_id,),
+    ).fetchone()["cnt"]
+    assert snapshot_count == 3
+
+
 # --- Circuit breakers and health metrics ---
 
 

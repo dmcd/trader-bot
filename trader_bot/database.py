@@ -1700,6 +1700,22 @@ class TradingDatabase:
         row = cursor.fetchone()
         return row["equity"] if row else None
 
+    def get_first_equity_snapshot_for_portfolio(self, portfolio_id: int) -> Optional[Dict[str, Any]]:
+        """Return the earliest equity snapshot for a portfolio (baseline reference)."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT timestamp, equity
+            FROM equity_snapshots
+            WHERE portfolio_id = ?
+            ORDER BY timestamp ASC
+            LIMIT 1
+            """,
+            (portfolio_id,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
     def get_portfolio_stats(self, portfolio_id: int) -> Dict[str, Any]:
         """Return portfolio-level statistics, preferring the stats cache."""
         stats: Dict[str, Any] = {}

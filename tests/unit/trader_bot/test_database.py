@@ -513,6 +513,17 @@ def test_equity_snapshot_logging_and_pruning(db_session):
     assert db.get_latest_equity_for_portfolio(portfolio_id) == 150.0
 
 
+def test_first_equity_snapshot_returns_earliest(db_session):
+    db, portfolio_id = db_session
+    db.log_equity_snapshot_for_portfolio(portfolio_id, 200.0, timestamp="2024-01-02T00:00:00Z")
+    db.log_equity_snapshot_for_portfolio(portfolio_id, 150.0, timestamp="2024-01-01T00:00:00Z")
+
+    first = db.get_first_equity_snapshot_for_portfolio(portfolio_id)
+
+    assert first["equity"] == pytest.approx(150.0)
+    assert first["timestamp"].startswith("2024-01-01")
+
+
 def test_portfolio_day_updates_from_equity_snapshots(tmp_path):
     db_path = tmp_path / "portfolio-days.db"
     db = TradingDatabase(str(db_path))

@@ -135,6 +135,7 @@ class StrategyRunner:
         self.technical_analysis = TechnicalAnalysis()
         self.context = None
         self.starting_equity: float | None = None
+        self._equity_baseline_ts: str | None = None
         self.data_fetch_coordinator = None
         # Track estimated fees per order so we can reconcile with actual fills
         self._estimated_fees = {}  # order_id -> estimated fee
@@ -426,9 +427,16 @@ class StrategyRunner:
             logger.debug(f"Could not emit risk metrics: {exc}")
 
         try:
-            portfolio_started = None
-            if self.portfolio:
+            portfolio_started = self._equity_baseline_ts
+            if portfolio_started is None and self.portfolio:
                 portfolio_started = self.portfolio.get("created_at")
+            if portfolio_started is None and self.portfolio_id is not None:
+                try:
+                    baseline = self.db.get_first_equity_snapshot_for_portfolio(self.portfolio_id)
+                    if baseline:
+                        portfolio_started = baseline.get("timestamp")
+                except Exception as exc:
+                    logger.debug(f"Could not load equity baseline timestamp: {exc}")
             burn_stats = self.cost_tracker.calculate_llm_burn(
                 total_llm_cost=llm_cost,
                 session_started=portfolio_started,
@@ -442,6 +450,30 @@ class StrategyRunner:
             self._record_health_state("llm_budget", budget_status, burn_stats)
         except Exception as exc:
             logger.debug(f"Could not emit LLM budget metrics: {exc}")
+
+    def _seed_equity_baseline(self, initial_equity: float) -> float:
+        """
+        Determine the portfolio baseline using the earliest equity snapshot.
+        Logs the current equity to snapshots so restarts have a persisted reference.
+        """
+        baseline = initial_equity
+        baseline_ts = None
+        if self.portfolio_id is not None:
+            try:
+                first_snapshot = self.db.get_first_equity_snapshot_for_portfolio(self.portfolio_id)
+                if first_snapshot:
+                    baseline = first_snapshot.get("equity", initial_equity)
+                    baseline_ts = first_snapshot.get("timestamp")
+            except Exception as exc:
+                logger.debug(f"Could not load baseline snapshot: {exc}")
+            try:
+                snapshot_ts = datetime.now(timezone.utc).isoformat()
+                self.db.log_equity_snapshot_for_portfolio(self.portfolio_id, initial_equity, timestamp=snapshot_ts)
+                baseline_ts = baseline_ts or snapshot_ts
+            except Exception as exc:
+                logger.debug(f"Could not log initial equity snapshot: {exc}")
+        self._equity_baseline_ts = baseline_ts
+        return baseline
 
     async def _reconcile_exchange_state(self):
         """
@@ -746,7 +778,7 @@ class StrategyRunner:
         logger.info(f"{self.exchange_name} Equity: {initial_equity}")
         
         # Seed trackers for this portfolio (no session wiring)
-        self.starting_equity = initial_equity
+        self.starting_equity = self._seed_equity_baseline(initial_equity)
         self.portfolio_tracker.set_portfolio(self.portfolio_id)
         self.resync_service.set_portfolio(self.portfolio_id)
 
@@ -840,10 +872,19 @@ class StrategyRunner:
 
     def _sanity_check_equity_vs_stats(self, current_equity: float):
         """Compare estimated net PnL vs equity delta; log if off by >10%."""
-        if current_equity is None or self.starting_equity is None:
+        if current_equity is None:
             return
         try:
             starting = self.starting_equity
+            if starting is None and self.portfolio_id is not None:
+                try:
+                    baseline = self.db.get_first_equity_snapshot_for_portfolio(self.portfolio_id)
+                    if baseline:
+                        starting = baseline.get("equity")
+                except Exception as exc:
+                    logger.debug(f"Could not load equity baseline for sanity check: {exc}")
+            if starting is None:
+                return
             estimated_net = (
                 self.session_stats.get('gross_pnl', 0.0)
                 - self.session_stats.get('total_fees', 0.0)

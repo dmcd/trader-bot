@@ -42,8 +42,8 @@ Notes on the current session model:
 - [ ] **Runner/services wiring: remove session plumbing**
   - [x] Drop `StrategyRunner.session_id/session` fields; thread `portfolio_id`+`run_id` into ResyncService, PlanMonitor, TradeActionHandler, MarketDataService, TradingContext, and telemetry without requiring `set_session`.
     - Runtime code provisions `(portfolio_id, run_id)` via `ensure_active_portfolio`; services and strategy use portfolio-first DB helpers and stop emitting `session_id`. Telemetry records `portfolio_id`/`run_id`. TradingContext rebuilt to read portfolio stats/market data. Tests/fixtures/mocks now use portfolio helpers (no lingering `set_session` expectations).
-  - [ ] Remove session-specific baselines (starting_balance, session_started) from runner lifecycle and resync; rely on portfolio stats cache and equity snapshots instead.
-    - In progress: runner now tracks `starting_equity` (float) and logs portfolio equity snapshots; session metadata removed from telemetry. Sanity checks still assume session baseline in tests; update validations to use `starting_equity`/portfolio stats.
+  - [x] Remove session-specific baselines (starting_balance, session_started) from runner lifecycle and resync; rely on portfolio stats cache and equity snapshots instead.
+    - Runner seeds baselines from the earliest portfolio equity snapshot, logs a new snapshot on startup, and sanity checks/tests now use the portfolio-level baseline instead of session metadata.
 - [ ] **Context and risk**
   - [ ] Rework `TradingContext` summaries to use portfolio lifetime (portfolio.created_at or first equity snapshot) and portfolio stats cache; replace `_net_quantity_for_session` with portfolio-level baseline handling for sandbox airdrops.
   - [ ] Replace `MetricsDrift` with a portfolio-scoped equity drift check (uses portfolio stats cache + latest equity snapshot) and retire session_id logging.

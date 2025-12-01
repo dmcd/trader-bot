@@ -817,6 +817,7 @@ class LLMStrategy(BaseStrategy):
                                 "type": "llm_usage_missing",
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
                                 "portfolio_id": self.portfolio_id,
+                                "run_id": self.run_id,
                                 "note": "provider returned no token usage; cost not accrued",
                             }
                         )

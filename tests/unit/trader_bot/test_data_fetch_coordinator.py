@@ -179,6 +179,8 @@ async def test_handle_requests_dedupes_repeat_requests(caplog):
         cache_ttl_seconds=0,
         rate_limit_window_seconds=120,
         allowed_symbols=["BTC/USD"],
+        portfolio_id=7,
+        run_id="run-1",
     )
     req = ToolRequest(
         id="m1",
@@ -193,6 +195,7 @@ async def test_handle_requests_dedupes_repeat_requests(caplog):
     assert exchange.ohlcv_calls == 1  # deduped
     assert responses[0].data.get("meta", {}).get("deduped") is True
     assert any("tool_thrash" in rec.message for rec in caplog.records)
+    assert any('"portfolio_id": 7' in rec.message and '"run_id": "run-1"' in rec.message for rec in caplog.records)
 
 
 @pytest.mark.asyncio

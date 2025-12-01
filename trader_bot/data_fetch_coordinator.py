@@ -59,6 +59,8 @@ class DataFetchCoordinator:
         dedup_window_seconds: Optional[int] = None,
         error_callback: Any = None,
         success_callback: Any = None,
+        portfolio_id: Optional[int] = None,
+        run_id: Optional[str] = None,
     ):
         self.exchange = exchange
         self.max_bars = max_bars
@@ -80,6 +82,8 @@ class DataFetchCoordinator:
         self._recent_responses: Dict[str, Tuple[float, ToolResponse]] = {}
         self.error_callback = error_callback
         self.success_callback = success_callback
+        self.portfolio_id = portfolio_id
+        self.run_id = run_id
 
     def _cache_get(self, key: str) -> Optional[Dict[str, Any]]:
         entry = self._cache.get(key)
@@ -440,15 +444,16 @@ class DataFetchCoordinator:
 
         if (thrash_events["rate_limited"] or thrash_events["deduped"]) and telemetry_logger:
             try:
-                payload = json.dumps(
-                    {
-                        "type": "tool_thrash",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "rate_limited": thrash_events["rate_limited"],
-                        "deduped": thrash_events["deduped"],
-                        "window_seconds": self.rate_limit_window_seconds,
-                    }
-                )
+                payload_dict = {
+                    "type": "tool_thrash",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "rate_limited": thrash_events["rate_limited"],
+                    "deduped": thrash_events["deduped"],
+                    "window_seconds": self.rate_limit_window_seconds,
+                    "portfolio_id": self.portfolio_id,
+                    "run_id": self.run_id,
+                }
+                payload = json.dumps(payload_dict)
                 telemetry_logger.info(payload)
                 logger.info(payload)
             except Exception:

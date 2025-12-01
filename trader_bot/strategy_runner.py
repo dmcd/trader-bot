@@ -75,7 +75,7 @@ from trader_bot.data_fetch_coordinator import DataFetchCoordinator
 from trader_bot.database import TradingDatabase
 from trader_bot.gemini_trader import GeminiTrader
 from trader_bot.ib_trader import IBTrader
-from trader_bot.logger_config import setup_logging
+from trader_bot.logger_config import setup_logging, set_logging_context
 from trader_bot.risk_manager import RiskManager
 from trader_bot.strategy import LLMStrategy
 from trader_bot.services.command_processor import CommandProcessor
@@ -137,6 +137,7 @@ class StrategyRunner:
             base_currency=self.base_currency,
             bot_version=BOT_VERSION,
         )
+        set_logging_context(self.portfolio_id, self.run_id)
         self.portfolio = self.db.get_portfolio(self.portfolio_id)
         portfolio_base_currency = (self.portfolio or {}).get("base_currency") or self.base_currency
         self.base_currency = portfolio_base_currency
@@ -821,6 +822,8 @@ class StrategyRunner:
                 exchange_for_tools,
                 error_callback=self.health_manager.record_tool_failure,
                 success_callback=self.health_manager.record_tool_success,
+                portfolio_id=self.portfolio_id,
+                run_id=self.run_id,
             )
             # Wire into strategy
             self.strategy.tool_coordinator = self.data_fetch_coordinator

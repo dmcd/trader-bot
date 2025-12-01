@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from trader_bot.database import TradingDatabase
-from trader_bot.logger_config import LoggerWriter, setup_logging
+from trader_bot.logger_config import LoggerWriter, setup_logging, set_logging_context
 from trader_bot.metrics_validator import MetricsDrift
 
 
@@ -68,6 +68,25 @@ def test_setup_logging_defaults_without_test_env(tmp_path, monkeypatch):
         telemetry_handlers = logging.getLogger("telemetry").handlers
         telemetry_filenames = {Path(h.baseFilename).name for h in telemetry_handlers if isinstance(h, logging.FileHandler)}
         assert "telemetry.log" in telemetry_filenames
+    finally:
+        _reset_logging_streams(original_stdout, original_stderr)
+
+
+def test_logging_context_includes_portfolio_and_run(tmp_path, monkeypatch):
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.chdir(tmp_path)
+    try:
+        setup_logging()
+        set_logging_context(42, "run-ctx")
+        logging.getLogger().info("context check")
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+        log_path = tmp_path / "logs" / "test" / "console_test.log"
+        assert log_path.exists()
+        content = log_path.read_text()
+        assert "portfolio=42" in content
+        assert "run=run-ctx" in content
     finally:
         _reset_logging_streams(original_stdout, original_stderr)
 

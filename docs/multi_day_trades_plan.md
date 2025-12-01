@@ -42,10 +42,9 @@ Legacy session model (now removed):
 
 - [ ] Dashboard and telemetry
   - [x] surface open positions/plans regardless of run.
-  - [ ] Tag telemetry/log messages with `portfolio_id` and `run_id` for traceability.
+  - [x] Tag telemetry/log messages with `portfolio_id` and `run_id` for traceability.
 
 - [ ] Testing and rollout
-  - [ ] Add regression coverage for portfolio-only flows (stats rebuilds, trade sync, plan monitors, market data retention, LLM traces) with no session_id fallback.
   - [ ] Expand unit tests for `PortfolioTracker`, `RiskManager`, `ResyncService`, and dashboard loaders to cover portfolio scoping and timezone config.
   - [ ] Add integration tests for a position opened on day 1 and held on day 2 (trade sync, stop/target persistence, overnight widening, risk/exposure checks).
   - [ ] Add tests for trade/order dedupe across runs/days using exchange ids.

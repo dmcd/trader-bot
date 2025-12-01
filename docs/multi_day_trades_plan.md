@@ -24,14 +24,14 @@ Notes on the current session model:
     - [x] Update tests/fixtures to use portfolio stats cache and adjust assertions.
   - [x] Add a lightweight compatibility shim (view/trigger or DAO guard) to map legacy session writes to portfolio_id during the transition.
   - [x] Ensure legacy session constructors attach/issue a portfolio automatically so inserts satisfy the new `portfolio_id` NOT NULL constraints (used by older tests/helpers).
-- [ ] **Database API: flip to portfolio-first signatures**
-  - [ ] Add portfolio-scoped DAO entry points (`log_trade`, `log_market_data`, `log_llm_*`, `replace_positions/open_orders`, `get_recent_*`) that require `portfolio_id`; keep session-aware shims with deprecation warnings.
-    - [ ] Add explicit portfolio-first helpers for trades/market data/OHLCV/positions/open orders/processed trades/trade plans/LLM logs/equity snapshots that do not accept `session_id`.
-    - [ ] Wrap legacy session-first helpers to call portfolio helpers and emit deprecation warnings without changing behavior.
-    - [ ] Cover the new portfolio-first helpers with unit tests and ensure shims preserve existing call patterns.
-  - [ ] Add `ensure_active_portfolio` helper returning `(portfolio_id, run_id)` without creating sessions; make stats accessors use only `portfolio_stats_cache`.
-    - [ ] Move stats accessors to portfolio-only entry points and mark session-based stats lookups as deprecated.
-    - [ ] Add tests for `ensure_active_portfolio` and portfolio-only stats retrieval.
+- [x] **Database API: flip to portfolio-first signatures**
+  - [x] Add portfolio-scoped DAO entry points (`log_trade`, `log_market_data`, `log_llm_*`, `replace_positions/open_orders`, `get_recent_*`) that require `portfolio_id`; keep session-aware shims with deprecation warnings.
+    - [x] Add explicit portfolio-first helpers for trades/market data/OHLCV/positions/open orders/processed trades/trade plans/LLM logs/equity snapshots that do not accept `session_id`.
+    - [x] Wrap legacy session-first helpers to call portfolio helpers and emit deprecation warnings without changing behavior.
+    - [x] Cover the new portfolio-first helpers with unit tests and ensure shims preserve existing call patterns.
+  - [x] Add `ensure_active_portfolio` helper returning `(portfolio_id, run_id)` without creating sessions; make stats accessors use only `portfolio_stats_cache`.
+    - [x] Move stats accessors to portfolio-only entry points and mark session-based stats lookups as deprecated.
+    - [x] Add tests for `ensure_active_portfolio` and portfolio-only stats retrieval.
 - [ ] **Runner/services wiring: remove session plumbing**
   - [ ] Drop `StrategyRunner.session_id/session` fields; thread `portfolio_id`+`run_id` into ResyncService, PlanMonitor, TradeActionHandler, MarketDataService, TradingContext, and telemetry without requiring `set_session`.
   - [ ] Remove session-specific baselines (starting_balance, session_started) from runner lifecycle and resync; rely on portfolio stats cache and equity snapshots instead.

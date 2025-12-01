@@ -2,6 +2,8 @@ import sqlite3
 import logging
 import os
 import json
+import uuid
+import warnings
 from datetime import datetime, date, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from zoneinfo import ZoneInfo
@@ -15,6 +17,7 @@ class TradingDatabase:
         # Allow tests or env overrides to point at an isolated database
         self.db_path = db_path or os.getenv("TRADING_DB_PATH", "trading.db")
         self.conn = None
+        self._shim_warnings: set[str] = set()
         self.initialize_database()
 
     @staticmethod
@@ -626,6 +629,26 @@ class TradingDatabase:
         portfolio_id = cursor.lastrowid
         return self.get_portfolio(portfolio_id)
 
+    def ensure_active_portfolio(
+        self,
+        name: Optional[str] = None,
+        base_currency: Optional[str] = None,
+        bot_version: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> tuple[int, str]:
+        """
+        Ensure a portfolio exists without creating a session and return (portfolio_id, run_id).
+        A new run_id is generated when one is not provided for telemetry/ops scoping.
+        """
+        portfolio_name = name or os.getenv("PORTFOLIO_NAME") or (bot_version or "portfolio").lower()
+        portfolio = self.get_or_create_portfolio(
+            portfolio_name,
+            base_currency=base_currency,
+            bot_version=bot_version,
+        )
+        resolved_run_id = run_id or f"{(bot_version or portfolio_name)}-{uuid.uuid4().hex[:12]}"
+        return portfolio["id"], resolved_run_id
+
     def get_session_id_by_version(self, bot_version: str) -> Optional[int]:
         cursor = self.conn.cursor()
         cursor.execute(
@@ -691,21 +714,11 @@ class TradingDatabase:
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def get_processed_trade_ids(self, session_id: int = None, portfolio_id: int = None) -> set[str]:
-        """Return trade_ids already seen for this session/portfolio."""
-        cursor = self.conn.cursor()
-        if portfolio_id is not None:
-            cursor.execute("SELECT trade_id FROM processed_trades WHERE portfolio_id = ?", (portfolio_id,))
-        else:
-            cursor.execute("SELECT trade_id FROM processed_trades WHERE session_id = ?", (session_id,))
-        return {row["trade_id"] for row in cursor.fetchall() if row["trade_id"]}
-
-    def record_processed_trade_ids(self, session_id: int, entries: List[tuple[str, Optional[str]]], portfolio_id: int | None = None):
-        """Persist processed trade ids to avoid reprocessing across restarts."""
+    def _insert_processed_trade_ids(self, entries: List[tuple[str, Optional[str]]], portfolio_id: int, session_id: int | None = None):
+        """Internal helper to persist processed trade ids."""
         if not entries:
             return
-        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
-        payload = [(session_id, portfolio_ref, trade_id, client_oid) for trade_id, client_oid in entries if trade_id]
+        payload = [(session_id, portfolio_id, trade_id, client_oid) for trade_id, client_oid in entries if trade_id]
         if not payload:
             return
         cursor = self.conn.cursor()
@@ -717,14 +730,53 @@ class TradingDatabase:
             payload,
         )
         self.conn.commit()
-    
-    def log_trade(self, session_id: int, symbol: str, action: str, 
-                  quantity: float, price: float, fee: float, reason: str = "", liquidity: str = "unknown", realized_pnl: float = 0.0, trade_id: str = None, timestamp: str = None, portfolio_id: int | None = None):
-        """Log a trade to the database."""
+
+    def get_processed_trade_ids_for_portfolio(self, portfolio_id: int) -> set[str]:
+        """Return trade_ids already seen for this portfolio."""
         cursor = self.conn.cursor()
-        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
-        
-        # Check for duplicates if trade_id is provided
+        cursor.execute("SELECT trade_id FROM processed_trades WHERE portfolio_id = ?", (portfolio_id,))
+        return {row["trade_id"] for row in cursor.fetchall() if row["trade_id"]}
+
+    def get_processed_trade_ids(self, session_id: int = None, portfolio_id: int = None) -> set[str]:
+        """Return trade_ids already seen for this session/portfolio."""
+        if portfolio_id is not None:
+            return self.get_processed_trade_ids_for_portfolio(portfolio_id)
+        self._warn_session_shim("get_processed_trade_ids")
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT trade_id FROM processed_trades WHERE session_id = ?", (session_id,))
+        return {row["trade_id"] for row in cursor.fetchall() if row["trade_id"]}
+
+    def record_processed_trade_ids_for_portfolio(self, portfolio_id: int, entries: List[tuple[str, Optional[str]]], session_id: int | None = None):
+        """Persist processed trade ids for a portfolio (session_id optional for compatibility)."""
+        self._insert_processed_trade_ids(entries, portfolio_id, session_id=session_id)
+
+    def record_processed_trade_ids(self, session_id: int, entries: List[tuple[str, Optional[str]]], portfolio_id: int | None = None):
+        """Persist processed trade ids to avoid reprocessing across restarts."""
+        if portfolio_id is None:
+            self._warn_session_shim("record_processed_trade_ids")
+            portfolio_ref = self._resolve_portfolio_id(session_id, None)
+        else:
+            portfolio_ref = portfolio_id
+        self._insert_processed_trade_ids(entries, portfolio_ref, session_id=session_id)
+    
+    def _log_trade(
+        self,
+        portfolio_id: int,
+        symbol: str,
+        action: str,
+        quantity: float,
+        price: float,
+        fee: float,
+        reason: str = "",
+        liquidity: str = "unknown",
+        realized_pnl: float = 0.0,
+        trade_id: str | None = None,
+        timestamp: str | None = None,
+        session_id: int | None = None,
+    ):
+        """Internal helper to log a trade without enforcing session usage."""
+        cursor = self.conn.cursor()
+
         if trade_id:
             cursor.execute("SELECT id FROM trades WHERE trade_id = ?", (trade_id,))
             if cursor.fetchone():
@@ -733,13 +785,83 @@ class TradingDatabase:
 
         ts = timestamp if timestamp else datetime.now().isoformat()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO trades (session_id, portfolio_id, timestamp, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, portfolio_ref, ts, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id))
+        """,
+            (session_id, portfolio_id, ts, symbol, action, quantity, price, fee, liquidity, realized_pnl, reason, trade_id),
+        )
 
         self.conn.commit()
         logger.debug(f"Logged trade: {action} {quantity} {symbol} @ ${price}")
+
+    def log_trade_for_portfolio(
+        self,
+        portfolio_id: int,
+        symbol: str,
+        action: str,
+        quantity: float,
+        price: float,
+        fee: float,
+        reason: str = "",
+        liquidity: str = "unknown",
+        realized_pnl: float = 0.0,
+        trade_id: str | None = None,
+        timestamp: str | None = None,
+        session_id: int | None = None,
+    ):
+        """Log a trade directly against a portfolio (session_id optional for compatibility)."""
+        self._log_trade(
+            portfolio_id=portfolio_id,
+            symbol=symbol,
+            action=action,
+            quantity=quantity,
+            price=price,
+            fee=fee,
+            reason=reason,
+            liquidity=liquidity,
+            realized_pnl=realized_pnl,
+            trade_id=trade_id,
+            timestamp=timestamp,
+            session_id=session_id,
+        )
+
+    def log_trade(
+        self,
+        session_id: int,
+        symbol: str,
+        action: str,
+        quantity: float,
+        price: float,
+        fee: float,
+        reason: str = "",
+        liquidity: str = "unknown",
+        realized_pnl: float = 0.0,
+        trade_id: str = None,
+        timestamp: str = None,
+        portfolio_id: int | None = None,
+    ):
+        """Log a trade to the database (legacy session-first signature)."""
+        if portfolio_id is None:
+            self._warn_session_shim("log_trade")
+            portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
+        else:
+            portfolio_ref = portfolio_id
+        self._log_trade(
+            portfolio_ref,
+            symbol,
+            action,
+            quantity,
+            price,
+            fee,
+            reason,
+            liquidity,
+            realized_pnl,
+            trade_id,
+            timestamp,
+            session_id=session_id,
+        )
 
     def log_estimated_fee(self, session_id: int, order_id: str, estimated_fee: float, symbol: str, action: str):
         """Optional audit trail for estimated fees to compare with actuals."""
@@ -765,13 +887,21 @@ class TradingDatabase:
         except Exception as e:
             logger.debug(f"Failed to log estimated fee: {e}")
     
-    def log_llm_call(self, session_id: int, input_tokens: int, output_tokens: int,
-                     cost: float, decision: str = "", run_id: str | None = None, portfolio_id: int | None = None):
-        """Log an LLM API call."""
+    def _log_llm_call(
+        self,
+        portfolio_id: int,
+        input_tokens: int,
+        output_tokens: int,
+        cost: float,
+        decision: str = "",
+        run_id: str | None = None,
+        session_id: int | None = None,
+    ):
+        """Internal helper to persist LLM call metadata."""
         cursor = self.conn.cursor()
         total_tokens = input_tokens + output_tokens
-        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO llm_calls (session_id, portfolio_id, run_id, timestamp, input_tokens, output_tokens, total_tokens, cost, decision)
             VALUES (
                 ?,
@@ -779,30 +909,88 @@ class TradingDatabase:
                 ?,
                 ?, ?, ?, ?, ?, ?
             )
-        """, (
-            session_id,
-            portfolio_ref,
-            run_id,
-            datetime.now().isoformat(),
-            input_tokens,
-            output_tokens,
-            total_tokens,
-            cost,
-            decision,
-        ))
+        """,
+            (
+                session_id,
+                portfolio_id,
+                run_id,
+                datetime.now().isoformat(),
+                input_tokens,
+                output_tokens,
+                total_tokens,
+                cost,
+                decision,
+            ),
+        )
 
         self.conn.commit()
         logger.debug(f"Logged LLM call: {total_tokens} tokens, ${cost:.6f}")
 
-    def log_llm_trace(self, session_id: int, prompt: str, response: str, decision_json: str = "", market_context: Any = None, run_id: str | None = None, portfolio_id: int | None = None) -> int:
-        """Persist full LLM prompt/response plus parsed decision and context; returns trace id."""
+    def log_llm_call_for_portfolio(
+        self,
+        portfolio_id: int,
+        input_tokens: int,
+        output_tokens: int,
+        cost: float,
+        decision: str = "",
+        run_id: str | None = None,
+        session_id: int | None = None,
+    ):
+        """Log an LLM API call for a portfolio (session optional for legacy telemetry)."""
+        self._log_llm_call(
+            portfolio_id=portfolio_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost=cost,
+            decision=decision,
+            run_id=run_id,
+            session_id=session_id,
+        )
+
+    def log_llm_call(
+        self,
+        session_id: int,
+        input_tokens: int,
+        output_tokens: int,
+        cost: float,
+        decision: str = "",
+        run_id: str | None = None,
+        portfolio_id: int | None = None,
+    ):
+        """Log an LLM API call (legacy session-first signature)."""
+        if portfolio_id is None:
+            self._warn_session_shim("log_llm_call")
+            portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
+        else:
+            portfolio_ref = portfolio_id
+        self._log_llm_call(
+            portfolio_ref,
+            input_tokens,
+            output_tokens,
+            cost,
+            decision,
+            run_id,
+            session_id=session_id,
+        )
+
+    def _log_llm_trace(
+        self,
+        portfolio_id: int,
+        prompt: str,
+        response: str,
+        decision_json: str = "",
+        market_context: Any = None,
+        run_id: str | None = None,
+        session_id: int | None = None,
+    ) -> int:
+        """Internal helper to persist full LLM trace rows."""
         cursor = self.conn.cursor()
         try:
             market_context_str = json.dumps(market_context, default=str) if market_context is not None else None
         except Exception:
             market_context_str = str(market_context)
-        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO llm_traces (session_id, portfolio_id, run_id, timestamp, prompt, response, decision_json, market_context)
             VALUES (
                 ?,
@@ -810,9 +998,58 @@ class TradingDatabase:
                 ?,
                 ?, ?, ?, ?, ?
             )
-        """, (session_id, portfolio_ref, run_id, datetime.now().isoformat(), prompt, response, decision_json, market_context_str))
+        """,
+            (session_id, portfolio_id, run_id, datetime.now().isoformat(), prompt, response, decision_json, market_context_str),
+        )
         self.conn.commit()
         return cursor.lastrowid
+
+    def log_llm_trace_for_portfolio(
+        self,
+        portfolio_id: int,
+        prompt: str,
+        response: str,
+        decision_json: str = "",
+        market_context: Any = None,
+        run_id: str | None = None,
+        session_id: int | None = None,
+    ) -> int:
+        """Persist full LLM prompt/response plus parsed decision and context."""
+        return self._log_llm_trace(
+            portfolio_id=portfolio_id,
+            prompt=prompt,
+            response=response,
+            decision_json=decision_json,
+            market_context=market_context,
+            run_id=run_id,
+            session_id=session_id,
+        )
+
+    def log_llm_trace(
+        self,
+        session_id: int,
+        prompt: str,
+        response: str,
+        decision_json: str = "",
+        market_context: Any = None,
+        run_id: str | None = None,
+        portfolio_id: int | None = None,
+    ) -> int:
+        """Persist full LLM prompt/response (legacy session-first signature)."""
+        if portfolio_id is None:
+            self._warn_session_shim("log_llm_trace")
+            portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
+        else:
+            portfolio_ref = portfolio_id
+        return self._log_llm_trace(
+            portfolio_id=portfolio_ref,
+            prompt=prompt,
+            response=response,
+            decision_json=decision_json,
+            market_context=market_context,
+            run_id=run_id,
+            session_id=session_id,
+        )
 
     def update_llm_trace_execution(self, trace_id: int, execution_result: Any):
         """Attach execution outcome to an existing LLM trace row."""
@@ -834,6 +1071,7 @@ class TradingDatabase:
         """Delete LLM traces older than the retention window for a session."""
         if retention_days is None or retention_days <= 0:
             return
+        self._warn_session_shim("prune_llm_traces")
         cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
         cursor = self.conn.cursor()
         cursor.execute(
@@ -842,8 +1080,21 @@ class TradingDatabase:
         )
         self.conn.commit()
 
+    def prune_llm_traces_for_portfolio(self, portfolio_id: int, retention_days: int):
+        """Delete LLM traces older than the retention window for a portfolio."""
+        if retention_days is None or retention_days <= 0:
+            return
+        cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "DELETE FROM llm_traces WHERE portfolio_id = ? AND timestamp < ?",
+            (portfolio_id, cutoff),
+        )
+        self.conn.commit()
+
     def get_recent_llm_stats(self, session_id: int, limit: int = 20) -> Dict[str, Any]:
         """Return summary of recent LLM calls for telemetry."""
+        self._warn_session_shim("get_recent_llm_stats")
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT decision FROM llm_calls
@@ -860,8 +1111,29 @@ class TradingDatabase:
                 stats["clamped"] += 1
         return stats
 
+    def get_recent_llm_stats_for_portfolio(self, portfolio_id: int, limit: int = 20) -> Dict[str, Any]:
+        """Return summary of recent LLM calls for telemetry scoped to portfolio_id."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT decision FROM llm_calls
+            WHERE portfolio_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (portfolio_id, limit))
+        rows = [row['decision'] or '' for row in cursor.fetchall()]
+        stats = {"total": len(rows), "schema_errors": 0, "clamped": 0}
+        for d in rows:
+            if d.startswith("schema_error"):
+                stats["schema_errors"] += 1
+            if "clamped" in d.lower():
+                stats["clamped"] += 1
+        return stats
+
     def get_recent_llm_traces(self, session_id: int, limit: int = 5, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
         """Return recent LLM traces (decision + execution) for memory/context."""
+        if portfolio_id is not None:
+            return self.get_recent_llm_traces_for_portfolio(portfolio_id, limit=limit)
+        self._warn_session_shim("get_recent_llm_traces")
         cursor = self.conn.cursor()
         query = """
             SELECT id, timestamp, decision_json, execution_result
@@ -870,8 +1142,20 @@ class TradingDatabase:
             ORDER BY timestamp DESC
             LIMIT ?
         """
-        scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
-        cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id), limit))
+        cursor.execute(query.format(scope="session_id = ?"), (session_id, limit))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_recent_llm_traces_for_portfolio(self, portfolio_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+        """Return recent LLM traces (decision + execution) scoped to a portfolio."""
+        cursor = self.conn.cursor()
+        query = """
+            SELECT id, timestamp, decision_json, execution_result
+            FROM llm_traces
+            WHERE portfolio_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """
+        cursor.execute(query, (portfolio_id, limit))
         return [dict(row) for row in cursor.fetchall()]
     
     @staticmethod
@@ -886,6 +1170,18 @@ class TradingDatabase:
             return value
         return value
 
+    def _warn_session_shim(self, method_name: str):
+        """Emit a one-time deprecation warning for session-first helpers."""
+        if method_name in self._shim_warnings:
+            return
+        self._shim_warnings.add(method_name)
+        warnings.warn(
+            f"{method_name} is session-scoped and will be removed; use the portfolio-first helper instead.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        logger.warning("%s called via session shim; prefer portfolio-scoped helper", method_name)
+
     def _resolve_portfolio_id(self, session_id: int | None, portfolio_id: int | None) -> int:
         """Resolve a portfolio id from explicit input or the linked session; raise if missing."""
         if portfolio_id is not None:
@@ -897,99 +1193,210 @@ class TradingDatabase:
             raise ValueError("portfolio_id is required for portfolio-scoped tables")
         return portfolio_ref
 
-    def log_market_data(self, session_id: int, symbol: str, price: float | int | None,
-                       bid: float | int | None, ask: float | int | None, volume: float | int | None = None,
-                       spread_pct: float | int | None = None, bid_size: float | int | None = None,
-                       ask_size: float | int | None = None, ob_imbalance: float | int | None = None, portfolio_id: int | None = None):
-        """Log market data snapshot."""
+    def _log_market_data(
+        self,
+        portfolio_id: int,
+        symbol: str,
+        price: float | int | None,
+        bid: float | int | None,
+        ask: float | int | None,
+        volume: float | int | None = None,
+        spread_pct: float | int | None = None,
+        bid_size: float | int | None = None,
+        ask_size: float | int | None = None,
+        ob_imbalance: float | int | None = None,
+        session_id: int | None = None,
+    ):
+        """Internal helper to log market data snapshots."""
         volume = self._preserve_integer_if_whole(volume)
         bid_size = self._preserve_integer_if_whole(bid_size)
         ask_size = self._preserve_integer_if_whole(ask_size)
         cursor = self.conn.cursor()
-        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO market_data (session_id, portfolio_id, timestamp, symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, portfolio_ref, datetime.now().isoformat(), symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance))
+        """,
+            (session_id, portfolio_id, datetime.now().isoformat(), symbol, price, bid, ask, volume, spread_pct, bid_size, ask_size, ob_imbalance),
+        )
         self.conn.commit()
 
-    def prune_market_data(self, session_id: int, retention_minutes: int, portfolio_id: int | None = None):
-        """Trim market data older than the retention window."""
+    def log_market_data_for_portfolio(
+        self,
+        portfolio_id: int,
+        symbol: str,
+        price: float | int | None,
+        bid: float | int | None,
+        ask: float | int | None,
+        volume: float | int | None = None,
+        spread_pct: float | int | None = None,
+        bid_size: float | int | None = None,
+        ask_size: float | int | None = None,
+        ob_imbalance: float | int | None = None,
+        session_id: int | None = None,
+    ):
+        """Log market data snapshot for a portfolio (session optional)."""
+        self._log_market_data(
+            portfolio_id=portfolio_id,
+            symbol=symbol,
+            price=price,
+            bid=bid,
+            ask=ask,
+            volume=volume,
+            spread_pct=spread_pct,
+            bid_size=bid_size,
+            ask_size=ask_size,
+            ob_imbalance=ob_imbalance,
+            session_id=session_id,
+        )
+
+    def log_market_data(
+        self,
+        session_id: int,
+        symbol: str,
+        price: float | int | None,
+        bid: float | int | None,
+        ask: float | int | None,
+        volume: float | int | None = None,
+        spread_pct: float | int | None = None,
+        bid_size: float | int | None = None,
+        ask_size: float | int | None = None,
+        ob_imbalance: float | int | None = None,
+        portfolio_id: int | None = None,
+    ):
+        """Log market data snapshot (legacy session-first signature)."""
+        if portfolio_id is None:
+            self._warn_session_shim("log_market_data")
+            portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
+        else:
+            portfolio_ref = portfolio_id
+        self._log_market_data(
+            portfolio_id=portfolio_ref,
+            symbol=symbol,
+            price=price,
+            bid=bid,
+            ask=ask,
+            volume=volume,
+            spread_pct=spread_pct,
+            bid_size=bid_size,
+            ask_size=ask_size,
+            ob_imbalance=ob_imbalance,
+            session_id=session_id,
+        )
+
+    def prune_market_data_for_portfolio(self, portfolio_id: int, retention_minutes: int):
+        """Trim market data older than the retention window for a portfolio."""
         if retention_minutes is None or retention_minutes <= 0:
             return
         cutoff = (datetime.now() - timedelta(minutes=retention_minutes)).isoformat()
         cursor = self.conn.cursor()
+        cursor.execute(
+            "DELETE FROM market_data WHERE portfolio_id = ? AND timestamp < ?",
+            (portfolio_id, cutoff),
+        )
+        self.conn.commit()
+
+    def prune_market_data(self, session_id: int, retention_minutes: int, portfolio_id: int | None = None):
+        """Trim market data older than the retention window."""
         if portfolio_id is not None:
-            cursor.execute(
-                "DELETE FROM market_data WHERE portfolio_id = ? AND timestamp < ?",
-                (portfolio_id, cutoff),
-            )
-        else:
-            cursor.execute(
-                "DELETE FROM market_data WHERE session_id = ? AND timestamp < ?",
-                (session_id, cutoff),
-            )
+            return self.prune_market_data_for_portfolio(portfolio_id, retention_minutes)
+        if retention_minutes is None or retention_minutes <= 0:
+            return
+        self._warn_session_shim("prune_market_data")
+        cutoff = (datetime.now() - timedelta(minutes=retention_minutes)).isoformat()
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "DELETE FROM market_data WHERE session_id = ? AND timestamp < ?",
+            (session_id, cutoff),
+        )
         self.conn.commit()
     
-    def get_recent_trades(self, session_id: int | None = None, limit: int = 10, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
-        """Get recent trades for context."""
+    def get_recent_trades_for_portfolio(self, portfolio_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent trades for context by portfolio."""
         cursor = self.conn.cursor()
-        if portfolio_id is not None:
-            cursor.execute("""
+        cursor.execute(
+            """
                 SELECT * FROM trades 
                 WHERE portfolio_id = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
-            """, (portfolio_id, limit))
-        else:
-            cursor.execute("""
+            """,
+            (portfolio_id, limit),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_recent_trades(self, session_id: int | None = None, limit: int = 10, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
+        """Get recent trades for context."""
+        if portfolio_id is not None:
+            return self.get_recent_trades_for_portfolio(portfolio_id, limit=limit)
+        self._warn_session_shim("get_recent_trades")
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
                 SELECT * FROM trades 
                 WHERE session_id = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
-            """, (session_id, limit))
-        
+            """,
+            (session_id, limit),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_trades_for_portfolio(self, portfolio_id: int) -> List[Dict[str, Any]]:
+        """Get all trades for a portfolio ordered chronologically."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+                SELECT * FROM trades 
+                WHERE portfolio_id = ?
+                ORDER BY timestamp ASC
+            """,
+            (portfolio_id,),
+        )
         return [dict(row) for row in cursor.fetchall()]
 
     def get_trades_for_session(self, session_id: int, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
         """Get all trades for a session or portfolio ordered chronologically."""
-        cursor = self.conn.cursor()
         if portfolio_id is not None:
-            cursor.execute("""
-                SELECT * FROM trades 
-                WHERE portfolio_id = ?
-                ORDER BY timestamp ASC
-            """, (portfolio_id,))
-        else:
-            cursor.execute("""
+            return self.get_trades_for_portfolio(portfolio_id)
+        self._warn_session_shim("get_trades_for_session")
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
                 SELECT * FROM trades 
                 WHERE session_id = ?
                 ORDER BY timestamp ASC
-            """, (session_id,))
+            """,
+            (session_id,),
+        )
         return [dict(row) for row in cursor.fetchall()]
     
-    def get_recent_market_data(self, session_id: int, symbol: str, limit: int = 100, before_timestamp: Optional[str] = None, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
-        """Get recent market data for technical analysis."""
+    def _get_recent_market_data(
+        self,
+        portfolio_id: int,
+        symbol: str,
+        limit: int = 100,
+        before_timestamp: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Internal helper to fetch market data by portfolio."""
         cursor = self.conn.cursor()
         
         if before_timestamp:
             query = """
                 SELECT * FROM market_data 
-                WHERE {scope} AND symbol = ? AND timestamp <= ?
+                WHERE portfolio_id = ? AND symbol = ? AND timestamp <= ?
                 ORDER BY timestamp DESC
                 LIMIT ?
             """
-            scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
-            cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id), symbol, before_timestamp, limit))
+            cursor.execute(query, (portfolio_id, symbol, before_timestamp, limit))
         else:
             query = """
                 SELECT * FROM market_data 
-                WHERE {scope} AND symbol = ?
+                WHERE portfolio_id = ? AND symbol = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
             """
-            scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
-            cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id), symbol, limit))
+            cursor.execute(query, (portfolio_id, symbol, limit))
         
         rows = [dict(row) for row in cursor.fetchall()]
         for row in rows:
@@ -997,6 +1404,96 @@ class TradingDatabase:
             row["bid_size"] = self._preserve_integer_if_whole(row.get("bid_size"))
             row["ask_size"] = self._preserve_integer_if_whole(row.get("ask_size"))
         return rows
+
+    def get_recent_market_data_for_portfolio(
+        self,
+        portfolio_id: int,
+        symbol: str,
+        limit: int = 100,
+        before_timestamp: Optional[str] = None,
+        session_id: int | None = None,
+    ) -> List[Dict[str, Any]]:
+        """Get recent market data for technical analysis scoped to a portfolio."""
+        # session_id accepted for signature compatibility but unused
+        return self._get_recent_market_data(portfolio_id, symbol, limit=limit, before_timestamp=before_timestamp)
+
+    def get_recent_market_data(self, session_id: int, symbol: str, limit: int = 100, before_timestamp: Optional[str] = None, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
+        """Get recent market data for technical analysis."""
+        if portfolio_id is not None:
+            return self._get_recent_market_data(portfolio_id, symbol, limit=limit, before_timestamp=before_timestamp)
+        self._warn_session_shim("get_recent_market_data")
+        cursor = self.conn.cursor()
+        
+        if before_timestamp:
+            query = """
+                SELECT * FROM market_data 
+                WHERE session_id = ? AND symbol = ? AND timestamp <= ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """
+            cursor.execute(query, (session_id, symbol, before_timestamp, limit))
+        else:
+            query = """
+                SELECT * FROM market_data 
+                WHERE session_id = ? AND symbol = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """
+            cursor.execute(query, (session_id, symbol, limit))
+        
+        rows = [dict(row) for row in cursor.fetchall()]
+        for row in rows:
+            row["volume"] = self._preserve_integer_if_whole(row.get("volume"))
+            row["bid_size"] = self._preserve_integer_if_whole(row.get("bid_size"))
+            row["ask_size"] = self._preserve_integer_if_whole(row.get("ask_size"))
+        return rows
+
+    def _log_equity_snapshot(
+        self,
+        portfolio_id: int,
+        equity: float,
+        timestamp: datetime | str | None = None,
+        timezone_name: str | None = None,
+        session_id: int | None = None,
+    ):
+        """Internal helper to persist equity snapshots."""
+        cursor = self.conn.cursor()
+        ts = self._normalize_timestamp(timestamp)
+        ts_str = ts.isoformat()
+        cursor.execute(
+            """
+            INSERT INTO equity_snapshots (session_id, portfolio_id, timestamp, equity)
+            VALUES (?, ?, ?, ?)
+            """,
+            (session_id, portfolio_id, ts_str, equity),
+        )
+        self.conn.commit()
+        try:
+            self.update_portfolio_day_from_snapshot(
+                portfolio_id,
+                ts,
+                equity,
+                timezone_name=timezone_name,
+            )
+        except Exception as exc:
+            logger.debug(f"Could not update portfolio_days from equity snapshot: {exc}")
+
+    def log_equity_snapshot_for_portfolio(
+        self,
+        portfolio_id: int,
+        equity: float,
+        timestamp: datetime | str | None = None,
+        timezone_name: str | None = None,
+        session_id: int | None = None,
+    ):
+        """Log equity snapshot for a portfolio without requiring a session_id."""
+        self._log_equity_snapshot(
+            portfolio_id=portfolio_id,
+            equity=equity,
+            timestamp=timestamp,
+            timezone_name=timezone_name,
+            session_id=session_id,
+        )
 
     def log_equity_snapshot(
         self,
@@ -1007,34 +1504,24 @@ class TradingDatabase:
         timezone_name: str | None = None,
     ):
         """Log mark-to-market equity snapshot and update portfolio-day reporting rows."""
-        cursor = self.conn.cursor()
-        ts = self._normalize_timestamp(timestamp)
-        ts_str = ts.isoformat()
-        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
-        cursor.execute(
-            """
-            INSERT INTO equity_snapshots (session_id, portfolio_id, timestamp, equity)
-            VALUES (?, ?, ?, ?)
-            """,
-            (session_id, portfolio_ref, ts_str, equity),
+        if portfolio_id is None:
+            self._warn_session_shim("log_equity_snapshot")
+            portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
+        else:
+            portfolio_ref = portfolio_id
+        self._log_equity_snapshot(
+            portfolio_id=portfolio_ref,
+            equity=equity,
+            timestamp=timestamp,
+            timezone_name=timezone_name,
+            session_id=session_id,
         )
-        self.conn.commit()
-        try:
-            self.update_portfolio_day_from_snapshot(
-                portfolio_ref,
-                ts,
-                equity,
-                timezone_name=timezone_name,
-            )
-        except Exception as exc:
-            logger.debug(f"Could not update portfolio_days from equity snapshot: {exc}")
 
-    def log_ohlcv_batch(self, session_id: int, symbol: str, timeframe: str, bars: List[Dict[str, Any]], portfolio_id: int | None = None):
+    def log_ohlcv_batch_for_portfolio(self, portfolio_id: int, symbol: str, timeframe: str, bars: List[Dict[str, Any]], session_id: int | None = None):
         """Persist a batch of OHLCV bars for a symbol/timeframe."""
         if not bars:
             return
         cursor = self.conn.cursor()
-        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
         records = []
         for bar in bars:
             try:
@@ -1048,7 +1535,7 @@ class TradingDatabase:
                     ts_iso = str(ts)
                 records.append((
                     session_id,
-                    portfolio_ref,
+                    portfolio_id,
                     ts_iso,
                     symbol,
                     timeframe,
@@ -1068,33 +1555,47 @@ class TradingDatabase:
         """, records)
         self.conn.commit()
 
-    def prune_ohlcv(self, session_id: int, symbol: str, timeframe: str, retain: int, portfolio_id: int | None = None):
+    def log_ohlcv_batch(self, session_id: int, symbol: str, timeframe: str, bars: List[Dict[str, Any]], portfolio_id: int | None = None):
+        """Persist a batch of OHLCV bars for a symbol/timeframe."""
+        if portfolio_id is None:
+            self._warn_session_shim("log_ohlcv_batch")
+            portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
+        else:
+            portfolio_ref = portfolio_id
+        self.log_ohlcv_batch_for_portfolio(
+            portfolio_id=portfolio_ref,
+            symbol=symbol,
+            timeframe=timeframe,
+            bars=bars,
+            session_id=session_id,
+        )
+
+    def prune_ohlcv_for_portfolio(self, portfolio_id: int, symbol: str, timeframe: str, retain: int):
         """Keep only the most recent `retain` rows for a symbol/timeframe."""
         if retain is None or retain <= 0:
             return
         cursor = self.conn.cursor()
         query = """
             DELETE FROM ohlcv_bars
-            WHERE {scope}
+            WHERE portfolio_id = ?
               AND symbol = ?
               AND timeframe = ?
               AND id NOT IN (
                 SELECT id FROM ohlcv_bars
-                WHERE {scope}
+                WHERE portfolio_id = ?
                   AND symbol = ?
                   AND timeframe = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
               )
             """
-        scope_clause = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
         cursor.execute(
-            query.format(scope=scope_clause),
+            query,
             (
-                portfolio_id if portfolio_id is not None else session_id,
+                portfolio_id,
                 symbol,
                 timeframe,
-                portfolio_id if portfolio_id is not None else session_id,
+                portfolio_id,
                 symbol,
                 timeframe,
                 retain,
@@ -1102,22 +1603,78 @@ class TradingDatabase:
         )
         self.conn.commit()
 
-    def get_recent_ohlcv(self, session_id: int, symbol: str, timeframe: str, limit: int = 200, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
-        """Fetch recent OHLCV bars for a symbol/timeframe."""
+    def prune_ohlcv(self, session_id: int, symbol: str, timeframe: str, retain: int, portfolio_id: int | None = None):
+        """Keep only the most recent `retain` rows for a symbol/timeframe."""
+        if portfolio_id is not None:
+            return self.prune_ohlcv_for_portfolio(portfolio_id, symbol, timeframe, retain)
+        if retain is None or retain <= 0:
+            return
+        self._warn_session_shim("prune_ohlcv")
         cursor = self.conn.cursor()
-        cursor.execute("""
+        query = """
+            DELETE FROM ohlcv_bars
+            WHERE session_id = ?
+              AND symbol = ?
+              AND timeframe = ?
+              AND id NOT IN (
+                SELECT id FROM ohlcv_bars
+                WHERE session_id = ?
+                  AND symbol = ?
+                  AND timeframe = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+              )
+            """
+        cursor.execute(
+            query,
+            (
+                session_id,
+                symbol,
+                timeframe,
+                session_id,
+                symbol,
+                timeframe,
+                retain,
+            ),
+        )
+        self.conn.commit()
+
+    def get_recent_ohlcv_for_portfolio(self, portfolio_id: int, symbol: str, timeframe: str, limit: int = 200) -> List[Dict[str, Any]]:
+        """Fetch recent OHLCV bars for a symbol/timeframe scoped to a portfolio."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
             SELECT timestamp, open, high, low, close, volume
             FROM ohlcv_bars
-            WHERE {scope} AND symbol = ? AND timeframe = ?
+            WHERE portfolio_id = ? AND symbol = ? AND timeframe = ?
             ORDER BY timestamp DESC
             LIMIT ?
-        """.format(scope="portfolio_id = ?" if portfolio_id is not None else "session_id = ?"),
-            (portfolio_id if portfolio_id is not None else session_id, symbol, timeframe, limit),
+        """,
+            (portfolio_id, symbol, timeframe, limit),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_recent_ohlcv(self, session_id: int, symbol: str, timeframe: str, limit: int = 200, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
+        """Fetch recent OHLCV bars for a symbol/timeframe."""
+        if portfolio_id is not None:
+            return self.get_recent_ohlcv_for_portfolio(portfolio_id, symbol, timeframe, limit=limit)
+        self._warn_session_shim("get_recent_ohlcv")
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT timestamp, open, high, low, close, volume
+            FROM ohlcv_bars
+            WHERE session_id = ? AND symbol = ? AND timeframe = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """,
+            (session_id, symbol, timeframe, limit),
         )
         return [dict(row) for row in cursor.fetchall()]
 
     def get_latest_equity(self, session_id: int) -> Optional[float]:
-        """Get most recent equity snapshot."""
+        """Get most recent equity snapshot (legacy session-scoped)."""
+        self._warn_session_shim("get_latest_equity")
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT equity FROM equity_snapshots
@@ -1128,8 +1685,71 @@ class TradingDatabase:
         row = cursor.fetchone()
         return row['equity'] if row else None
 
+    def get_latest_equity_for_portfolio(self, portfolio_id: int) -> Optional[float]:
+        """Get most recent equity snapshot for a portfolio."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT equity FROM equity_snapshots
+            WHERE portfolio_id = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """,
+            (portfolio_id,),
+        )
+        row = cursor.fetchone()
+        return row["equity"] if row else None
+
+    def get_portfolio_stats(self, portfolio_id: int) -> Dict[str, Any]:
+        """Return portfolio-level statistics, preferring the stats cache."""
+        stats: Dict[str, Any] = {}
+        try:
+            stats = self.get_portfolio_stats_cache(portfolio_id) or {}
+        except Exception as exc:
+            logger.debug(f"Could not load portfolio stats cache for portfolio {portfolio_id}: {exc}")
+
+        cursor = self.conn.cursor()
+        if stats.get("gross_pnl") is None or stats.get("total_trades") is None or stats.get("total_fees") is None:
+            cursor.execute(
+                """
+                SELECT COUNT(*) as cnt,
+                       COALESCE(SUM(fee), 0) as total_fees,
+                       COALESCE(SUM(realized_pnl), 0) as realized
+                FROM trades
+                WHERE portfolio_id = ?
+                """,
+                (portfolio_id,),
+            )
+            trade_row = dict(cursor.fetchone() or {})
+            stats.setdefault("total_trades", trade_row.get("cnt") or 0)
+            stats.setdefault("total_fees", trade_row.get("total_fees") or 0.0)
+            stats.setdefault("gross_pnl", trade_row.get("realized") or 0.0)
+
+        if stats.get("total_llm_cost") is None:
+            cursor.execute(
+                "SELECT COALESCE(SUM(cost), 0) as total_cost FROM llm_calls WHERE portfolio_id = ?",
+                (portfolio_id,),
+            )
+            cost_row = dict(cursor.fetchone() or {})
+            stats["total_llm_cost"] = cost_row.get("total_cost") or 0.0
+
+        stats.setdefault("total_trades", 0)
+        stats.setdefault("total_fees", 0.0)
+        stats.setdefault("gross_pnl", 0.0)
+        stats.setdefault("total_llm_cost", 0.0)
+        stats.setdefault("exposure_notional", 0.0)
+        stats["portfolio_id"] = portfolio_id
+        if stats.get("net_pnl") is None:
+            stats["net_pnl"] = (
+                (stats.get("gross_pnl", 0.0) or 0.0)
+                - (stats.get("total_fees", 0.0) or 0.0)
+                - (stats.get("total_llm_cost", 0.0) or 0.0)
+            )
+        return stats
+
     def get_session_stats(self, session_id: int, portfolio_id: int | None = None) -> Dict[str, Any]:
         """Get session statistics, preferring portfolio-scoped aggregates when present."""
+        self._warn_session_shim("get_session_stats")
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
         row = cursor.fetchone()
@@ -1140,15 +1760,10 @@ class TradingDatabase:
         portfolio_ref = portfolio_id if portfolio_id is not None else session_meta.get("portfolio_id")
         stats: Dict[str, Any] = {}
         if portfolio_ref is not None:
-            try:
-                stats = self.get_portfolio_stats_cache(portfolio_ref) or {}
-            except Exception as exc:
-                logger.debug(f"Could not load portfolio stats cache for session {session_id}: {exc}")
-
-        scope_clause = "portfolio_id = ?" if portfolio_ref is not None else "session_id = ?"
-        scope_value = portfolio_ref if portfolio_ref is not None else session_id
-
-        if stats.get("gross_pnl") is None or stats.get("total_trades") is None or stats.get("total_fees") is None:
+            stats = self.get_portfolio_stats(portfolio_ref)
+        else:
+            scope_clause = "session_id = ?"
+            scope_value = session_id
             cursor.execute(
                 f"""
                 SELECT COUNT(*) as cnt,
@@ -1163,14 +1778,19 @@ class TradingDatabase:
             stats.setdefault("total_trades", trade_row.get("cnt") or 0)
             stats.setdefault("total_fees", trade_row.get("total_fees") or 0.0)
             stats.setdefault("gross_pnl", trade_row.get("realized") or 0.0)
-
-        if stats.get("total_llm_cost") is None:
             cursor.execute(
                 f"SELECT COALESCE(SUM(cost), 0) as total_cost FROM llm_calls WHERE {scope_clause}",
                 (scope_value,),
             )
             cost_row = dict(cursor.fetchone() or {})
             stats["total_llm_cost"] = cost_row.get("total_cost") or 0.0
+            stats.setdefault("exposure_notional", 0.0)
+            if stats.get("net_pnl") is None:
+                stats["net_pnl"] = (
+                    (stats.get("gross_pnl", 0.0) or 0.0)
+                    - (stats.get("total_fees", 0.0) or 0.0)
+                    - (stats.get("total_llm_cost", 0.0) or 0.0)
+                )
 
         merged = {**session_meta, **stats}
         merged.setdefault("total_trades", 0)
@@ -1216,13 +1836,12 @@ class TradingDatabase:
         )
         self.conn.commit()
 
-    def replace_positions(self, session_id: int, positions: List[Dict[str, Any]], portfolio_id: int | None = None):
-        """Replace stored positions snapshot for the session."""
+    def replace_positions_for_portfolio(self, portfolio_id: int, positions: List[Dict[str, Any]], session_id: int | None = None):
+        """Replace stored positions snapshot for a portfolio."""
         cursor = self.conn.cursor()
-        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
         cursor.execute(
             "DELETE FROM positions WHERE portfolio_id = ? OR session_id = ?",
-            (portfolio_ref, session_id),
+            (portfolio_id, session_id),
         )
         for pos in positions:
             cursor.execute("""
@@ -1230,7 +1849,7 @@ class TradingDatabase:
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 session_id,
-                portfolio_ref,
+                portfolio_id,
                 pos.get('symbol'),
                 pos.get('quantity', 0),
                 pos.get('avg_price'),
@@ -1238,28 +1857,48 @@ class TradingDatabase:
             ))
         self.conn.commit()
 
-    def get_positions(self, session_id: int = None, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
-        """Return last stored positions for the session/portfolio."""
+    def replace_positions(self, session_id: int, positions: List[Dict[str, Any]], portfolio_id: int | None = None):
+        """Replace stored positions snapshot for the session."""
+        if portfolio_id is None:
+            self._warn_session_shim("replace_positions")
+            portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
+        else:
+            portfolio_ref = portfolio_id
+        self.replace_positions_for_portfolio(portfolio_ref, positions, session_id=session_id)
+
+    def get_positions_for_portfolio(self, portfolio_id: int) -> List[Dict[str, Any]]:
+        """Return last stored positions for a portfolio."""
         cursor = self.conn.cursor()
-        if portfolio_id is not None:
-            cursor.execute("""
+        cursor.execute(
+            """
                 SELECT * FROM positions 
                 WHERE portfolio_id = ?
-            """, (portfolio_id,))
-        else:
-            cursor.execute("""
-                SELECT * FROM positions 
-                WHERE session_id = ?
-            """, (session_id,))
+            """,
+            (portfolio_id,),
+        )
         return [dict(row) for row in cursor.fetchall()]
 
-    def replace_open_orders(self, session_id: int, orders: List[Dict[str, Any]], portfolio_id: int | None = None):
-        """Replace stored open orders snapshot for the session."""
+    def get_positions(self, session_id: int = None, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
+        """Return last stored positions for the session/portfolio."""
+        if portfolio_id is not None:
+            return self.get_positions_for_portfolio(portfolio_id)
+        self._warn_session_shim("get_positions")
         cursor = self.conn.cursor()
-        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
+        cursor.execute(
+            """
+                SELECT * FROM positions 
+                WHERE session_id = ?
+            """,
+            (session_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def replace_open_orders_for_portfolio(self, portfolio_id: int, orders: List[Dict[str, Any]], session_id: int | None = None):
+        """Replace stored open orders snapshot for a portfolio."""
+        cursor = self.conn.cursor()
         cursor.execute(
             "DELETE FROM open_orders WHERE portfolio_id = ? OR session_id = ?",
-            (portfolio_ref, session_id),
+            (portfolio_id, session_id),
         )
         for order in orders:
             cursor.execute("""
@@ -1267,7 +1906,7 @@ class TradingDatabase:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 session_id,
-                portfolio_ref,
+                portfolio_id,
                 order.get('order_id'),
                 order.get('symbol'),
                 order.get('side'),
@@ -1279,23 +1918,61 @@ class TradingDatabase:
             ))
         self.conn.commit()
 
-    def get_open_orders(self, session_id: int = None, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
-        """Return last stored open orders for the session/portfolio."""
+    def replace_open_orders(self, session_id: int, orders: List[Dict[str, Any]], portfolio_id: int | None = None):
+        """Replace stored open orders snapshot for the session."""
+        if portfolio_id is None:
+            self._warn_session_shim("replace_open_orders")
+            portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
+        else:
+            portfolio_ref = portfolio_id
+        self.replace_open_orders_for_portfolio(portfolio_ref, orders, session_id=session_id)
+
+    def get_open_orders_for_portfolio(self, portfolio_id: int) -> List[Dict[str, Any]]:
+        """Return last stored open orders for a portfolio."""
         cursor = self.conn.cursor()
-        if portfolio_id is not None:
-            cursor.execute("""
+        cursor.execute(
+            """
                 SELECT * FROM open_orders 
                 WHERE portfolio_id = ?
-            """, (portfolio_id,))
-        else:
-            cursor.execute("""
+            """,
+            (portfolio_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_open_orders(self, session_id: int = None, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
+        """Return last stored open orders for the session/portfolio."""
+        if portfolio_id is not None:
+            return self.get_open_orders_for_portfolio(portfolio_id)
+        self._warn_session_shim("get_open_orders")
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
                 SELECT * FROM open_orders 
                 WHERE session_id = ?
-            """, (session_id,))
+            """,
+            (session_id,),
+        )
         return [dict(row) for row in cursor.fetchall()]
+
+    def get_net_positions_from_trades_for_portfolio(self, portfolio_id: int) -> Dict[str, float]:
+        """Compute net position per symbol from recorded trades for a portfolio."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT symbol,
+                   SUM(CASE WHEN action = 'BUY' THEN quantity ELSE -quantity END) as net_qty
+            FROM trades
+            WHERE portfolio_id = ?
+            GROUP BY symbol
+        """,
+            (portfolio_id,),
+        )
+        rows = cursor.fetchall()
+        return {row['symbol']: row['net_qty'] for row in rows}
 
     def get_net_positions_from_trades(self, session_id: int) -> Dict[str, float]:
         """Compute net position per symbol from recorded trades."""
+        self._warn_session_shim("get_net_positions_from_trades")
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT symbol,
@@ -1307,28 +1984,57 @@ class TradingDatabase:
         rows = cursor.fetchall()
         return {row['symbol']: row['net_qty'] for row in rows}
 
-    def get_trade_count(self, session_id: int, portfolio_id: int | None = None) -> int:
-        """Return count of trades for a session/portfolio."""
+    def get_trade_count_for_portfolio(self, portfolio_id: int) -> int:
+        """Return count of trades for a portfolio."""
         cursor = self.conn.cursor()
-        query = "SELECT COUNT(*) as cnt FROM trades WHERE {scope}"
-        scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
-        cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id),))
+        cursor.execute("SELECT COUNT(*) as cnt FROM trades WHERE portfolio_id = ?", (portfolio_id,))
         row = cursor.fetchone()
         return row['cnt'] if row else 0
 
-    def get_latest_trade_timestamp(self, session_id: int, portfolio_id: int | None = None) -> Optional[str]:
+    def get_trade_count(self, session_id: int, portfolio_id: int | None = None) -> int:
+        """Return count of trades for a session/portfolio."""
+        if portfolio_id is not None:
+            return self.get_trade_count_for_portfolio(portfolio_id)
+        self._warn_session_shim("get_trade_count")
         cursor = self.conn.cursor()
-        query = "SELECT timestamp FROM trades WHERE {scope} ORDER BY timestamp DESC LIMIT 1"
-        scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
-        cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id),))
+        cursor.execute("SELECT COUNT(*) as cnt FROM trades WHERE session_id = ?", (session_id,))
+        row = cursor.fetchone()
+        return row['cnt'] if row else 0
+
+    def get_latest_trade_timestamp_for_portfolio(self, portfolio_id: int) -> Optional[str]:
+        """Return latest trade timestamp for a portfolio."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT timestamp FROM trades WHERE portfolio_id = ? ORDER BY timestamp DESC LIMIT 1",
+            (portfolio_id,),
+        )
+        row = cursor.fetchone()
+        return row["timestamp"] if row else None
+
+    def get_latest_trade_timestamp(self, session_id: int, portfolio_id: int | None = None) -> Optional[str]:
+        if portfolio_id is not None:
+            return self.get_latest_trade_timestamp_for_portfolio(portfolio_id)
+        self._warn_session_shim("get_latest_trade_timestamp")
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT timestamp FROM trades WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1",
+            (session_id,),
+        )
         row = cursor.fetchone()
         return row['timestamp'] if row else None
 
-    def get_distinct_trade_symbols(self, session_id: int, portfolio_id: int | None = None) -> List[str]:
+    def get_distinct_trade_symbols_for_portfolio(self, portfolio_id: int) -> List[str]:
+        """Return symbols traded within a portfolio."""
         cursor = self.conn.cursor()
-        query = "SELECT DISTINCT symbol FROM trades WHERE {scope}"
-        scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
-        cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id),))
+        cursor.execute("SELECT DISTINCT symbol FROM trades WHERE portfolio_id = ?", (portfolio_id,))
+        return [row['symbol'] for row in cursor.fetchall()]
+
+    def get_distinct_trade_symbols(self, session_id: int, portfolio_id: int | None = None) -> List[str]:
+        if portfolio_id is not None:
+            return self.get_distinct_trade_symbols_for_portfolio(portfolio_id)
+        self._warn_session_shim("get_distinct_trade_symbols")
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT DISTINCT symbol FROM trades WHERE session_id = ?", (session_id,))
         return [row['symbol'] for row in cursor.fetchall()]
     
     def create_command(self, command: str):
@@ -1456,16 +2162,35 @@ class TradingDatabase:
             logger.debug(f"Could not create trade_plans index: {exc}")
         self.conn.commit()
 
-    def create_trade_plan(self, session_id: int, symbol: str, side: str, entry_price: float, stop_price: float, target_price: float, size: float, reason: str = "", entry_order_id: str = None, entry_client_order_id: str = None, portfolio_id: int | None = None) -> int:
+    def create_trade_plan_for_portfolio(self, portfolio_id: int, symbol: str, side: str, entry_price: float, stop_price: float, target_price: float, size: float, reason: str = "", entry_order_id: str = None, entry_client_order_id: str = None, session_id: int | None = None) -> int:
         self.ensure_trade_plans_table()
         cursor = self.conn.cursor()
-        portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
         cursor.execute("""
             INSERT INTO trade_plans (session_id, portfolio_id, symbol, side, entry_price, stop_price, target_price, size, reason, entry_order_id, entry_client_order_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, portfolio_ref, symbol, side, entry_price, stop_price, target_price, size, reason, entry_order_id, entry_client_order_id))
+        """, (session_id, portfolio_id, symbol, side, entry_price, stop_price, target_price, size, reason, entry_order_id, entry_client_order_id))
         self.conn.commit()
         return cursor.lastrowid
+
+    def create_trade_plan(self, session_id: int, symbol: str, side: str, entry_price: float, stop_price: float, target_price: float, size: float, reason: str = "", entry_order_id: str = None, entry_client_order_id: str = None, portfolio_id: int | None = None) -> int:
+        if portfolio_id is None:
+            self._warn_session_shim("create_trade_plan")
+            portfolio_ref = self._resolve_portfolio_id(session_id, portfolio_id)
+        else:
+            portfolio_ref = portfolio_id
+        return self.create_trade_plan_for_portfolio(
+            portfolio_ref,
+            symbol,
+            side,
+            entry_price,
+            stop_price,
+            target_price,
+            size,
+            reason,
+            entry_order_id,
+            entry_client_order_id,
+            session_id=session_id,
+        )
 
     def update_trade_plan_prices(self, plan_id: int, stop_price: float = None, target_price: float = None, reason: str = None):
         """Update stop/target and bump version."""
@@ -1506,19 +2231,36 @@ class TradingDatabase:
         """, (status, closed_at, reason, plan_id))
         self.conn.commit()
 
-    def get_open_trade_plans(self, session_id: int, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
+    def get_open_trade_plans_for_portfolio(self, portfolio_id: int) -> List[Dict[str, Any]]:
         self.ensure_trade_plans_table()
         cursor = self.conn.cursor()
-        query = """
+        cursor.execute(
+            """
             SELECT * FROM trade_plans
-            WHERE {scope} AND status = 'open'
+            WHERE portfolio_id = ? AND status = 'open'
             ORDER BY opened_at DESC
-        """
-        scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
-        cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id),))
+        """,
+            (portfolio_id,),
+        )
         return [dict(row) for row in cursor.fetchall()]
 
-    def get_trade_plan_reason_by_order(self, session_id: int, order_id: str = None, client_order_id: str = None, portfolio_id: int | None = None) -> Optional[str]:
+    def get_open_trade_plans(self, session_id: int, portfolio_id: int | None = None) -> List[Dict[str, Any]]:
+        if portfolio_id is not None:
+            return self.get_open_trade_plans_for_portfolio(portfolio_id)
+        self._warn_session_shim("get_open_trade_plans")
+        self.ensure_trade_plans_table()
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM trade_plans
+            WHERE session_id = ? AND status = 'open'
+            ORDER BY opened_at DESC
+        """,
+            (session_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_trade_plan_reason_by_order_for_portfolio(self, portfolio_id: int, order_id: str = None, client_order_id: str = None) -> Optional[str]:
         """
         Lookup a trade plan reason using either exchange order_id or client_order_id.
         Returns None when not found.
@@ -1528,49 +2270,112 @@ class TradingDatabase:
             return None
 
         cursor = self.conn.cursor()
-        scope_value = portfolio_id if portfolio_id is not None else session_id
         if order_id and client_order_id:
             cursor.execute(
                 """
                 SELECT reason FROM trade_plans
-                WHERE {scope} AND (entry_order_id = ? OR entry_client_order_id = ?)
+                WHERE portfolio_id = ? AND (entry_order_id = ? OR entry_client_order_id = ?)
                 ORDER BY opened_at DESC
                 LIMIT 1
-                """.format(scope="portfolio_id = ?" if portfolio_id is not None else "session_id = ?"),
-                (scope_value, str(order_id), str(client_order_id)),
+                """,
+                (portfolio_id, str(order_id), str(client_order_id)),
             )
         elif order_id:
             cursor.execute(
                 """
                 SELECT reason FROM trade_plans
-                WHERE {scope} AND entry_order_id = ?
+                WHERE portfolio_id = ? AND entry_order_id = ?
                 ORDER BY opened_at DESC
                 LIMIT 1
-                """.format(scope="portfolio_id = ?" if portfolio_id is not None else "session_id = ?"),
-                (scope_value, str(order_id)),
+                """,
+                (portfolio_id, str(order_id)),
             )
         else:
             cursor.execute(
                 """
                 SELECT reason FROM trade_plans
-                WHERE {scope} AND entry_client_order_id = ?
+                WHERE portfolio_id = ? AND entry_client_order_id = ?
                 ORDER BY opened_at DESC
                 LIMIT 1
-                """.format(scope="portfolio_id = ?" if portfolio_id is not None else "session_id = ?"),
-                (scope_value, str(client_order_id)),
+                """,
+                (portfolio_id, str(client_order_id)),
             )
         row = cursor.fetchone()
         return row["reason"] if row and row["reason"] else None
 
-    def count_open_trade_plans_for_symbol(self, session_id: int, symbol: str, portfolio_id: int | None = None) -> int:
-        """Return number of open plans for a symbol."""
+    def get_trade_plan_reason_by_order(self, session_id: int, order_id: str = None, client_order_id: str = None, portfolio_id: int | None = None) -> Optional[str]:
+        """
+        Lookup a trade plan reason using either exchange order_id or client_order_id.
+        Returns None when not found.
+        """
+        if portfolio_id is not None:
+            return self.get_trade_plan_reason_by_order_for_portfolio(portfolio_id, order_id=order_id, client_order_id=client_order_id)
+        self._warn_session_shim("get_trade_plan_reason_by_order")
+        self.ensure_trade_plans_table()
+        if not order_id and not client_order_id:
+            return None
+
+        cursor = self.conn.cursor()
+        if order_id and client_order_id:
+            cursor.execute(
+                """
+                SELECT reason FROM trade_plans
+                WHERE session_id = ? AND (entry_order_id = ? OR entry_client_order_id = ?)
+                ORDER BY opened_at DESC
+                LIMIT 1
+                """,
+                (session_id, str(order_id), str(client_order_id)),
+            )
+        elif order_id:
+            cursor.execute(
+                """
+                SELECT reason FROM trade_plans
+                WHERE session_id = ? AND entry_order_id = ?
+                ORDER BY opened_at DESC
+                LIMIT 1
+                """,
+                (session_id, str(order_id)),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT reason FROM trade_plans
+                WHERE session_id = ? AND entry_client_order_id = ?
+                ORDER BY opened_at DESC
+                LIMIT 1
+                """,
+                (session_id, str(client_order_id)),
+            )
+        row = cursor.fetchone()
+        return row["reason"] if row and row["reason"] else None
+
+    def count_open_trade_plans_for_symbol_for_portfolio(self, portfolio_id: int, symbol: str) -> int:
+        """Return number of open plans for a symbol scoped to a portfolio."""
         self.ensure_trade_plans_table()
         cursor = self.conn.cursor()
-        query = """
+        cursor.execute(
+            """
             SELECT COUNT(*) as cnt FROM trade_plans
-            WHERE {scope} AND symbol = ? AND status = 'open'
-        """
-        scope = "portfolio_id = ?" if portfolio_id is not None else "session_id = ?"
-        cursor.execute(query.format(scope=scope), ((portfolio_id if portfolio_id is not None else session_id), symbol))
+            WHERE portfolio_id = ? AND symbol = ? AND status = 'open'
+        """,
+            (portfolio_id, symbol),
+        )
+        row = cursor.fetchone()
+        return row['cnt'] if row else 0
+
+    def count_open_trade_plans_for_symbol(self, session_id: int, symbol: str, portfolio_id: int | None = None) -> int:
+        """Return number of open plans for a symbol."""
+        if portfolio_id is not None:
+            return self.count_open_trade_plans_for_symbol_for_portfolio(portfolio_id, symbol)
+        self._warn_session_shim("count_open_trade_plans_for_symbol")
+        self.ensure_trade_plans_table()
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT COUNT(*) as cnt FROM trade_plans
+            WHERE session_id = ? AND symbol = ? AND status = 'open'
+        """,
+            (session_id, symbol),
+        )
         row = cursor.fetchone()
         return row['cnt'] if row else 0

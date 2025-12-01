@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 import sqlite3
 
@@ -118,6 +119,20 @@ def test_portfolio_updates_metadata_when_reused(tmp_path):
     assert reused["id"] == first["id"]
     assert reused["base_currency"] == "AUD"
     assert reused["bot_version"] == "v2"
+    db.close()
+
+
+def test_ensure_active_portfolio_returns_run_id(tmp_path):
+    db_path = tmp_path / "active-portfolio.db"
+    db = TradingDatabase(str(db_path))
+
+    portfolio_id, run_id = db.ensure_active_portfolio(name="active", base_currency="usd", bot_version="v1")
+    assert portfolio_id > 0
+    assert run_id.startswith("v1-") or run_id.startswith("active-")
+
+    reused_portfolio_id, provided_run = db.ensure_active_portfolio(name="active", base_currency="usd", bot_version="v1", run_id="custom-run")
+    assert reused_portfolio_id == portfolio_id
+    assert provided_run == "custom-run"
     db.close()
 
 
@@ -261,6 +276,57 @@ def test_log_trade_sets_portfolio_id(tmp_path):
     row = db.conn.execute("SELECT portfolio_id FROM trades WHERE session_id = ?", (session_id,)).fetchone()
 
     assert row["portfolio_id"] == portfolio["id"]
+    db.close()
+
+
+def test_portfolio_first_helpers_do_not_require_session(tmp_path):
+    db_path = tmp_path / "portfolio-first.db"
+    db = TradingDatabase(str(db_path))
+    portfolio = db.get_or_create_portfolio("pf", base_currency="usd", bot_version="v1")
+
+    db.log_trade_for_portfolio(portfolio["id"], "BTC/USD", "BUY", 0.2, 20000.0, fee=1.5, reason="entry", realized_pnl=5.0, trade_id="tid-portfolio")
+    db.log_market_data_for_portfolio(portfolio["id"], "BTC/USD", price=20000.0, bid=19990.0, ask=20010.0, volume=500)
+    db.log_llm_call_for_portfolio(portfolio["id"], input_tokens=5, output_tokens=5, cost=0.05, decision="ok", run_id="run-p")
+    trace_id = db.log_llm_trace_for_portfolio(portfolio["id"], prompt="p", response="r", decision_json="{}", market_context={"a": 1}, run_id="run-p")
+    db.update_llm_trace_execution(trace_id, {"result": "done"})
+    db.record_processed_trade_ids_for_portfolio(portfolio["id"], [("tid-portfolio", "cid-portfolio")])
+    bars = [
+        {"timestamp": 1_000_000, "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 10},
+        {"timestamp": 1_000_060, "open": 1.5, "high": 2.5, "low": 1.0, "close": 2.0, "volume": 20},
+    ]
+    db.log_ohlcv_batch_for_portfolio(portfolio["id"], "BTC/USD", "1m", bars)
+    db.log_equity_snapshot_for_portfolio(portfolio["id"], equity=1500.0, timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc))
+    db.replace_positions_for_portfolio(portfolio["id"], [{"symbol": "BTC/USD", "quantity": 0.2, "avg_price": 20000.0}])
+    db.replace_open_orders_for_portfolio(portfolio["id"], [{"order_id": "oid-1", "symbol": "BTC/USD", "side": "buy", "price": 19900.0, "amount": 0.1, "remaining": 0.1, "status": "open"}])
+
+    trades = db.get_recent_trades_for_portfolio(portfolio["id"], limit=2)
+    market = db.get_recent_market_data_for_portfolio(portfolio["id"], "BTC/USD", limit=1)
+    traces = db.get_recent_llm_traces_for_portfolio(portfolio["id"], limit=2)
+    stats = db.get_portfolio_stats(portfolio["id"])
+    processed = db.get_processed_trade_ids_for_portfolio(portfolio["id"])
+
+    assert trades and trades[0]["portfolio_id"] == portfolio["id"]
+    assert market and market[0]["portfolio_id"] == portfolio["id"]
+    assert traces and traces[0]["id"] == trace_id
+    assert stats["total_trades"] == 1
+    assert stats["gross_pnl"] == pytest.approx(5.0)
+    assert "tid-portfolio" in processed
+    assert len(db.get_recent_ohlcv_for_portfolio(portfolio["id"], "BTC/USD", "1m", limit=5)) == 2
+    assert db.get_latest_equity_for_portfolio(portfolio["id"]) == pytest.approx(1500.0)
+    assert db.get_positions_for_portfolio(portfolio["id"])[0]["symbol"] == "BTC/USD"
+    assert db.get_open_orders_for_portfolio(portfolio["id"])[0]["order_id"] == "oid-1"
+    db.close()
+
+
+def test_session_shim_emits_warning(tmp_path, caplog):
+    db_path = tmp_path / "shim-warning.db"
+    db = TradingDatabase(str(db_path))
+    session_id = db.get_or_create_session(starting_balance=1000.0, bot_version="warn")
+
+    caplog.set_level(logging.WARNING, logger="trader_bot.database")
+    db.log_trade(session_id, "BTC/USD", "BUY", 0.1, 20000.0, fee=0.1)
+
+    assert any("session shim" in record.message for record in caplog.records)
     db.close()
 
 

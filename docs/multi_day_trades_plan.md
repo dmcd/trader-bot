@@ -53,7 +53,6 @@ Notes on the current session model:
   - [ ] Remove session_id from telemetry payloads/log lines; ensure run_id/portfolio_id are present everywhere a session_id is currently written.
 - [ ] **Tests and fixtures**
   - [x] Update fixtures/mocks to create portfolios instead of sessions; remove `set_session` expectations in service tests and cover portfolio-only flows.
-  - [ ] Add regression tests ensuring no new session rows are created on restart and that portfolio-only writes/readbacks work across trades, plans, orders, market data, and telemetry.
 
 ## Work Plan
 

@@ -104,6 +104,11 @@ class TradingContext:
         recent_trades = list(
             reversed(self.db.get_recent_trades_for_portfolio(self.portfolio_id, limit=50))
         ) if self.portfolio_id is not None else []
+        open_plans_count = 0
+        try:
+            open_plans_count = len(self.db.get_open_trade_plans_for_portfolio(self.portfolio_id))
+        except Exception as exc:
+            logger.debug(f"Could not load open plans for context summary: {exc}")
 
         # Calculate portfolio duration (hours, rounded) and win/loss counts
         duration_hours = 0.0
@@ -157,6 +162,7 @@ class TradingContext:
                 price_trend_pct = ((recent_price - older_price) / older_price) * 100
 
         positions = self.db.get_positions_for_portfolio(self.portfolio_id) if self.portfolio_id is not None else []
+        open_positions_count = len(positions or [])
         if open_orders is None:
             open_orders = self.db.get_open_orders_for_portfolio(self.portfolio_id) if self.portfolio_id is not None else []
         open_orders = self._filter_our_orders(open_orders)
@@ -233,15 +239,15 @@ class TradingContext:
         try:
             eod_snapshot = self.db.get_latest_end_of_day_snapshot_for_portfolio(self.portfolio_id)
             if eod_snapshot:
-                positions = eod_snapshot.get("positions") or []
-                plans = eod_snapshot.get("plans") or []
+                eod_positions = eod_snapshot.get("positions") or []
+                eod_plans = eod_snapshot.get("plans") or []
                 latest_eod = {
                     "date": eod_snapshot.get("date"),
                     "timezone": eod_snapshot.get("timezone"),
                     "captured_at": eod_snapshot.get("captured_at"),
                     "equity": eod_snapshot.get("equity"),
-                    "positions": len(positions),
-                    "plans": len(plans),
+                    "positions": len(eod_positions),
+                    "plans": len(eod_plans),
                     "run_id": eod_snapshot.get("run_id"),
                 }
         except Exception as exc:
@@ -254,13 +260,17 @@ class TradingContext:
                 "hours": round(duration_hours, 1),
                 "starting_balance": baseline_equity,
                 "net_pnl": portfolio_stats.get('net_pnl'),
+                "gross_pnl": portfolio_stats.get('gross_pnl'),
                 "fees": portfolio_stats.get('total_fees'),
                 "llm_cost": portfolio_stats.get('total_llm_cost'),
+                "total_costs": (portfolio_stats.get('total_fees', 0.0) or 0.0) + (portfolio_stats.get('total_llm_cost', 0.0) or 0.0),
                 "total_trades": portfolio_stats.get('total_trades'),
                 "win_rate_pct": round(win_rate, 1),
                 "wins": wins,
                 "losses": losses,
                 "exposure_notional": portfolio_stats.get("exposure_notional"),
+                "open_positions": open_positions_count,
+                "open_plans": open_plans_count,
             },
             "trend_pct": round(price_trend_pct, 2) if price_trend_pct is not None else None,
             "positions": positions_summary,

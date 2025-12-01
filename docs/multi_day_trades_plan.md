@@ -34,7 +34,7 @@ Legacy session model (now removed):
     - [x] Persist per-plan overnight state (last widened timestamp/version, widened prices) to avoid re-widening and support restart restores.
     - [x] Apply widening + auto-rearm in plan monitoring/resync/runner startup so monitors resume with widened stops/targets after rollovers.
     - [x] Add unit coverage for overnight widen + restart flows, including opt-out and single-application guards.
-  - [ ] Add portfolio aggregates (PnL, exposure, open positions, costs) to `TradingContext`.
+  - [x] Add portfolio aggregates (PnL, exposure, open positions, costs) to `TradingContext`.
   - [ ] Dedupe processed trades across days/runs using exchange trade/order ids; add DB uniqueness guard on (portfolio_id, trade_id/client_order_id).
 
 - [ ] Dashboard and telemetry

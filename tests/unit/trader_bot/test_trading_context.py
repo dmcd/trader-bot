@@ -39,6 +39,10 @@ class TestTradingContext(unittest.TestCase):
         self.assertIn("trend_pct", parsed)
         self.assertIn("win_rate_pct", parsed["portfolio"])
         self.assertIn("venue", parsed)
+        self.assertIn("gross_pnl", parsed["portfolio"])
+        self.assertIn("open_positions", parsed["portfolio"])
+        self.assertIn("open_plans", parsed["portfolio"])
+        self.assertIn("total_costs", parsed["portfolio"])
 
     def test_memory_snapshot_is_capped_and_includes_plans_and_traces(self):
         # Create a plan and traces to populate memory
@@ -123,6 +127,47 @@ class TestTradingContext(unittest.TestCase):
         self.assertEqual(len(summary["positions"]), 5)
         self.assertEqual(len(summary["open_orders"]), 5)
         self.assertEqual(len(summary["recent_trades"]), 5)
+
+    def test_portfolio_aggregates_include_counts_and_costs(self):
+        # Seed stats cache and positions/open plans for aggregate visibility
+        self.db.set_portfolio_stats_cache(
+            self.portfolio_id,
+            {
+                "gross_pnl": 15.0,
+                "total_fees": 3.0,
+                "total_llm_cost": 2.0,
+                "exposure_notional": 500.0,
+                "total_trades": 4,
+            },
+        )
+        self.db.replace_positions_for_portfolio(
+            self.portfolio_id,
+            [
+                {"symbol": "BTC/USD", "quantity": 0.25, "avg_price": 20000, "timestamp": None},
+                {"symbol": "ETH/USD", "quantity": 1.0, "avg_price": 1500, "timestamp": None},
+            ],
+        )
+        self.db.create_trade_plan_for_portfolio(
+            self.portfolio_id,
+            symbol="SOL/USD",
+            side="BUY",
+            entry_price=25.0,
+            stop_price=22.0,
+            target_price=30.0,
+            size=10,
+            reason="aggregate-test",
+            entry_order_id="agg-1",
+            entry_client_order_id="agg-1",
+        )
+
+        summary = json.loads(self.context.get_context_summary("BTC/USD"))
+        portfolio = summary["portfolio"]
+        self.assertEqual(portfolio["gross_pnl"], 15.0)
+        self.assertEqual(portfolio["net_pnl"], 10.0)  # 15 - 3 - 2
+        self.assertEqual(portfolio["exposure_notional"], 500.0)
+        self.assertEqual(portfolio["open_positions"], 2)
+        self.assertEqual(portfolio["open_plans"], 1)
+        self.assertEqual(portfolio["total_costs"], 5.0)
 
     def test_context_summary_uses_equity_baseline(self):
         self.db.log_equity_snapshot_for_portfolio(self.portfolio_id, 1234.5, timestamp="2024-01-01T00:00:00Z")

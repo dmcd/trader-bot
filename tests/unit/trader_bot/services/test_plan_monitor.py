@@ -77,7 +77,7 @@ async def test_trails_sell_stop_to_breakeven_without_closing():
         ]
     )
     monitor, bot = _monitor_with(db, risk_manager=StubRiskManager({"ETH/USD": {"quantity": -0.2}}))
-    config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=None, trail_to_breakeven_pct=0.05)
+    config = PlanMonitorConfig(max_plan_age_minutes=None, trail_to_breakeven_pct=0.05)
 
     await monitor.monitor(
         price_lookup={"ETH/USD": 85.0},
@@ -116,7 +116,7 @@ async def test_skips_when_price_missing():
         ]
     )
     monitor, bot = _monitor_with(db, risk_manager=StubRiskManager({"SOL/USD": {"quantity": 1.0}}))
-    config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=None, trail_to_breakeven_pct=0.01)
+    config = PlanMonitorConfig(max_plan_age_minutes=None, trail_to_breakeven_pct=0.01)
 
     await monitor.monitor(
         price_lookup={},
@@ -149,7 +149,7 @@ async def test_closes_when_flat_and_no_symbol_orders():
         ]
     )
     monitor, bot = _monitor_with(db, risk_manager=StubRiskManager())
-    config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=None, trail_to_breakeven_pct=0.02)
+    config = PlanMonitorConfig(max_plan_age_minutes=None, trail_to_breakeven_pct=0.02)
 
     await monitor.monitor(
         price_lookup={"BTC/USD": 25_100.0},
@@ -184,7 +184,7 @@ async def test_plan_monitor_requests_marketable_exit():
     bot = AsyncMock()
     bot.place_order_async = AsyncMock(return_value={"order_id": "13", "liquidity": "taker"})
     monitor, _ = _monitor_with(db, risk_manager=StubRiskManager({"BHP/AUD": {"quantity": 5.0}}), bot=bot)
-    config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=None, trail_to_breakeven_pct=0.02)
+    config = PlanMonitorConfig(max_plan_age_minutes=None, trail_to_breakeven_pct=0.02)
 
     await monitor.monitor(
         price_lookup={"BHP/AUD": 111.0},
@@ -207,7 +207,7 @@ async def test_handles_db_failure_gracefully(caplog):
             raise RuntimeError("db unavailable")
 
     monitor, _ = _monitor_with(FailingDB(plans=[]))
-    config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=None, trail_to_breakeven_pct=0.01)
+    config = PlanMonitorConfig(max_plan_age_minutes=None, trail_to_breakeven_pct=0.01)
 
     with caplog.at_level(logging.WARNING):
         await monitor.monitor(
@@ -222,7 +222,7 @@ async def test_handles_db_failure_gracefully(caplog):
 
 
 @pytest.mark.asyncio
-async def test_day_end_flatten_waits_for_cutoff():
+async def test_plans_not_forced_flat_at_day_boundary():
     opened = datetime(2024, 1, 1, 14, tzinfo=timezone.utc)
     db = StubDB(
         plans=[
@@ -239,19 +239,14 @@ async def test_day_end_flatten_waits_for_cutoff():
         ]
     )
     monitor, bot = _monitor_with(db, risk_manager=StubRiskManager({"BTC/USD": {"quantity": 0.25}}))
-    config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=20, trail_to_breakeven_pct=0.02)
+    config = PlanMonitorConfig(max_plan_age_minutes=None, trail_to_breakeven_pct=0.02)
 
-    before_cutoff = opened + timedelta(days=1)
-    before_cutoff = before_cutoff.replace(hour=10)
-    after_cutoff = before_cutoff.replace(hour=21)
-
-    await monitor.monitor(price_lookup={"BTC/USD": 101.0}, open_orders=[], config=config, now=before_cutoff, portfolio_id=1)
-    assert bot.place_order_async.await_count == 0
-    assert not db.closed
+    after_cutoff = opened + timedelta(days=1)
+    after_cutoff = after_cutoff.replace(hour=21)
 
     await monitor.monitor(price_lookup={"BTC/USD": 101.0}, open_orders=[], config=config, now=after_cutoff, portfolio_id=1)
-    assert bot.place_order_async.await_count == 1
-    assert db.closed
+    assert bot.place_order_async.await_count == 0
+    assert not db.closed
 
 
 @pytest.mark.asyncio
@@ -276,7 +271,6 @@ async def test_overnight_widen_applies_once_with_restart_metadata():
     monitor, _ = _monitor_with(db, risk_manager=StubRiskManager({"BTC/USD": {"quantity": 0.5}}))
     config = PlanMonitorConfig(
         max_plan_age_minutes=None,
-        day_end_flatten_hour_utc=None,
         trail_to_breakeven_pct=0.02,
         overnight_widen_enabled=True,
         overnight_widen_pct=0.02,
@@ -338,7 +332,6 @@ async def test_overnight_widen_respects_opt_out():
     monitor, _ = _monitor_with(db, risk_manager=StubRiskManager({"ETH/USD": {"quantity": -0.2}}))
     config = PlanMonitorConfig(
         max_plan_age_minutes=None,
-        day_end_flatten_hour_utc=None,
         trail_to_breakeven_pct=0.02,
         overnight_widen_enabled=False,
         overnight_widen_pct=0.05,
@@ -376,7 +369,6 @@ def test_rearm_after_restart_applies_widen_policy():
     monitor.portfolio_id = 5
     config = PlanMonitorConfig(
         max_plan_age_minutes=None,
-        day_end_flatten_hour_utc=None,
         trail_to_breakeven_pct=0.02,
         overnight_widen_enabled=True,
         overnight_widen_pct=0.01,
@@ -397,7 +389,7 @@ def test_rearm_after_restart_applies_widen_policy():
 @pytest.mark.asyncio
 async def test_monitor_requires_portfolio_id():
     monitor, _ = _monitor_with(StubDB(plans=[]))
-    config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=None, trail_to_breakeven_pct=0.01)
+    config = PlanMonitorConfig(max_plan_age_minutes=None, trail_to_breakeven_pct=0.01)
 
     with pytest.raises(ValueError):
         await monitor.monitor(price_lookup={}, open_orders=[], config=config, now=datetime.now(timezone.utc), portfolio_id=None)

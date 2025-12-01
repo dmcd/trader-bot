@@ -228,7 +228,6 @@ class StrategyRunner:
         self.processed_trade_ids = set()
         self._open_trade_plans = {}  # plan_id -> dict
         self.max_plan_age_minutes = PLAN_MAX_AGE_MINUTES
-        self.day_end_flatten_hour_utc = None  # optional UTC hour to flatten plans
         self.max_plans_per_symbol = PLAN_MAX_PER_SYMBOL
         self.telemetry_logger = telemetry_logger
         self._apply_plan_trailing_pct = PLAN_TRAIL_TO_BREAKEVEN_PCT  # move stop to entry after move in favor
@@ -294,7 +293,6 @@ class StrategyRunner:
         """Build plan monitor config from runner settings."""
         return PlanMonitorConfig(
             max_plan_age_minutes=self.max_plan_age_minutes,
-            day_end_flatten_hour_utc=self.day_end_flatten_hour_utc,
             trail_to_breakeven_pct=self._apply_plan_trailing_pct,
             overnight_widen_enabled=self.plan_overnight_widen_enabled,
             overnight_widen_pct=self.plan_overnight_widen_pct,

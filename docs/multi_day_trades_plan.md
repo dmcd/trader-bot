@@ -22,6 +22,7 @@ Legacy session model (now removed):
     - [x] Add DB helpers to write/read latest EOD snapshot per portfolio (use portfolio-day timezone).
     - [x] Hook strategy runner to emit EOD snapshot on shutdown/rollover; include tests for restart restore.
     - [x] Expose snapshot data to dashboard/context consumers for visibility (optional toggle).
+  - [x] Remove day end flattening of open positions/plans.
 
 - [ ] Trading and monitoring flows
   - [x] Update `PlanMonitor`/`TradeActionHandler`/`ResyncService` to use `portfolio_id` and preserve open plans/positions across date rollovers.

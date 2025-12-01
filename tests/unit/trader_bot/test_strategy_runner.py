@@ -221,7 +221,6 @@ async def test_monitor_trade_plans_refreshes_bindings(monkeypatch, tmp_path):
     monkeypatch.setenv("TRADING_DB_PATH", str(tmp_path / "monitor.db"))
     runner = StrategyRunner(execute_orders=False)
     runner.max_plan_age_minutes = 15
-    runner.day_end_flatten_hour_utc = 20
     runner._apply_plan_trailing_pct = 0.25
     runner.plan_monitor.refresh_bindings = MagicMock()
     captured = {}
@@ -245,7 +244,6 @@ async def test_monitor_trade_plans_refreshes_bindings(monkeypatch, tmp_path):
     assert captured["price_lookup"] == {"BTC/USD": 100.0}
     assert captured["open_orders"] == [{"id": 1}]
     assert captured["config"].max_plan_age_minutes == 15
-    assert captured["config"].day_end_flatten_hour_utc == 20
     assert captured["config"].trail_to_breakeven_pct == 0.25
 
 
@@ -568,7 +566,6 @@ class TestTradePlanMonitor(unittest.IsolatedAsyncioTestCase):
     async def _run_monitor(self, price_lookup, open_orders):
         config = PlanMonitorConfig(
             max_plan_age_minutes=self.runner.max_plan_age_minutes,
-            day_end_flatten_hour_utc=self.runner.day_end_flatten_hour_utc,
             trail_to_breakeven_pct=self.runner._apply_plan_trailing_pct,
         )
         self._refresh_monitor_bindings()

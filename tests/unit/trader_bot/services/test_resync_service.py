@@ -193,7 +193,7 @@ async def test_bootstrap_carries_open_plans_and_preserves_monitor_state():
         portfolio_stats_applier=lambda *args, **kwargs: None,
         portfolio_id=3,
     )
-    config = PlanMonitorConfig(max_plan_age_minutes=None, day_end_flatten_hour_utc=None, trail_to_breakeven_pct=0.02)
+    config = PlanMonitorConfig(max_plan_age_minutes=None, trail_to_breakeven_pct=0.02)
     await monitor.monitor(
         price_lookup={"ETH/USD": 1810.0},
         open_orders=[],

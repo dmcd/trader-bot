@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PlanMonitorConfig:
     max_plan_age_minutes: int | None
-    day_end_flatten_hour_utc: int | None
     trail_to_breakeven_pct: float
     overnight_widen_enabled: bool = False
     overnight_widen_pct: float = 0.0
@@ -255,7 +254,7 @@ class PlanMonitor:
         portfolio_id: int | None = None,
     ) -> None:
         """
-        Monitor open trade plans for stop/target hits and enforce max age/day-end flattening per symbol.
+        Monitor open trade plans for stop/target hits and enforce max age per symbol.
         price_lookup: symbol -> latest price
         open_orders: list of open orders from exchange
         """
@@ -267,14 +266,6 @@ class PlanMonitor:
             now = now or datetime.now(timezone.utc)
             open_plans = self._apply_overnight_widening(open_plans, config, now)
             now_iso = now.isoformat()
-            day_end_cutoff = None
-            if config.day_end_flatten_hour_utc is not None:
-                day_end_cutoff = now.replace(
-                    hour=config.day_end_flatten_hour_utc,
-                    minute=0,
-                    second=0,
-                    microsecond=0,
-                )
 
             open_orders_by_symbol = {}
             for o in open_orders or []:
@@ -324,15 +315,6 @@ class PlanMonitor:
                         if age_min >= config.max_plan_age_minutes:
                             should_close = True
                             reason = f"Plan age exceeded {config.max_plan_age_minutes} min"
-                    except Exception:
-                        pass
-
-                if not should_close and day_end_cutoff and now >= day_end_cutoff and opened_at:
-                    try:
-                        opened_dt = datetime.fromisoformat(opened_at)
-                        if opened_dt <= day_end_cutoff:
-                            should_close = True
-                            reason = "Day-end flatten"
                     except Exception:
                         pass
 

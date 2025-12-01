@@ -11,7 +11,9 @@
 - [x] Run liquidity/microstructure filters per symbol and gate trading decisions accordingly (add tests covering wide spreads and insufficient top-of-book notional across symbols).
   - Illiquid symbols are now filtered out per loop (with a log) before plan/strategy evaluation; the loop skips only when none pass liquidity checks.
   - Tests added: `tests/integration/test_strategy_runner_control_paths.py::test_liquidity_filter_prunes_symbols` and `test_liquidity_filter_skips_when_none_pass`.
-- [ ] Capture and persist OHLCV for every active symbol each loop, with retention and spacing respected (test multi-symbol OHLCV capture).
+- [x] Capture and persist OHLCV for every active symbol each loop, with retention and spacing respected (test multi-symbol OHLCV capture).
+  - OHLCV capture now runs for each active (fresh, liquid) symbol every loop, reusing the service spacing/retention guards.
+  - Added per-symbol spacing test: `tests/unit/trader_bot/services/test_market_data_service.py::test_capture_ohlcv_spacing_is_per_symbol`.
 - [ ] Build context summaries and regime flags per symbol for the LLM prompt; ensure the prompt enumerates per-symbol flags and recent bars without exceeding token budgets (add prompt-construction tests).
 - [ ] Refactor strategy orchestration/execution to handle per-symbol decisions (including tool planning/execution) without relying on a primary symbol; ensure execution uses symbol-scoped market data and price lookups (add integration-style tests or fakes).
 - [ ] Update bot action logging to include symbol and latest price in HOLD/other decision lines for clarity; adjust telemetry assertions if needed (add log-format tests).

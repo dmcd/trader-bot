@@ -1283,18 +1283,19 @@ class StrategyRunner:
                     symbols = liquid_symbols
                     market_data = {sym: market_data[sym] for sym in symbols}
 
+                    # Capture multi-timeframe OHLCV for each active symbol
+                    for sym in symbols:
+                        try:
+                            await self._capture_ohlcv(sym)
+                        except Exception as e:
+                            logger.debug(f"Could not capture OHLCV for {sym}: {e}")
+
                     primary_symbol = symbols[0] if symbols else None
                     if not primary_symbol:
                         await asyncio.sleep(LOOP_INTERVAL_SECONDS)
                         continue
 
                     primary_data = market_data.get(primary_symbol)
-
-                    # Capture multi-timeframe OHLCV for richer context (primary symbol only)
-                    try:
-                        await self._capture_ohlcv(primary_symbol)
-                    except Exception as e:
-                        logger.debug(f"Could not capture OHLCV: {e}")
 
                     # Refresh live positions each loop for accurate exposure snapshots
                     try:

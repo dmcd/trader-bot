@@ -69,6 +69,26 @@ async def test_capture_ohlcv_spacing_and_prune(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_capture_ohlcv_spacing_is_per_symbol():
+    bot = StubBot()
+    svc = MarketDataService(
+        db=None,
+        bot=bot,
+        portfolio_id=None,
+        monotonic=lambda: 0.0,
+        ohlcv_min_capture_spacing_seconds=60,
+    )
+
+    await svc.capture_ohlcv("AAA/USD", timeframes=["1m"])
+    svc.monotonic = lambda: 10.0
+    await svc.capture_ohlcv("BBB/USD", timeframes=["1m"])
+    svc.monotonic = lambda: 20.0
+    await svc.capture_ohlcv("AAA/USD", timeframes=["1m"])
+
+    assert bot.calls == [("AAA/USD", "1m", 50), ("BBB/USD", "1m", 50)]
+
+
+@pytest.mark.asyncio
 async def test_capture_ohlcv_invokes_prune_with_limit():
     class StubDB:
         def __init__(self):

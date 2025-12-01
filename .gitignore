@@ -9,3 +9,5 @@ trading.db
 telemetry.json
 .coverage
 coverage.xml
+.idea
+.venv
